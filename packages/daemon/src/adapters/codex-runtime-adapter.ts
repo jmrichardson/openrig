@@ -921,6 +921,8 @@ export class CodexRuntimeAdapter implements RuntimeAdapter {
           forkIdentityPending: true,
         };
       }
+      const composer = await this.tmux.prepareWindowsCodexComposer?.(binding.tmuxSession!);
+      if (composer && !composer.ok) return { ok: false, error: composer.message };
       return { ok: true, resumeToken: threadId, resumeType: "codex_id", appliedLaunch };
     }
 
@@ -948,6 +950,8 @@ export class CodexRuntimeAdapter implements RuntimeAdapter {
     if (opts.resumeToken) {
       const verification = await this.verifyResumeLaunch(binding.tmuxSession, updatePrompt, { resumeToken: opts.resumeToken, ...this.ownHomeOpt(binding) });
       if (!verification.ok) return verification;
+      const composer = await this.tmux.prepareWindowsCodexComposer?.(binding.tmuxSession!);
+      if (composer && !composer.ok) return { ok: false, error: composer.message };
       return { ok: true, resumeToken: opts.resumeToken, resumeType: "codex_id", appliedLaunch,
         ...(verification.resumedProcess ? { resumedProcess: verification.resumedProcess } : {}) };
     }
@@ -955,6 +959,8 @@ export class CodexRuntimeAdapter implements RuntimeAdapter {
     const threadId = await this.captureFreshThreadId(binding, updatePrompt);
     if (updatePrompt.failure) return updatePrompt.failure;
     if (threadId) {
+      const composer = await this.tmux.prepareWindowsCodexComposer?.(binding.tmuxSession!);
+      if (composer && !composer.ok) return { ok: false, error: composer.message };
       return { ok: true, resumeToken: threadId, resumeType: "codex_id", appliedLaunch };
     }
 
