@@ -11,18 +11,12 @@ import { shellQuote } from "../adapters/shell-quote.js";
 import { claudeClassicRendererEnvPrefix } from "../adapters/yolo-mode.js";
 import { parseClaudePermissionModes } from "./permission-drift.js";
 import { validateNativePermissionSelection } from "./native-permission-selection.js";
-<<<<<<< HEAD
 import { seatLaunchAdditionsForLaunch } from "./seat-launch-additions.js";
-<<<<<<< HEAD
 import { NO_SESSION_BUS } from "./seat-runtime-dir.js";
 import { effectiveRuntimeHome } from "./seat-runtime-home.js";
 import { claudeSeatTokenFallbackNotice, claudeSeatTokenFileProblem, claudeSeatTokenStep, readClaudeSeatTokenRef, type ClaudeSeatTokenRef } from "./claude-seat-token.js";
 import { OUTRANKING_TOKEN_ENV, projectRootForLocalSettings, settingsFileConflicts, type CredentialConflict, type CredentialPrecedence } from "./claude-credential-precedence.js";
-=======
-=======
 import { renderWindowsManagedLaunch } from "../adapters/windows-launch.js";
->>>>>>> ef0038177 (Expand native Windows launch, control, reading and lifecycle support)
->>>>>>> a4185ed68 (Expand native Windows launch, control, reading and lifecycle support)
 
 export interface ClaudeLaunchTarget {
   nodeId: string;
@@ -355,7 +349,12 @@ export class ClaudeManagedLaunch {
     const warnings = token?.warnings ?? Object.freeze([]);
     return Object.freeze({ assertCurrent, warnings, configDir: context.configDir, executable: context.executable, executableIsScript: context.executableIsScript, command: (args: readonly string[], launchEnv: Readonly<Record<string, string>> = {}) => {
       assertCurrent();
-<<<<<<< HEAD
+      if (this.platform === "win32") {
+        const forwardedNames = [...inherited, ...seatKeys.filter(key => !inherited.includes(key))]
+          .filter(key => !(key in identity) && !(key in publicEnv));
+        const terminalNames = ["TERM", "COLORTERM", "TERM_PROGRAM", "TERM_PROGRAM_VERSION", "LANG", "LC_ALL", "LC_CTYPE", "LC_MESSAGES", "LC_COLLATE", "LC_NUMERIC", "LC_TIME", "LC_MONETARY"];
+        return renderWindowsManagedLaunch(context.executable, args, cwd, { ...context.env, ...publicEnv, ...identity, ...launchEnv }, [...forwardedNames, ...terminalNames, ...(loadsCorePlugin ? [SEAT_PROJECT_DIR_ENV] : [])]);
+      }
       const launch = Object.entries(launchEnv).map(([key, value]) => `export ${shellQuote(`${key}=${value}`)}`);
       const keep = [...selectedKeys, ...terminalKeys, "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS",
         ...Object.keys(launchEnv), ...(token ? ["CLAUDE_CODE_OAUTH_TOKEN"] : [])];
@@ -369,16 +368,6 @@ export class ClaudeManagedLaunch {
 ${[...assignments, ...forwarded, ...seatForwarded, ...projectForwarded, ...terminal, ...runtimeDir, ...launch].join("\n")}
 ${clear} && ${tokenStep}exec /usr/bin/env "$@" ${[shellQuote(context.executable), ...args.map(shellQuote)].join(" ")}
 }`;
-=======
-      if (this.platform === "win32") {
-        const forwardedNames = [...inherited, ...seatKeys.filter(key => !inherited.includes(key))]
-          .filter(key => !(key in identity) && !(key in publicEnv));
-        const terminalNames = ["TERM", "COLORTERM", "TERM_PROGRAM", "TERM_PROGRAM_VERSION", "LANG", "LC_ALL", "LC_CTYPE", "LC_MESSAGES", "LC_COLLATE", "LC_NUMERIC", "LC_TIME", "LC_MONETARY"];
-        return renderWindowsManagedLaunch(context.executable, args, cwd, { ...context.env, ...publicEnv, ...identity, ...launchEnv }, [...forwardedNames, ...terminalNames, ...(loadsCorePlugin ? [SEAT_PROJECT_DIR_ENV] : [])]);
-      }
-      const launch = Object.entries(launchEnv).map(([key, value]) => shellQuote(`${key}=${value}`));
-      return `${WAYLAND_DISPLAY_ASSIGNMENT}; cd ${shellQuote(cwd)} && /usr/bin/env -i ${[...assignments, ...forwarded, ...seatForwarded, ...projectForwarded, ...terminal, ...launch, shellQuote(context.executable), ...args.map(shellQuote)].join(" ")}`;
->>>>>>> a4185ed68 (Expand native Windows launch, control, reading and lifecycle support)
     } });
   }
 }
