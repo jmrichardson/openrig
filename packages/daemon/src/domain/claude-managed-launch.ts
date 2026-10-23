@@ -353,7 +353,7 @@ export class ClaudeManagedLaunch {
         const forwardedNames = [...inherited, ...seatKeys.filter(key => !inherited.includes(key))]
           .filter(key => !(key in identity) && !(key in publicEnv));
         const terminalNames = ["TERM", "COLORTERM", "TERM_PROGRAM", "TERM_PROGRAM_VERSION", "LANG", "LC_ALL", "LC_CTYPE", "LC_MESSAGES", "LC_COLLATE", "LC_NUMERIC", "LC_TIME", "LC_MONETARY"];
-        return renderWindowsManagedLaunch(context.executable, args, cwd, { ...context.env, ...publicEnv, ...identity, ...launchEnv }, [...forwardedNames, ...terminalNames, ...(loadsCorePlugin ? [SEAT_PROJECT_DIR_ENV] : [])]);
+        return renderWindowsManagedLaunch(context.executable, args, cwd, { ...context.env, ...publicEnv, ...identity, ...launchEnv }, [...forwardedNames, ...terminalNames, ...(loadsCorePlugin ? [SEAT_PROJECT_DIR_ENV, SEAT_NODE_ENV] : [])]);
       }
       const launch = Object.entries(launchEnv).map(([key, value]) => `export ${shellQuote(`${key}=${value}`)}`);
       const keep = [...selectedKeys, ...terminalKeys, "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS",
