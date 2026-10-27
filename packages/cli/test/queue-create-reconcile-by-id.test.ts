@@ -154,6 +154,21 @@ describe("a queue create that got no answer is read back once by its ID", () => 
     expect(JSON.parse(stdout.join("\n"))).toMatchObject({ persisted: true, delivery: { outcome: "indeterminate" } });
   });
 
+  it("does not verify an older stored body returned by a successful colliding create", async () => {
+    fs.writeFileSync(path.join(home, "hosts.yaml"), `hosts:\n  - id: vps-b\n    transport: http\n    url: ${REMOTE}\n`);
+    const oldRow = { ...REMOTE_ROW, body: "older body", lastNudgeResult: "verified" };
+    const { calls, error } = await run("dev@rig-b@vps-b", [{ status: 200, data: { ...oldRow,
+      createWarning: { code: "qitem_body_not_saved", message: "The supplied body was not saved." } } }], {
+      [`${LOCAL}/healthz`]: { status: 200, data: { selfHostId: "host-a" } },
+      [`${REMOTE}/api/queue/${ID}`]: { status: 200, data: oldRow },
+    }, ["--verify"]);
+    expect(error).toBeNull();
+    expect(posts(calls)).toHaveLength(1);
+    expect(readBacks(calls)).toHaveLength(1);
+    expect(JSON.parse(stdout.join("\n"))).toMatchObject({ persisted: true, delivery: { outcome: "indeterminate" } });
+    expect(stderr.join("\n")).toContain("not saved");
+  });
+
   it("create --verify reads locally when --host names this daemon, without requiring a registry entry", async () => {
     const { calls, error } = await run("dev@rig-b", [{ status: 201, data: ROW }], {
       [`${LOCAL}/healthz`]: { status: 200, data: { selfHostId: "host-a" } },

@@ -537,17 +537,18 @@ async function queueReadTarget(deps: QueueDeps, client: DaemonClient, hostId: st
 }
 
 /** A successful forward isn't a delivery receipt. Never accept a different remote row as this create's receipt. */
-function createReceiptReader(deps: QueueDeps, client: DaemonClient, hostId: string | undefined, created: Record<string, unknown>): Pick<DaemonClient, "get"> {
+function createReceiptReader(deps: QueueDeps, client: DaemonClient, hostId: string | undefined, qitemId: string, sent: SentCreate): Pick<DaemonClient, "get"> {
   if (!remoteHostOf(hostId)) return client;
   let target: ReturnType<typeof queueReadTarget> | undefined;
+  let source: ReturnType<typeof storedSourceOf> | undefined;
   return {
     get: async <T>(path: string) => {
       const selected = await (target ??= queueReadTarget(deps, client, hostId));
       if ("error" in selected) throw new Error(`receipt could not be read ${selected.error}`);
       const response = await selected.reader.get<T>(path, selected.options);
       const row = response.data as Record<string, unknown> | undefined;
-      if (response.status === 200 && (!row || row.qitemId !== created.qitemId
-        || ["destinationSession", "sourceSession", "body"].some(key => typeof created[key] === "string" && row[key] !== created[key]))) {
+      if (response.status === 200 && (!row || row.qitemId !== qitemId
+        || notThisCreate(row, sent, await (source ??= storedSourceOf(client, sent))) !== null)) {
         throw new Error("receipt row does not match the created qitem");
       }
       return response;
@@ -1105,7 +1106,7 @@ export function queueCommand(depsOverride?: QueueDeps): Command {
           if (opts.verify && status < 400) {
             const createdId = typeof created.qitemId === "string" ? created.qitemId : null;
             const delivery = createdId
-              ? await waitForDeliveryOutcome(createReceiptReader(deps, client, hostResolved.hostId, created), createdId, deps.deliveryVerify, { destinationSession: hostResolved.destination, nudge: opts.nudge })
+              ? await waitForDeliveryOutcome(createReceiptReader(deps, client, hostResolved.hostId, qitemId, sent), createdId, deps.deliveryVerify, { destinationSession: hostResolved.destination, nudge: opts.nudge })
               : unreadableDeliveryResult(null, hostResolved.destination, {}, "create response did not include a qitem id; delivery cannot be correlated");
             await printWriteResult(client, opts.json ?? false, { ...created, qitemId: createdId, persisted: true, delivery }, status, receipt);
             return;
