@@ -38,7 +38,7 @@ describe("ClaudeResumeAdapter", () => {
     const adapter = new ClaudeResumeAdapter(tmux, { maxWaitMs: 1, sleep: async () => {} });
     await adapter.resume("seat@rig", "claude_id", "original", "/repo", undefined, undefined, undefined, "node",
       undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, "/native tools/claude");
-    expect(tmux.sendText).toHaveBeenCalledWith("seat@rig", expect.stringContaining("'/native tools/claude'"));
+    expect(tmux.sendText).toHaveBeenCalledWith("seat@rig", expect.stringContaining("exec '/native tools/claude'"));
     expect(tmux.sendText).toHaveBeenCalledWith("seat@rig", expect.stringContaining("--resume 'original'"));
   });
 

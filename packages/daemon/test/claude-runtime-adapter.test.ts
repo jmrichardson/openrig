@@ -79,7 +79,7 @@ describe("launchHarness — per-agent --model reaches the claude launch (51-07 A
   it("uses the retained executable for a same-conversation continuation", async () => {
     const tmux = mockTmux();
     await adapterWith(tmux).launchHarness({ ...makeBinding(), claudeExecutable: "/native tools/claude" }, { name: "seat", resumeToken: "original" });
-    expect(lastCmd(tmux)).toContain("'/native tools/claude'");
+    expect(lastCmd(tmux)).toContain("exec '/native tools/claude'");
     expect(lastCmd(tmux)).toContain("--resume 'original'");
   });
 
