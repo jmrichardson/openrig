@@ -1,7 +1,8 @@
 # What changed in OpenRig 0.7.5
 
-This note is for an agent on an install upgraded from 0.7.4 to 0.7.5. For the
-whole capability map, read `rig context get onboarding-width/public-what-you-can-do.md`.
+This note is for an agent on an install that was just upgraded to 0.7.5.
+It lists changes since 0.7.4. For the whole capability map, read
+`rig context get onboarding-width/public-what-you-can-do.md`.
 Each release replaces this note: `rig context get reference/whats-new.md`
 describes the installed version once the upgraded daemon is running. Without
 a daemon, read `$OPENRIG_HOME/reference/whats-new.md`; that copy refreshes at
