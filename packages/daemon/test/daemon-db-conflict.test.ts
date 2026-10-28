@@ -21,6 +21,9 @@ let root: string, dbPath: string, policy: string;
 const pid = process.pid + 100_000;
 beforeEach(() => {
   vi.resetAllMocks();
+  // These fixtures exercise lsof semantics on every test host. The native
+  // Restart Manager branch has its own Windows-specific fixtures.
+  vi.stubGlobal("process", new Proxy(process, { get(target, key) { return key === "platform" ? "linux" : Reflect.get(target, key); } }));
   root = mkdtempSync(join(tmpdir(), "openrig-db-conflict-"));
   dbPath = join(root, "shared.sqlite");
   writeFileSync(dbPath, "original database bytes");
