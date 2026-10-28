@@ -400,3 +400,25 @@ so it uses the instance's actual seat and psmux launch command instead of guessi
 session names. It requires an interactive terminal and refuses unavailable seats.
 Herdr is not required for this entry point. The older terminal open --window
 command explicitly requests desktop windows and remains available for that use.
+
+## Codex guidance, scrollback and clipboard behavior
+
+The operator is the conversation used to design a project team. No project rig
+needs to exist before talking to it. Agent skill lists in its history are
+instructions for the agent; they are not a text file the person must read.
+
+rig open reattaches the existing conversation and sends no new setup prompt.
+"Back to bottom · esc" belongs to Codex's history navigation. Windows-managed
+Codex launches use --no-alt-screen to preserve terminal scrollback. Existing
+processes retain their current display mode until a verified conversation resume;
+a refused restart must not be replaced with a fresh conversation.
+
+When applications capture the mouse, Shift-drag can request host-terminal
+selection; use the terminal's Copy action after selecting. Running rig open in a
+plain Zed terminal avoids stacking Herdr's mouse handling over psmux and Codex.
+The Herdr-in-Zed clipboard path has not been visually qualified.
+
+The core Codex hooks use a shell-neutral Node entry, forwarding stdin and exit
+status to activity/refocus handlers. Only OpenRig-owned, previously approved
+legacy declarations with a matching ownership receipt can migrate automatically.
+Disabled hooks, custom hashes and unknown provenance remain under native review.

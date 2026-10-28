@@ -110,7 +110,7 @@ function expectedFreshLaunchCommand(options: { cwd?: string; model?: string; eff
   const queueDirArg = options.queueRoot === null ? "" : ` --add-dir ${quote(options.queueRoot ?? testQueueRoot())}`;
   const modelArg = options.model ? ` -m ${quote(options.model)}` : "";
   const effortArg = options.effort ? ` -c ${quote(`model_reasoning_effort="${options.effort}"`)}` : "";
-  return `codex -s workspace-write ${CODEX_LAUNCH_DEFAULTS} -C ${quote(cwd)}${gitDirArg}${queueDirArg}${modelArg}${effortArg}`;
+  return `codex${process.platform === "win32" ? " --no-alt-screen" : ""} -s workspace-write ${CODEX_LAUNCH_DEFAULTS} -C ${quote(cwd)}${gitDirArg}${queueDirArg}${modelArg}${effortArg}`;
 }
 
 // A resume and a fork add the same git metadata dir as the fresh launch, after the conversation id (`gitCwd` null: none,
@@ -123,14 +123,14 @@ function expectedResumeCommand(token = "sess-456", queueRoot: string | null = te
   const queueDirArg = queueRoot === null ? "" : ` --add-dir ${quote(queueRoot)}`;
   const modelArg = model ? ` -m ${quote(model)}` : "";
   const effortArg = effort ? ` -c ${quote(`model_reasoning_effort="${effort}"`)}` : "";
-  return `codex -s workspace-write ${CODEX_LAUNCH_DEFAULTS}${modelArg}${effortArg} resume ${quote(token)}${queueDirArg}${gitDirOption(gitCwd)}`;
+  return `codex${process.platform === "win32" ? " --no-alt-screen" : ""} -s workspace-write ${CODEX_LAUNCH_DEFAULTS}${modelArg}${effortArg} resume ${quote(token)}${queueDirArg}${gitDirOption(gitCwd)}`;
 }
 
 function expectedForkCommand(parentId = "parent-thread-id", options: { model?: string; effort?: string; queueRoot?: string | null; gitCwd?: string | null } = {}): string {
   const queueDirArg = options.queueRoot === null ? "" : ` --add-dir ${quote(options.queueRoot ?? testQueueRoot())}`;
   const modelArg = options.model ? ` -m ${quote(options.model)}` : "";
   const effortArg = options.effort ? ` -c ${quote(`model_reasoning_effort="${options.effort}"`)}` : "";
-  return `codex -s workspace-write ${CODEX_LAUNCH_DEFAULTS}${modelArg}${effortArg} fork${queueDirArg} ${quote(parentId)}${gitDirOption(options.gitCwd === undefined ? "/project" : options.gitCwd)}`;
+  return `codex${process.platform === "win32" ? " --no-alt-screen" : ""} -s workspace-write ${CODEX_LAUNCH_DEFAULTS}${modelArg}${effortArg} fork${queueDirArg} ${quote(parentId)}${gitDirOption(options.gitCwd === undefined ? "/project" : options.gitCwd)}`;
 }
 
 function expectedProfileFreshLaunchCommand(profile: string, options: { cwd?: string; model?: string; queueRoot?: string | null } = {}): string {
@@ -138,12 +138,12 @@ function expectedProfileFreshLaunchCommand(profile: string, options: { cwd?: str
   const gitDirArg = ` --add-dir ${quote(nodePath.join(cwd, ".git"))}`;
   const queueDirArg = options.queueRoot === null ? "" : ` --add-dir ${quote(options.queueRoot ?? testQueueRoot())}`;
   const modelArg = options.model ? ` -m ${quote(options.model)}` : "";
-  return `codex -p ${quote(profile)} ${CODEX_LAUNCH_DEFAULTS} -C ${quote(cwd)}${gitDirArg}${queueDirArg}${modelArg}`;
+  return `codex${process.platform === "win32" ? " --no-alt-screen" : ""} -p ${quote(profile)} ${CODEX_LAUNCH_DEFAULTS} -C ${quote(cwd)}${gitDirArg}${queueDirArg}${modelArg}`;
 }
 
 function expectedProfileResumeCommand(profile: string, token = "sess-456", queueRoot: string | null = testQueueRoot(), gitCwd: string | null = "/project"): string {
   const queueDirArg = queueRoot === null ? "" : ` --add-dir ${quote(queueRoot)}`;
-  return `codex -p ${quote(profile)} ${CODEX_LAUNCH_DEFAULTS} resume ${quote(token)}${queueDirArg}${gitDirOption(gitCwd)}`;
+  return `codex${process.platform === "win32" ? " --no-alt-screen" : ""} -p ${quote(profile)} ${CODEX_LAUNCH_DEFAULTS} resume ${quote(token)}${queueDirArg}${gitDirOption(gitCwd)}`;
 }
 
 beforeEach(() => {

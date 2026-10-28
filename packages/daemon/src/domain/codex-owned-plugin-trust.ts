@@ -82,14 +82,17 @@ export const ownedCodexApprovalPath = (configPath: string) => path.join(path.dir
 /** No native baseline is changed. Existing declarations must already be approved; only content approval may advance. */
 export function planOwnedCodexContentApproval(input: {
   configPath: string; content: string; layers: CodexConfigLayerRead[]; shipped: string; installed: string; freshGrant?: boolean;
-}): { hashes: Record<string, string>; approval: OwnedApproval } | undefined {
+}): { hashes: Record<string, string>; approval: OwnedApproval; declarationHashes?: Record<string, string> } | undefined {
   try {
     if (codexPluginContentHash(input.shipped, true) !== codexPluginContentHash(input.installed, true)) return;
     const contentHash = codexPluginContentHash(input.installed);
     const declarations: Record<string, string> = {};
+    let portableOnly = true;
     const manifest = JSON.parse(fs.readFileSync(path.join(input.shipped, "hooks/codex.json"), "utf8"));
     for (const [event, groups] of Object.entries(manifest.hooks) as Array<[string, Array<{ matcher?: string; hooks: Array<{ command: string; timeout: number }> }>]> ) {
       groups.forEach((group, groupIndex) => group.hooks.forEach((handler, handlerIndex) => {
+        const action = event === "PostCompact" || (event === "UserPromptSubmit" && groupIndex === 1) ? "refocus" : "activity";
+        portableOnly &&= handler.command === `node -e "require(require('path').join(process.env.PLUGIN_ROOT,'hooks/scripts/codex-entry.cjs'))" ${action}`;
         const { key, hash } = computeCodexHookTrust(event, { ...handler, matcher: group.matcher, timeoutSec: handler.timeout,
           keySource: `${CODEX_CORE_PLUGIN_KEY}:hooks/codex.json`, groupIndex, handlerIndex });
         declarations[key] = hash;
@@ -108,19 +111,36 @@ export function planOwnedCodexContentApproval(input: {
         || Object.values(value).some(child => nestedPluginChoice(child, true)));
     if (docs.some(layer => nestedPluginChoice(layer.doc))) return;
     const states = doc.hooks?.state ?? {};
+    const savedApproval = readRecord(ownedCodexApprovalPath(input.configPath));
+    const prior: OwnedApproval | undefined = savedApproval === undefined ? undefined : JSON.parse(savedApproval);
+    const declarationHashes: Record<string, string> = {};
     for (const [key, hash] of Object.entries(declarations)) {
       const state = states[key];
-      if (!state || (state.enabled !== undefined && state.enabled !== true) || state.trusted_hash !== hash
+      // Only the six unchanged, previously owned POSIX declarations may move
+      // to our shell-neutral entry. A custom hash or disabled hook still wins.
+      const ownedLegacy = portableOnly && prior?.schema === 1 && prior.plugin === CODEX_CORE_PLUGIN_KEY
+        && prior.declarations?.[key] === legacyDeclarations[key]
+        && state?.trusted_hash === legacyDeclarations[key]
+        && state?.trusted_content_hash === prior.contentHash;
+      if (!state || (state.enabled !== undefined && state.enabled !== true) || (state.trusted_hash !== hash && !ownedLegacy)
         || Object.keys(state).some(field => !["enabled", "trusted_hash", "trusted_content_hash"].includes(field))
         || findTomlTable(input.content.split("\n"), ["hooks", "state", key]) < 0
         || docs.some(layer => otherChoice(layer.doc, key, layer.path !== input.configPath))) return;
+      if (state.trusted_hash !== hash) declarationHashes[key] = hash;
     }
     const approval: OwnedApproval = { schema: 1, plugin: CODEX_CORE_PLUGIN_KEY, contentHash, declarations };
     const hashes = Object.fromEntries(Object.keys(declarations).map(key => [key, contentHash]));
+    if (Object.keys(declarationHashes).length) return { hashes, approval, declarationHashes };
     if (input.freshGrant) return { hashes, approval };
     if (Object.keys(declarations).every(key => states[key].trusted_content_hash === contentHash)) return { hashes: {}, approval };
     const baseline = readRecord(codexLegacyPluginTrustPath(input.configPath));
     if (Object.keys(declarations).every(key => (states[key].trusted_content_hash ?? baseline) === contentHash)) return { hashes, approval };
+    // An interrupted install can leave the known native legacy baseline after
+    // the person approved the exact portable declarations. No custom command,
+    // unknown baseline, or existing (possibly invalid) ownership receipt qualifies.
+    if (portableOnly && savedApproval === undefined && baseline === LEGACY_CONTENT
+      && Object.keys(declarations).every(key => states[key].trusted_hash === declarations[key]
+        && states[key].trusted_content_hash === undefined)) return { hashes, approval };
     const saved = readRecord(ownedCodexApprovalPath(input.configPath));
     const previous: OwnedApproval = saved === undefined ? { schema: 1, plugin: CODEX_CORE_PLUGIN_KEY,
       contentHash: LEGACY_CONTENT, declarations: legacyDeclarations } : JSON.parse(saved);

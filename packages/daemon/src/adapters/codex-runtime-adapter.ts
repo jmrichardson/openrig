@@ -467,10 +467,12 @@ export class CodexRuntimeAdapter implements RuntimeAdapter {
       const planned = planOwnedCodexContentApproval({ configPath, content, layers: currentLayers, shipped, installed: cachedDir, freshGrant });
       if (!planned) return;
       for (const [key, hash] of Object.entries(planned.hashes)) content = upsertCodexHookTrust(content, key, hash, "trusted_content_hash");
+      for (const [key, hash] of Object.entries(planned.declarationHashes ?? {})) content = upsertCodexHookTrust(content, key, hash);
       // The line writer must not alter examples in strings or duplicate quoted keys.
       try {
         const expected = parseToml(before) as { hooks: { state: Record<string, Record<string, unknown>> } };
         for (const [key, hash] of Object.entries(planned.hashes)) expected.hooks.state[key]!.trusted_content_hash = hash;
+        for (const [key, hash] of Object.entries(planned.declarationHashes ?? {})) expected.hooks.state[key]!.trusted_hash = hash;
         if (!isDeepStrictEqual(parseToml(content), expected)) return;
       } catch { return; } // Leave native review and owner bytes intact for unsupported TOML spellings.
       if (this.fs.readFile(configPath) !== before) return; // A concurrent native choice wins.
@@ -1157,6 +1159,7 @@ export class CodexRuntimeAdapter implements RuntimeAdapter {
   }
 
   private async seatCommand(binding: NodeBinding, cmd: string, elevatedSandbox: boolean): Promise<string> {
+    if (process.platform === "win32" && !cmd.includes("--no-alt-screen")) cmd = cmd.replace(/^codex(?=\s)/, "codex --no-alt-screen");
     return this.seatLaunchEnvironment
       ? await this.seatLaunchEnvironment.command(binding.tmuxSession!, cmd, { codexCwd: binding.cwd, nodeId: binding.nodeId, generation: binding.launchGeneration, runtime: this.runtime, ...this.ownHomeCommandOpt(binding), ...(elevatedSandbox ? { codexElevatedSandbox: true } : {}) })
       : this.launchCommand(cmd, this.homeFor(binding));
