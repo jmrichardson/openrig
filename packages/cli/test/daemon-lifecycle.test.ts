@@ -981,12 +981,13 @@ describe("Daemon Lifecycle", () => {
     expect(args).toContain(LOG_FILE);
   });
 
-  it("tailLogs on POSIX runs tail without -f and lets this command exit", () => {
+  it("tailLogs uses the paired portable Node reader on POSIX too", () => {
     const child = { pid: 1, unref: vi.fn(), on: vi.fn() };
     const spawnFn = vi.fn(() => child as unknown as ChildProcess);
     tailLogs(mockDeps({ exists: vi.fn((p: string) => p === LOG_FILE), spawn: spawnFn }), { follow: false }, "darwin");
-    expect(spawnFn.mock.calls[0]!.slice(0, 2)).toEqual(["tail", [LOG_FILE]]);
-    expect(child.unref).toHaveBeenCalledOnce();
+    expect(spawnFn.mock.calls[0]![0]).toBe(process.execPath);
+    expect(spawnFn.mock.calls[0]![1]).toEqual([expect.stringMatching(/log-tail.js$/), LOG_FILE]);
+    expect(child.unref).not.toHaveBeenCalled();
   });
 
   it.each([true, false])("tailLogs on Windows follows with the installed Node, in the foreground (follow=%s)", (follow) => {

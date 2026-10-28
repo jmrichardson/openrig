@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import Database from "better-sqlite3";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { CodexThreadIdResolver, lstartToMinTs, readCodexThreadIdFromCandidateHomes } from "../src/domain/codex-thread-id.js";
 
 const roots: string[] = [];
@@ -32,6 +32,7 @@ describe("Codex home discovery respects an explicit HOME", () => {
   it("reads the default home before resolving a process home and never consults passwd", async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "codex-default-home-")); roots.push(home);
     vi.stubEnv("HOME", home);
+    if (process.platform === "win32") vi.stubEnv("USERPROFILE", home);
     const passwd = vi.spyOn(os, "userInfo").mockImplementation(() => { throw new Error("passwd home must not be read"); });
     const processHome = vi.fn(() => "/synthetic-other-home");
     const read = vi.fn((_pid: number, candidate: string) => candidate === home ? "conversation" : undefined);
@@ -45,6 +46,7 @@ describe("Codex home discovery respects an explicit HOME", () => {
   it("candidate-home fallback finds fixture logs without searching the passwd home", () => {
     const f = fixture(); f.thread("conversation"); f.log("conversation"); f.finish();
     vi.stubEnv("HOME", f.home);
+    if (process.platform === "win32") vi.stubEnv("USERPROFILE", f.home);
     const passwd = vi.spyOn(os, "userInfo").mockImplementation(() => { throw new Error("passwd home must not be read"); });
     expect(readCodexThreadIdFromCandidateHomes(60422, [])).toBe("conversation");
     expect(passwd).not.toHaveBeenCalled();
@@ -54,6 +56,7 @@ describe("Codex home discovery respects an explicit HOME", () => {
     const foreign = fixture(); foreign.thread("foreign-conversation"); foreign.log("foreign-conversation"); foreign.finish();
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "codex-empty-home-")); roots.push(home);
     vi.stubEnv("HOME", home);
+    if (process.platform === "win32") vi.stubEnv("USERPROFILE", home);
     const passwd = vi.spyOn(os, "userInfo").mockReturnValue({ homedir: foreign.home } as ReturnType<typeof os.userInfo>);
     expect(readCodexThreadIdFromCandidateHomes(60422, [])).toBeUndefined();
     expect(passwd).not.toHaveBeenCalled();

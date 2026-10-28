@@ -739,7 +739,7 @@ export async function runSetup(deps: SetupDeps, opts: { dryRun?: boolean; full?:
       steps.push({ id: "tmux_config", status: "applied", message: `Appended OpenRig managed tmux config block (history-limit ${historyLimit}).` });
     } else {
       deps.writeFile(TMUX_CONF, MANAGED_BLOCK + "\n");
-      steps.push({ id: "tmux_config", status: "applied", message: platform === "win32" ? `Created ${TMUX_CONF} with OpenRig managed block.` : "Created .tmux.conf with OpenRig managed block." });
+      steps.push({ id: "tmux_config", status: "applied", message: `Created ${platform === "win32" ? TMUX_CONF : ".tmux.conf"} with OpenRig managed block (history-limit ${historyLimit}).` });
     }
   } catch (err) {
     steps.push({ id: "tmux_config", status: "warn", message: `Could not update tmux config: ${(err as Error).message}` });

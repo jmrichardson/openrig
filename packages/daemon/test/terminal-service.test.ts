@@ -697,7 +697,7 @@ describe("TerminalService — an omitted provider falls back from herdr to cmux 
     const r = await new TerminalService(deps).openView({ view: "mixed" });
     const notes = r.notes!.join("\n");
     expect(notes).toContain("In a new PowerShell window on the daemon's host");
-    expect(r.notes).toContain("dev-driver@acme-build: Remove-Item Env:TMUX -ErrorAction SilentlyContinue; & /opt/tools/tmux attach -t 'dev-driver@acme-build'");
+    expect(r.notes).toContain("dev-driver@acme-build: Remove-Item Env:TMUX -ErrorAction SilentlyContinue; & /opt/tools/tmux attach -f ignore-size -t 'dev-driver@acme-build'");
     expect(r.notes).toContain("far@lab-rig: Remove-Item Env:TMUX -ErrorAction SilentlyContinue; & ssh 'ops@lab.example' 'tmux attach -r -t ''far@lab-rig'''");
     expect(notes).toContain("including Remove-Item Env:TMUX");
     expect(notes).not.toContain("env -u TMUX");

@@ -170,7 +170,7 @@ describe("CodexResumeAdapter", () => {
       await new CodexResumeAdapter(mockTmux({ sendText }), { prepareSeatFolder })
         .resume("r99-demo1-impl", "codex_id", "uuid-123", "/repo");
       expect(prepareSeatFolder).toHaveBeenCalledWith("r99-demo1-impl");
-      expect(sendText.mock.calls[0]![1]).toBe("codex -s workspace-write '-c' 'check_for_update_on_startup=false' resume 'uuid-123' --add-dir '/topology/rigs/demo/seats/r99-demo1-impl'");
+      expect(sendText.mock.calls[0]![1]).toBe(`codex -s workspace-write ${CODEX_LAUNCH_DEFAULTS} resume 'uuid-123' --add-dir '/topology/rigs/demo/seats/r99-demo1-impl'`);
 
       const profileText = vi.fn(async () => ({ ok: true as const }));
       const profileFolder = vi.fn(() => "/topology/rigs/demo/seats/r99-demo1-impl");
@@ -189,7 +189,7 @@ describe("CodexResumeAdapter", () => {
       await new CodexResumeAdapter(mockTmux({ sendText }), { resolveGitAddDirs, prepareSeatFolder })
         .resume("r99-demo1-impl", "codex_id", "uuid-123", "/repo");
       expect(resolveGitAddDirs).toHaveBeenCalledWith("/repo");
-      expect(sendText.mock.calls[0]![1]).toBe("codex -s workspace-write '-c' 'check_for_update_on_startup=false' resume 'uuid-123' --add-dir '/repo/.git' --add-dir '/topology/rigs/demo/seats/r99-demo1-impl'");
+      expect(sendText.mock.calls[0]![1]).toBe(`codex -s workspace-write ${CODEX_LAUNCH_DEFAULTS} resume 'uuid-123' --add-dir '/repo/.git' --add-dir '/topology/rigs/demo/seats/r99-demo1-impl'`);
 
       const profileText = vi.fn(async () => ({ ok: true as const }));
       const profileDirs = vi.fn(async () => ["/repo/.git"]);
@@ -460,6 +460,6 @@ describe("a seat's own permission envelope on the legacy resume (argv only)", ()
   it("keeps the call unchanged without an envelope", async () => {
     const sendText = vi.fn(async () => ({ ok: true as const }));
     await new CodexResumeAdapter(mockTmux({ sendText })).resume("r99-demo1-impl", "codex_id", "uuid-123", "/repo");
-    expect((sendText.mock.calls[0] as unknown as [string, string])[1]).toBe("codex -s workspace-write '-c' 'check_for_update_on_startup=false' resume 'uuid-123'");
+    expect((sendText.mock.calls[0] as unknown as [string, string])[1]).toBe(`codex -s workspace-write ${CODEX_LAUNCH_DEFAULTS} resume 'uuid-123'`);
   });
 });

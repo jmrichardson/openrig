@@ -222,7 +222,7 @@ describe("Attach CLI", () => {
 
   it("resolveAttachContext detects tmux session metadata when TMUX_PANE is set", () => {
     const result = withTmuxPane("%42", () =>
-      resolveAttachContext(fakeTmux({ session: "dev1-impl2@rigged-buildout", window: "@12", pane: "%42" })));
+      resolveAttachContext(fakeTmux({ session: "dev1-impl2@rigged-buildout", window: "@12", pane: "%42" }), "linux"));
     expect(result).toEqual({
       attachmentType: "tmux",
       tmuxSession: "dev1-impl2@rigged-buildout",
@@ -237,7 +237,7 @@ describe("Attach CLI", () => {
     ["the shape real tmux returned", "unrelated-shell"],
     ["a name holding underscores, spaces and id-like words", "team_1 rig_b @7 %9"],
   ])("resolveAttachContext resolves the pane from %s", (_label, session) => {
-    const result = withTmuxPane("%2", () => resolveAttachContext(fakeTmux({ session, window: "@2", pane: "%2" })));
+    const result = withTmuxPane("%2", () => resolveAttachContext(fakeTmux({ session, window: "@2", pane: "%2" }), "linux"));
     expect(result).toEqual({ attachmentType: "tmux", tmuxSession: session, tmuxWindow: "@2", tmuxPane: "%2" });
   });
 

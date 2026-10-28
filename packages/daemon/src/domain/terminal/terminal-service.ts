@@ -309,7 +309,7 @@ export class TerminalService {
     if (result.opened.length === 0 && composed.opened.length > 0 && (this.deps.platform ?? process.platform) === "win32") {
       // PowerShell has no `env` command.
       notes.push("In a new PowerShell window on the daemon's host, attach directly using one of these commands:");
-      for (const pane of composed.opened) notes.push(`${pane.label}: ${powershellAttach(pane.paneCommand)}`);
+      for (const pane of composed.opened) notes.push(`${pane.label}: ${powershellAttach(pane.recoveryCommand ?? pane.paneCommand)}`);
       notes.push("Each labelled command above opens a different seat. When sharing how to join this team, include every command in full, unchanged, including Remove-Item Env:TMUX, paths and quoting.");
     } else if (result.opened.length === 0 && composed.opened.length > 0) {
       notes.push("In a new terminal on the daemon's host, attach directly using one of these commands:");

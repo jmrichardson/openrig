@@ -20,6 +20,8 @@ beforeAll(() => {
   // neither stage contacts a daemon or performs a lifecycle operation.
   writeFileSync(join(home, "rig"), `#!${process.execPath}\nconsole.log(JSON.stringify(process.argv.slice(2)));\n`, { mode: 0o755 });
   if (!windows) return;
+  writeFileSync(join(home, "argv.cjs"), "console.log(JSON.stringify(process.argv.slice(2)));\n");
+  writeFileSync(join(home, "rig"), "#!/bin/sh\nexec " + "'" + process.execPath.replaceAll("\\", "/").replaceAll("'", "'\\''") + "' " + "\"$(dirname \"$0\")/argv.cjs\" \"$@\"\n", { mode: 0o755 });
   // npm's Windows shims for `rig`: PowerShell prefers rig.ps1 and rig.cmd runs through cmd.exe. Both record argv.
   shims = mkdtempSync(join(tmpdir(), "team-permission-parser-ps-"));
   writeFileSync(join(shims, "argv.cjs"), "console.log(JSON.stringify(process.argv.slice(2)));\n");

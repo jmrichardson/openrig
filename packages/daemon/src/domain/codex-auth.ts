@@ -10,7 +10,7 @@
 // file (mode-guarded byte copy), never read into a printed value. CODEX_HOME defaults to $HOME/.codex
 // and is env-overridable (tests point it at a fixture); no personal/operator path is baked in.
 import path from "node:path";
-import { userInfo } from "node:os";
+import { userInfo, homedir } from "node:os";
 
 /** The account's home from the OS account database. Unlike os.homedir() this does not echo
  *  an empty $HOME back, so a HOME="" process still lands under the real home. Empty string
@@ -51,7 +51,7 @@ export function resolveCodexHome(env: NodeJS.ProcessEnv = process.env, platform:
       ? env.CODEX_HOME
       // HOME unset/empty (cron, systemd, some CI/container shells) must not yield a
       // cwd-relative ".codex" — auth files stay under the account's home.
-      : path.join(platform === "win32" ? env.USERPROFILE || accountHome() : home, ".codex");
+      : path.join(platform === "win32" ? env.USERPROFILE || homedir() : home, ".codex");
   return {
     codexHome,
     profileDir: path.join(codexHome, "auth-profiles"),

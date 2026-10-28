@@ -50,6 +50,9 @@ export function tileAttachArgv(
  * a replacement only while its stable OpenRig node identity still matches. */
 function windowsTileAttachArgv(tmux: string, server: readonly string[], session: string, readOnly: boolean, retrySeconds: number): string[] {
   const script = [
+    // Older Herdr releases ignore pane.env; the attach itself carries the daemon's namespace.
+    "$env:TMUX = $null; $env:PSMUX_SESSION = $null; $env:PSMUX_TARGET_SESSION = $null",
+    `[Environment]::SetEnvironmentVariable('PSMUX_DATA_DIR', ${process.env.PSMUX_DATA_DIR === undefined ? "$null" : powershellQuote(process.env.PSMUX_DATA_DIR)}, 'Process')`,
     `$tmux = ${powershellQuote(tmux)}`,
     `$server = @(${server.map(powershellQuote).join(", ")})`,
     `$target = ${powershellQuote(session)}`,

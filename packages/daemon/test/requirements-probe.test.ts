@@ -245,6 +245,15 @@ describe("RequirementsProbeRegistry on Windows", () => {
     expect(exec).not.toHaveBeenCalled();
   });
 
+  it("pins a quoted Windows PATH entry to an absolute executable for viewer launches", async () => {
+    const [native] = pathOf({ "tmux.exe": "" });
+    vi.stubEnv("PATH", '  "' + native + '"  ');
+    const exec = vi.fn() as unknown as ExecFn;
+    const registry = new RequirementsProbeRegistry(exec, { platform: "win32" });
+    expect((await registry.probeCli("tmux")).detectedPath).toBe(join(native!, "tmux.exe"));
+    expect(exec).not.toHaveBeenCalled();
+  });
+
   it("reports a tool absent from PATH as missing, and never interprets the name", async () => {
     pathOf({ "git.exe": "" });
     const exec = vi.fn() as unknown as ExecFn;

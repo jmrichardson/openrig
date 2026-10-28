@@ -112,7 +112,7 @@ describe("Claude launch settings by platform", () => {
     expect(team.allow).not.toContain("PowerShell(tmux:*)");
     expect(team.ask).toHaveLength(TEAM_CLAUDE_ASK.length);
     expect(team.ask).toEqual(expect.arrayContaining(["PowerShell(rig up:*)", "PowerShell(rig down:*)", "PowerShell(rig env down:*)",
-      "PowerShell(rig seat stop:*)", "PowerShell(rig seat set-effort:*)"]));
+      "PowerShell(rig seat stop:*)", "PowerShell(rig seat set-permissions:*)"]));
     expect(team.ask.filter((rule: string) => !rule.startsWith("PowerShell(rig "))).toEqual([]);
   });
 

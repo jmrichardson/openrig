@@ -65,7 +65,7 @@ const muxRun = (session, args) => new Promise((res, rej) => cp.execFile(mux, ['-
     }
     const queued = JSON.parse(await run(['queue', 'create', '--summary', 'Native durable handoff', '--destination', sessions[1], '--body', 'Native acceptance fixture', '--json'], { OPENRIG_SESSION_NAME: sessions[0] }));
     fs.writeFileSync(path.join(base, 'queue-before.json'), JSON.stringify(queued, null, 2));
-    const qitemId = queued.qitemId ?? queued.id ?? queued.qitem?.id ?? queued.item?.id;
+    const qitemId = queued.qitemId;
     if (!qitemId)
       throw Error('Queue creation returned no durable qitem identity');
     await run(['daemon', 'stop']);
@@ -76,8 +76,8 @@ const muxRun = (session, args) => new Promise((res, rej) => cp.execFile(mux, ['-
     if (JSON.stringify(before) !== JSON.stringify(after))
       throw Error('native pane processes changed across daemon restart');
     report.panesSurvivedDaemonRestart = true;
-    const restoredQueue = await run(['queue', 'show', qitemId, '--json']);
-    if (!restoredQueue.includes(qitemId))
+    const restoredQueue = JSON.parse(await run(['queue', 'show', qitemId, '--full', '--json']));
+    if (restoredQueue.qitemId !== qitemId || restoredQueue.destinationSession !== sessions[1] || restoredQueue.body !== 'Native acceptance fixture')
       throw Error('Queue handoff missing after daemon restart');
     report.queuePersistedAcrossDaemonRestart = true;
     await run(['send', sessions[1], 'OPENRIG_NATIVE_AFTER_RESTART', '--json']);

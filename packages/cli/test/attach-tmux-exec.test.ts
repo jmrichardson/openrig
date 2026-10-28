@@ -24,11 +24,11 @@ afterEach(() => {
 });
 
 it("runs the tmux command string through the shell off Windows", () => {
-  childProcess.execSync.mockReturnValue("dev1-impl2@rigged-buildout\n@12\n%42\n");
+  childProcess.execSync.mockReturnValue("%42 @12 dev1-impl2@rigged-buildout\n");
 
   expect(resolveAttachContext(undefined, "linux")).toEqual(ATTACHED);
   expect(childProcess.execSync).toHaveBeenCalledTimes(1);
-  expect(childProcess.execSync).toHaveBeenCalledWith('tmux display-message -p -t "%42" "#{session_name}\n#{window_id}\n#{pane_id}"', { encoding: "utf-8" });
+  expect(childProcess.execSync).toHaveBeenCalledWith("tmux display-message -p -t '%42' '#{pane_id} #{window_id} #{session_name}'", { encoding: "utf-8" });
   expect(childProcess.execFileSync).not.toHaveBeenCalled();
 });
 
@@ -40,10 +40,10 @@ it("falls back to external_cli off Windows when the shell cannot run tmux", () =
 });
 
 it("runs psmux's tmux with argv and no shell on Windows", () => {
-  childProcess.execFileSync.mockReturnValue("dev1-impl2@rigged-buildout\n@12\n%42\n");
+  childProcess.execFileSync.mockReturnValue("%42 @12 dev1-impl2@rigged-buildout\n");
 
   expect(resolveAttachContext(undefined, "win32")).toEqual(ATTACHED);
   expect(childProcess.execFileSync).toHaveBeenCalledTimes(1);
-  expect(childProcess.execFileSync).toHaveBeenCalledWith("tmux", ["display-message", "-p", "-t", "%42", "#{session_name}\n#{window_id}\n#{pane_id}"], { encoding: "utf-8" });
+  expect(childProcess.execFileSync).toHaveBeenCalledWith("tmux", ["display-message", "-p", "-t", "%42", "#{pane_id} #{window_id} #{session_name}"], { encoding: "utf-8" });
   expect(childProcess.execSync).not.toHaveBeenCalled();
 });

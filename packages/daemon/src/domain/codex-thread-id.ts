@@ -290,7 +290,7 @@ void _resolveRequiresIdentityPin;
 
 function uniqueHomes(candidateHomes: Array<string | undefined>): string[] {
   const homes = candidateHomes.filter((home): home is string => Boolean(home));
-  // os.homedir() honors HOME. The passwd home must not bypass an explicit provider/test home.
+  // os.homedir() honors HOME on POSIX and USERPROFILE on Windows. Do not bypass an explicit provider/test home.
   homes.push(os.homedir());
   return [...new Set(homes)];
 }

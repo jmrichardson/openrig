@@ -1011,7 +1011,11 @@ export class CodexRuntimeAdapter implements RuntimeAdapter {
     const updatePrompt: UpdatePromptAttempt = { handled: false };
     await this.dismissSkippableCodexUpdatePrompt(tmuxSession, updatePrompt);
     if (updatePrompt.failure) return updatePrompt.failure;
-    return this.verifyResumeLaunch(tmuxSession, updatePrompt, { resumeToken, ...(home ? { home } : this.ownHomeOpt({ nodeId })) });
+    const verified = await this.verifyResumeLaunch(tmuxSession, updatePrompt, { resumeToken, ...(home ? { home } : this.ownHomeOpt({ nodeId })) });
+    if (!verified.ok) return verified;
+    const composer = await this.tmux.prepareWindowsCodexComposer?.(tmuxSession);
+    if (composer && !composer.ok) return { ok: false, error: composer.message };
+    return verified;
   }
 
   /** The setter's check of a profile, in the config home this seat's launches use: its own CODEX_HOME, else the

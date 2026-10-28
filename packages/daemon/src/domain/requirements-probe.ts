@@ -1,3 +1,4 @@
+import { windowsPathEntries } from "../adapters/windows-launch.js";
 import { statSync } from "node:fs";
 import path from "node:path";
 import type { ExecFn } from "../adapters/tmux.js";
@@ -44,10 +45,9 @@ const DEFAULT_TIMEOUT_MS = 10_000;
 function windowsCommandPath(name: string): string | null {
   const extensions = (process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean);
   const names = extensions.some(ext => name.toLowerCase().endsWith(ext.toLowerCase())) ? [name] : extensions.map(ext => name + ext.toLowerCase());
-  for (const dir of (process.env.PATH ?? "").split(path.delimiter)) {
-    if (!dir) continue;
+  for (const dir of windowsPathEntries(process.env.PATH ?? "")) {
     for (const candidate of names) {
-      const file = path.join(dir, candidate);
+      const file = path.resolve(dir, candidate);
       try { if (statSync(file).isFile()) return file; } catch { /* next candidate */ }
     }
   }

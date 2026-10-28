@@ -1454,18 +1454,13 @@ describe("TmuxAdapter", () => {
   });
 
   describe("signalPaneProcess", () => {
-    it.skipIf(process.platform !== "win32")("uses taskkill for a native psmux process and preserves failure", async () => {
+    it.skipIf(process.platform !== "win32")("refuses unsupported native TERM and invalid PIDs without executing commands", async () => {
       const exec = vi.fn<ExecFn>(async () => "");
       const adapter = new TmuxAdapter(exec, undefined, undefined, "psmux");
-      expect((await adapter.signalPid(4242, "TERM")).ok).toBe(true);
-      expect(exec).toHaveBeenLastCalledWith("taskkill /PID 4242 /T");
-      expect((await adapter.signalPid(4242, "KILL")).ok).toBe(true);
-      expect(exec).toHaveBeenLastCalledWith("taskkill /PID 4242 /T /F");
-      exec.mockRejectedValueOnce(new Error("Access is denied"));
-      expect((await adapter.signalPid(4242, "KILL")).ok).toBe(false);
-      exec.mockClear();
+      expect(await adapter.signalPid(4242, "TERM")).toMatchObject({ ok: false, code: "graceful_unsupported" });
       expect((await adapter.signalPid(0, "KILL")).ok).toBe(false);
       expect(exec).not.toHaveBeenCalled();
+      // Actual taskkill and sibling preservation are exercised with owned children by windows-terminal-native.
     });
     it("sends the given signal to the pane's foreground pid (graceful TERM / fallback KILL)", async () => {
       const calls: string[] = [];

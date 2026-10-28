@@ -312,6 +312,9 @@ CLI's version and, if you use herdr, `herdr --version`.
 
 ## Known gaps
 
+- Live `rig seat set-runtime` exchanges between Claude Code and Codex are refused
+  before staging a successor: psmux cannot exchange panes between its per-session
+  servers. Use separate Claude Code and Codex seats for cross-provider delegation.
 - Not yet exercised natively: Pi and OMP live conversations, kernel and operator
   readiness, reboot, suspend, durability across power loss, and processors other than
   x64.

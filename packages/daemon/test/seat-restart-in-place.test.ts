@@ -1,3 +1,4 @@
+import { renderWindowsLaunch } from "../src/adapters/windows-launch.js";
 // OPR.0.7.0.5 — in-place restart of one Codex seat: every gate and every outcome, driven through the
 // public SeatLifecycleService surface against a fake tmux, process table, Codex launcher and OS reads.
 import { spawn } from "node:child_process";
@@ -262,7 +263,7 @@ function world(options: WorldOptions = {}) {
   });
   const events = () => (db.prepare("SELECT type, payload FROM events WHERE type LIKE 'seat.restart_in_place%' ORDER BY seq").all() as Array<{ type: string; payload: string }>)
     .map((row) => ({ type: row.type, ...JSON.parse(row.payload) }));
-  return { db, service, node, session, calls, launches, proofHomes, builds, events, sessionRegistry, tmux,
+  return { db, service, node, session, calls, launches, stopYields, proofHomes, builds, events, sessionRegistry, tmux,
     replacementYields, get replacementReads() { return replacementReads; }, get relaunched() { return relaunched; },
     setRows: (next: NativeProcessRow[]) => { rows = next; },
     print: (text: string) => { paneLines.push(...text.split("\n").filter(Boolean)); },

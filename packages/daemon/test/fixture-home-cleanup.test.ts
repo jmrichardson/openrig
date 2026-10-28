@@ -26,7 +26,7 @@ function runSetup(env: Record<string, string | undefined> = {}) {
   expect(child.status, child.stderr).toBe(0);
   const homes = JSON.parse(child.stdout.trim().split("\n").pop()!) as {
     openrigHome: string; home: string; tmpdir: string; scratch: string;
-    osHome: string; codexHome?: string; claudeConfigDir?: string; xdgConfig: string; codexVersion: string;
+    env?: Record<string, string>; credentialNames?: string[]; osHome: string; codexHome?: string; claudeConfigDir?: string; xdgConfig: string; codexVersion: string;
   };
   return { tmp, ...homes };
 }
@@ -126,11 +126,12 @@ describe("fixture homes are removed when the worker exits", () => {
   // Windows reads the home from USERPROFILE and app data from APPDATA/LOCALAPPDATA; HOME alone would leave
   // a native runtime on the developer's real profile and login.
   it.runIf(process.platform === "win32")("points the Windows home, app data and runtime config at the user home and drops credentials", () => {
-    const { home, env } = runSetup({ CLAUDE_CONFIG_DIR: "C:\\real\\.claude", PI_CODING_AGENT_DIR: "C:\\real\\.pi", ANTHROPIC_API_KEY: "real", OPENAI_API_KEY: "real" });
+    const { home, env, credentialNames } = runSetup({ CLAUDE_CONFIG_DIR: "C:\\real\\.claude", PI_CODING_AGENT_DIR: "C:\\real\\.pi", ANTHROPIC_API_KEY: "real", OPENAI_API_KEY: "real" });
     expect(env).toEqual({
       USERPROFILE: home, APPDATA: path.join(home, "AppData", "Roaming"), LOCALAPPDATA: path.join(home, "AppData", "Local"),
-      CLAUDE_CONFIG_DIR: path.join(home, ".claude"), PI_CODING_AGENT_DIR: path.join(home, ".pi", "agent"),
+      PI_CODING_AGENT_DIR: path.join(home, ".pi", "agent"),
     });
+    expect(credentialNames).toEqual([]);
   });
 
   it("leaves a fixture home it only reused, which belongs to whoever made it", () => {

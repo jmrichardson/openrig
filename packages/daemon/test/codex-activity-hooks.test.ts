@@ -6,7 +6,7 @@
 // the turn-scope hooks (incl. the PermissionRequest keystone) FIRE.
 import { describe, it, expect, vi } from "vitest";
 import nodePath from "node:path";
-import { CodexRuntimeAdapter, type CodexAdapterFsOps } from "../src/adapters/codex-runtime-adapter.js";
+import { CodexRuntimeAdapter, codexActivityHookCommand, type CodexAdapterFsOps } from "../src/adapters/codex-runtime-adapter.js";
 import type { TmuxAdapter } from "../src/adapters/tmux.js";
 import path from "node:path";
 
@@ -111,7 +111,7 @@ describe("OPR.0.4.1.10 FR-A — Codex config-layer activity hooks", () => {
   });
 
   it("keeps $ sequences in the relay path literal when the block is rewritten", () => {
-    const dollarRelay = "/opt/rig$&$$/`x`/activity-relay.cjs";
+    const dollarRelay = "/opt/rig/opt/rig$&$$/`x`/activity-relay.cjs$/`x`/assets/plugins/openrig-core/hooks/scripts/activity-relay.cjs";
     const fs = mockCodexFs({
       [dollarRelay]: "// relay",
       [CONFIG]: '[projects."/some/project"]\ntrust_level = "trusted"\n',

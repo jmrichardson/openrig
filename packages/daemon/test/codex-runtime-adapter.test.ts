@@ -71,9 +71,10 @@ function mockFs(files?: Record<string, string>): CodexAdapterFsOps {
 function mockProjectFs(files: Record<string, string>, markers: Record<string, "file" | "directory">): CodexAdapterFsOps {
   const ops = mockFs(files);
   const exists = ops.exists;
-  ops.exists = (path) => path in markers || exists(path);
+  const marker = (p: string) => Object.entries(markers).find(([key]) => nodePath.normalize(key) === nodePath.normalize(p))?.[1];
+  ops.exists = (path) => marker(path) !== undefined || exists(path);
   ops.statMode = (path) => {
-    const kind = markers[path];
+    const kind = marker(path);
     if (!kind) throw new Error(`Cannot stat ${path}`);
     return kind === "directory" ? fs.constants.S_IFDIR : fs.constants.S_IFREG;
   };
@@ -122,14 +123,14 @@ function expectedResumeCommand(token = "sess-456", queueRoot: string | null = te
   const queueDirArg = queueRoot === null ? "" : ` --add-dir ${quote(queueRoot)}`;
   const modelArg = model ? ` -m ${quote(model)}` : "";
   const effortArg = effort ? ` -c ${quote(`model_reasoning_effort="${effort}"`)}` : "";
-  return `codex -s workspace-write '-c' 'check_for_update_on_startup=false'${modelArg}${effortArg} resume ${quote(token)}${queueDirArg}${gitDirOption(gitCwd)}`;
+  return `codex -s workspace-write ${CODEX_LAUNCH_DEFAULTS}${modelArg}${effortArg} resume ${quote(token)}${queueDirArg}${gitDirOption(gitCwd)}`;
 }
 
 function expectedForkCommand(parentId = "parent-thread-id", options: { model?: string; effort?: string; queueRoot?: string | null; gitCwd?: string | null } = {}): string {
   const queueDirArg = options.queueRoot === null ? "" : ` --add-dir ${quote(options.queueRoot ?? testQueueRoot())}`;
   const modelArg = options.model ? ` -m ${quote(options.model)}` : "";
   const effortArg = options.effort ? ` -c ${quote(`model_reasoning_effort="${options.effort}"`)}` : "";
-  return `codex -s workspace-write '-c' 'check_for_update_on_startup=false'${modelArg}${effortArg} fork${queueDirArg} ${quote(parentId)}${gitDirOption(options.gitCwd === undefined ? "/project" : options.gitCwd)}`;
+  return `codex -s workspace-write ${CODEX_LAUNCH_DEFAULTS}${modelArg}${effortArg} fork${queueDirArg} ${quote(parentId)}${gitDirOption(options.gitCwd === undefined ? "/project" : options.gitCwd)}`;
 }
 
 function expectedProfileFreshLaunchCommand(profile: string, options: { cwd?: string; model?: string; queueRoot?: string | null } = {}): string {
@@ -142,7 +143,7 @@ function expectedProfileFreshLaunchCommand(profile: string, options: { cwd?: str
 
 function expectedProfileResumeCommand(profile: string, token = "sess-456", queueRoot: string | null = testQueueRoot(), gitCwd: string | null = "/project"): string {
   const queueDirArg = queueRoot === null ? "" : ` --add-dir ${quote(queueRoot)}`;
-  return `codex -p ${quote(profile)} '-c' 'check_for_update_on_startup=false' resume ${quote(token)}${queueDirArg}${gitDirOption(gitCwd)}`;
+  return `codex -p ${quote(profile)} ${CODEX_LAUNCH_DEFAULTS} resume ${quote(token)}${queueDirArg}${gitDirOption(gitCwd)}`;
 }
 
 beforeEach(() => {
@@ -791,9 +792,10 @@ describe("Codex runtime adapter", () => {
 
   it("verifyResumeInPane clears a native terminal reply from the resumed composer, and fails when that is unverified", async () => {
     for (const [composer, ok] of [[{ ok: true as const }, true], [{ ok: false as const, code: "native_composer_unverified", message: "Native startup terminal response removal unverified." }, false]] as const) {
+      const proof = provenCodexResume("thread-1");
       const prepareWindowsCodexComposer = vi.fn(async () => composer);
-      const tmux = mockTmux({ prepareWindowsCodexComposer, capturePaneContent: vi.fn(async () => "OpenAI Codex (v0.0.0)\n› Ask Codex to do anything") } as Partial<TmuxAdapter>);
-      const adapter = new CodexRuntimeAdapter({ tmux, fsOps: mockFs(), listProcesses: () => [], sleep: async () => {} });
+      const tmux = mockTmux({ terminalKind: "psmux", getPanePid: proof.getPanePid, prepareWindowsCodexComposer, capturePaneContent: vi.fn(async () => "OpenAI Codex (v0.0.0)\n› Ask Codex to do anything") } as Partial<TmuxAdapter>);
+      const adapter = new CodexRuntimeAdapter({ tmux, fsOps: mockFs(), listProcesses: proof.listProcesses as never, readResumeEvidence: proof.readResumeEvidence, sleep: async () => {} });
       const result = await adapter.verifyResumeInPane("r01-qa", "thread-1");
       expect(prepareWindowsCodexComposer).toHaveBeenCalledWith("r01-qa");
       expect(result.ok).toBe(ok);
@@ -1693,7 +1695,7 @@ describe("Codex runtime adapter", () => {
   });
 
   it("keeps the resume identity readable with a spaced shared-docs root", async () => {
-    const sharedDocsRoot = "/configured/shared docs";
+    const sharedDocsRoot = nodePath.resolve("/configured/shared docs");
     vi.stubEnv("OPENRIG_SHARED_DOCS_ROOT", sharedDocsRoot);
     const proof = provenCodexResume("sess-456");
     const tmux = mockTmux({ getPanePid: proof.getPanePid });
@@ -1705,7 +1707,7 @@ describe("Codex runtime adapter", () => {
     const command = vi.mocked(tmux.sendText).mock.calls[0]![1];
     // ps joins argv with spaces; it does not retain the shell's quotes around each path.
     expect(codexCommandResumeToken(command.replace(/'/g, ""))).toBe("sess-456");
-    expect(command).toContain(`resume 'sess-456' --add-dir '${testQueueRoot(sharedDocsRoot)}' --add-dir '/project/.git'`);
+    expect(command).toContain(`resume 'sess-456' --add-dir '${testQueueRoot(sharedDocsRoot)}'${gitDirOption('/project')}`);
   });
 
   it("launchHarness sends correct resume command", async () => {
@@ -2247,8 +2249,8 @@ describe("Codex runtime adapter", () => {
   // #2029: Codex saves project trust with literal-quoted keys. Finding the table by key means no second table for the
   // same project, which Codex rejects as a duplicate key and then refuses to start.
   it.each([
-    ["a literal-quoted table Codex saved", "[projects.'/tmp/workspace']\ntrust_level = 'trusted'\n", 1],
-    ["an inline entry", "[projects]\n'/tmp/workspace' = { trust_level = 'trusted' }\n", 0],
+    ["a literal-quoted table Codex saved", `[projects.'${nodePath.resolve("/tmp/workspace")}']\ntrust_level = 'trusted'\n`, 1],
+    ["an inline entry", `[projects]\n'${nodePath.resolve("/tmp/workspace")}' = { trust_level = 'trusted' }\n`, 0],
   ])("deliverStartup reuses %s for the project's trust and adds no duplicate", async (_name, existing, tables) => {
     const fs = mockFs({ "/home/tester/.codex/config.toml": existing });
     const fsWithHome = { ...fs, homedir: "/home/tester" };
@@ -2256,9 +2258,9 @@ describe("Codex runtime adapter", () => {
 
     await adapter.deliverStartup([], makeBinding("/tmp/workspace"));
 
-    const content = (fsWithHome as unknown as { _store: Record<string, string> })._store["/home/tester/.codex/config.toml"]!;
-    expect((parseToml(content) as Record<string, any>).projects["/tmp/workspace"].trust_level).toBe("trusted");
-    expect(content.match(/^\[projects\.['"]\/tmp\/workspace['"]\]/gm)?.length ?? 0).toBe(tables);
+    const content = fsWithHome.readFile("/home/tester/.codex/config.toml")!;
+    expect((parseToml(content) as Record<string, any>).projects[nodePath.resolve("/tmp/workspace")].trust_level).toBe("trusted");
+    expect(content.match(/^\[projects\./gm)?.length ?? 0).toBe(tables);
   });
 
   it("deliverStartup leaves a project-table example in a person's multi-line instructions exact and writes the real trust", async () => {
@@ -2266,9 +2268,9 @@ describe("Codex runtime adapter", () => {
     const fs = mockFs({ "/home/tester/.codex/config.toml": existing });
     const fsWithHome = { ...fs, homedir: "/home/tester" };
     await new CodexRuntimeAdapter({ tmux: mockTmux(), fsOps: fsWithHome }).deliverStartup([], makeBinding("/tmp/workspace"));
-    const parsed = parseToml((fsWithHome as unknown as { _store: Record<string, string> })._store["/home/tester/.codex/config.toml"]!) as Record<string, any>;
+    const parsed = parseToml(fsWithHome.readFile("/home/tester/.codex/config.toml")!) as Record<string, any>;
     expect(parsed.developer_instructions).toBe((parseToml(existing) as Record<string, any>).developer_instructions);
-    expect(parsed.projects["/tmp/workspace"].trust_level).toBe("trusted");
+    expect(parsed.projects[nodePath.resolve("/tmp/workspace")].trust_level).toBe("trusted");
   });
 
   // An earlier OpenRig's double-quoted table beside Codex's own is a duplicate Codex won't start with. Each launch leaves it
@@ -2281,7 +2283,7 @@ describe("Codex runtime adapter", () => {
     const adapter = new CodexRuntimeAdapter({ tmux: mockTmux(), fsOps: fsWithHome });
     await adapter.deliverStartup([], makeBinding("/tmp/workspace"));
     await adapter.deliverStartup([], makeBinding("/tmp/workspace"));
-    expect((fsWithHome as unknown as { _store: Record<string, string> })._store["/home/tester/.codex/config.toml"]).toBe(existing);
+    expect(fsWithHome.readFile("/home/tester/.codex/config.toml")).toBe(existing);
   });
 
   it("applies codex_config_fragment runtime resources to the global Codex config idempotently", async () => {

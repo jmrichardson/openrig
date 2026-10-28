@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { createProgram } from "../src/index.js";
 import { Command } from "commander";
@@ -210,7 +210,7 @@ describe("rig setup", () => {
     const writeSpy = vi.fn();
     const result = await runSetup(makeDeps({ platform, writeFile: writeSpy }), {});
     expect(writeSpy).toHaveBeenCalledWith(`${process.env["HOME"] ?? "~"}/.tmux.conf`, expect.stringContaining("# OpenRig managed block"));
-    expect(result.steps.find((s) => s.id === "tmux_config")?.message).toBe("Created .tmux.conf with OpenRig managed block.");
+    expect(result.steps.find((s) => s.id === "tmux_config")?.message).toBe("Created .tmux.conf with OpenRig managed block (history-limit 10000).");
     if (platform === "linux") {
       expect(result.steps.find((s) => s.id === "ghostty_install")?.message).toBe("The Ghostty offer is for macOS; existing Linux terminals remain available.");
     }

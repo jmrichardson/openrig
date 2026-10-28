@@ -13,6 +13,8 @@ console.log(JSON.stringify({
   openrigHome: process.env["OPENRIG_HOME"], home: process.env["HOME"], tmpdir: os.tmpdir(), scratch,
   osHome: os.homedir(), codexHome: process.env["CODEX_HOME"], claudeConfigDir: process.env["CLAUDE_CONFIG_DIR"],
   xdgConfig: process.env["XDG_CONFIG_HOME"],
+  env: Object.fromEntries(["USERPROFILE", "APPDATA", "LOCALAPPDATA", "CLAUDE_CONFIG_DIR", "PI_CODING_AGENT_DIR"].flatMap(key => process.env[key] === undefined ? [] : [[key, process.env[key]]])),
+  credentialNames: ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"].filter(key => process.env[key] !== undefined),
   codexVersion: execFileSync("codex", ["--version"], { encoding: "utf-8", timeout: 5000 }).trim(),
 }));
 // With "wait", stay alive for the test to signal: a vitest worker is ended with SIGTERM while it is running.
