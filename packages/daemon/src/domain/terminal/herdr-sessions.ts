@@ -1,4 +1,5 @@
 import { HerdrViewer, createHerdrViewerRun } from "./herdr-viewer.js";
+import path from "node:path";
 import { HerdrAdapter } from "./herdr-adapter.js";
 import { createHerdrSocketRpc, createHerdrSocketTransport, resolveHerdrSocketPath } from "./herdr-transport.js";
 import type { ProviderStatus } from "./terminal-provider.js";
@@ -9,19 +10,20 @@ import { HerdrFollowView, type ReadFollowInput } from "./herdr-follow-view.js";
  */
 export function createHerdrProviders(env: NodeJS.ProcessEnv = process.env, input?: ReadFollowInput) {
   env = { ...env };
+  if (env.XDG_CONFIG_HOME !== undefined) env.XDG_CONFIG_HOME = path.resolve(env.XDG_CONFIG_HOME);
   const defaultSocket = resolveHerdrSocketPath(env);
   let launch = 0;
   const viewers = new Map<string, HerdrViewer>();
   const viewer = (endpoint: NonNullable<ProviderStatus["launch"]>) => {
     let selected = viewers.get(endpoint.socketPath);
-    if (!selected) { selected = new HerdrViewer(endpoint.socketPath, createHerdrViewerRun(endpoint.session)); viewers.set(endpoint.socketPath, selected); }
+    if (!selected) { selected = new HerdrViewer(endpoint.socketPath, createHerdrViewerRun(endpoint, env)); viewers.set(endpoint.socketPath, selected); }
     return selected;
   };
   const make = (endpoint: NonNullable<ProviderStatus["launch"]>) => {
     const transportFactory = createHerdrSocketTransport(createHerdrSocketRpc(endpoint.socketPath));
     return new HerdrAdapter({
     transportFactory,
-    following: new HerdrFollowView({ socketPath: endpoint.socketPath, run: createHerdrViewerRun(endpoint.session), transport: transportFactory(), input }),
+    following: new HerdrFollowView({ socketPath: endpoint.socketPath, run: createHerdrViewerRun(endpoint, env), transport: transportFactory(), input }),
     launch: endpoint,
     viewer: viewer(endpoint),
     newLaunchToken: () => `l${++launch}`,

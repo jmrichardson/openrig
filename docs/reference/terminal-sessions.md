@@ -30,8 +30,9 @@ With neither a provider nor a session, the daemon's open and preview APIs try
 a live Herdr first, then a live cmux. An explicit session always selects Herdr
 and skips that fallback, including when the daemon's default Herdr endpoint is down.
 
-Session paths use the daemon's absolute `XDG_CONFIG_HOME`, or `HOME/.config`
-when it is unset, empty or relative. Named sessions live under
+Session paths use the daemon's `XDG_CONFIG_HOME` when set, or `HOME/.config`
+when unset. Relative paths (including an empty value) resolve from the daemon's
+startup directory, matching Herdr's configuration selection. Named sessions live under
 `herdr/sessions/<name>/herdr.sock`; `default` uses `herdr/herdr.sock` directly.
 These settings are captured when the daemon starts.
 
@@ -40,8 +41,11 @@ session's explicit `HERDR_SOCKET_PATH`. A different requested name uses the
 configuration-tree path, without reusing the override or inferring a session
 from an arbitrary socket path. With an explicit socket but no configured
 session name, omit `--session` to keep that exact endpoint. A missing selected
-socket never falls back to another session. Viewer and follow operations also
-check that the Herdr CLI reports the selected socket before changing its panes.
+socket never falls back to another session. Viewer and follow operations carry
+that exact socket to the CLI through `HERDR_SOCKET_PATH`, without an explicit
+CLI `--session` that would override it. They check that the CLI reports the
+selected socket before changing its panes. Daemon-side CLI calls retain the
+startup environment; desktop follow uses the socket confirmed by the daemon.
 
 The selection belongs to the request. Saved views still describe membership
 and layout, so pass `--session` again when reopening the view in that session.

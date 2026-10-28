@@ -58,8 +58,8 @@ export function resolveHerdrSocketPath(env: NodeJS.ProcessEnv = process.env, sel
   if (env["HERDR_SOCKET_PATH"] && (selectedSession === undefined || selectedSession === env["HERDR_SESSION"])) {
     return env["HERDR_SOCKET_PATH"];
   }
-  const configHome = env["XDG_CONFIG_HOME"] && path.isAbsolute(env["XDG_CONFIG_HOME"])
-    ? env["XDG_CONFIG_HOME"] : path.join(env["HOME"] || homedir(), ".config");
+  const configHome = env["XDG_CONFIG_HOME"] !== undefined
+    ? path.resolve(env["XDG_CONFIG_HOME"]) : path.join(env["HOME"] || homedir(), ".config");
   const base = path.join(configHome, "herdr");
   const session = selectedSession ?? env["HERDR_SESSION"];
   return session && session !== "default" ? path.join(base, "sessions", session, "herdr.sock") : path.join(base, "herdr.sock");

@@ -19,9 +19,14 @@ describe("Herdr endpoint resolution", () => {
       .toBe(path.join(base, suffix!));
   });
 
-  it.each([undefined, "", "relative-config"])("uses HOME/.config for an absent or non-absolute config home (%s)", xdg => {
-    expect(resolveHerdrSocketPath({ HOME: home, XDG_CONFIG_HOME: xdg }, "prod"))
+  it("uses HOME/.config when the config home is absent", () => {
+    expect(resolveHerdrSocketPath({ HOME: home }, "prod"))
       .toBe(path.join(home, ".config", "herdr", "sessions", "prod", "herdr.sock"));
+  });
+
+  it.each(["", "relative-config"])("honors a set config home even when it is not absolute (%s)", xdg => {
+    expect(resolveHerdrSocketPath({ HOME: home, XDG_CONFIG_HOME: xdg }, "prod"))
+      .toBe(path.join(path.resolve(xdg), "herdr", "sessions", "prod", "herdr.sock"));
   });
 
   it("keeps an explicit socket for no selection or its declared session only", () => {
