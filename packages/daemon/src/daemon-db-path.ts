@@ -74,6 +74,61 @@ export function resolveDaemonDbPath(explicitDb: string | undefined | null, openr
 }
 
 const execFileAsync = promisify(execFile);
+/** Query file owners without installing Unix tools or closing any handles. */
+async function windowsFileHolders(file: string): Promise<{ stdout: string } | { failure: string }> {
+  const script = `
+$ErrorActionPreference = 'Stop'
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class OpenRigFileOwners {
+  [StructLayout(LayoutKind.Sequential)] public struct UniqueProcess { public int pid; public System.Runtime.InteropServices.ComTypes.FILETIME started; }
+  [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)] public struct ProcessInfo {
+    public UniqueProcess process;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst=256)] public string name;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst=64)] public string service;
+    public uint type, status, session;
+    [MarshalAs(UnmanagedType.Bool)] public bool restartable;
+  }
+  [DllImport("rstrtmgr.dll", CharSet=CharSet.Unicode)] static extern int RmStartSession(out uint session, uint flags, string key);
+  [DllImport("rstrtmgr.dll", CharSet=CharSet.Unicode)] static extern int RmRegisterResources(uint session, uint count, string[] files, uint apps, IntPtr processes, uint services, IntPtr names);
+  [DllImport("rstrtmgr.dll")] static extern int RmGetList(uint session, out uint needed, ref uint count, [In, Out] ProcessInfo[] processes, ref uint reasons);
+  [DllImport("rstrtmgr.dll")] static extern int RmEndSession(uint session);
+  public static int[] Find(string file) {
+    uint session; int code = RmStartSession(out session, 0, Guid.NewGuid().ToString("N"));
+    if (code != 0) throw new Exception("RmStartSession: " + code);
+    try {
+      code = RmRegisterResources(session, 1, new string[] { file }, 0, IntPtr.Zero, 0, IntPtr.Zero);
+      if (code != 0) throw new Exception("RmRegisterResources: " + code);
+      for (int attempt = 0; attempt < 4; attempt++) {
+        uint needed, count = 0, reasons = 0;
+        code = RmGetList(session, out needed, ref count, null, ref reasons);
+        if (code == 0) return new int[0];
+        if (code != 234) throw new Exception("RmGetList: " + code);
+        ProcessInfo[] items = new ProcessInfo[needed]; count = needed;
+        code = RmGetList(session, out needed, ref count, items, ref reasons);
+        if (code == 234) continue;
+        if (code != 0) throw new Exception("RmGetList: " + code);
+        int[] pids = new int[count];
+        for (int i = 0; i < count; i++) pids[i] = items[i].process.pid;
+        return pids;
+      }
+      throw new Exception("File owners changed repeatedly during query");
+    } finally { RmEndSession(session); }
+  }
+}
+'@
+[OpenRigFileOwners]::Find([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${Buffer.from(file).toString("base64")}'))) | ForEach-Object { $_ }
+`;
+  try {
+    const { stdout } = await execFileAsync(join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
+      ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")],
+      { timeout: 15000, maxBuffer: 64 * 1024, windowsHide: true, env: { ...process.env, PSModulePath: "" } });
+    return { stdout };
+  } catch (error) {
+    return { failure: `Windows Restart Manager file-owner query failed: ${(error as Error).message.split("\n")[0]}` };
+  }
+}
 /** lsof's answer, or why there wasn't one. Exit status 1 is an answer: nothing asked about is open. */
 async function lsof(args: string[]): Promise<{ stdout: string } | { failure: string }> {
   try {
@@ -104,14 +159,14 @@ export async function daemonDatabaseWarnings(dbPath: string, home: string, selec
   // independently agree on the PID before a holder is described as a daemon.
   // A check that couldn't run leaves ownership unknown, which is said, never read as no conflict.
   const unverified: string[] = [];
-  const holders = await lsof(["-t", "--", db]);
+  const holders = process.platform === "win32" ? await windowsFileHolders(db) : await lsof(["-t", "--", db]);
   if ("failure" in holders) unverified.push(holders.failure);
   const pids = "stdout" in holders ? [...new Set(holders.stdout.trim().split(/\s+/).map(Number))]
     .filter(pid => Number.isSafeInteger(pid) && pid > 0 && pid !== process.pid).slice(0, 4) : [];
   const conflicts = await Promise.all(pids.map(async (pid): Promise<{ confirmed: string } | { unknown: string } | undefined> => {
-    const files = await lsof(["-a", "-p", String(pid), "-d", "1,2", "-Fn"]);
+    const files = process.platform === "win32" ? { stdout: "" } : await lsof(["-a", "-p", String(pid), "-d", "1,2", "-Fn"]);
     let unknown = "failure" in files ? `${files.failure} for pid ${pid}` : undefined;
-    const homes = new Set([dirname(db)]);
+    const homes = new Set([dirname(db), resolvedHome]);
     for (const line of "stdout" in files ? files.stdout.split("\n") : []) {
       if (line.startsWith("n") && basename(line.slice(1)) === "daemon.log") homes.add(dirname(line.slice(1)));
     }

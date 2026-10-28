@@ -188,6 +188,16 @@ export function daemonCommand(depsOverride?: LifecycleDeps): Command {
     .option("--wait-for-kernel-ms <ms>", "Override --wait-for-kernel timeout in milliseconds")
     .action(async (opts: { port?: string; host?: string; db?: string; allowDbConflict?: boolean; kernel?: boolean; waitForKernel?: boolean; waitForKernelMs?: string }) => {
       try {
+        // Starting an already healthy default instance is a successful no-op.
+        // Installation probes are relevant when launching a process, not when
+        // the verified process is already serving this instance.
+        if (!opts.port && !opts.host && !opts.db && !opts.waitForKernel && opts.kernel !== false && !opts.allowDbConflict) {
+          const current = await getDaemonStatus(getDeps());
+          if (current.state === "running" && current.healthy === true) {
+            console.log(`Daemon already running (pid ${current.pid} on port ${current.port}). No restart needed.`);
+            return;
+          }
+        }
         const { ConfigStore } = await import("../config-store.js");
         const { SystemPreflight, quietPreflightExec } = await import("../system-preflight.js");
         const configStore = new ConfigStore();

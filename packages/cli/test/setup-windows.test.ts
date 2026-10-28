@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { runSetup, type SetupDeps } from "../src/commands/setup.js";
 import { runDoctorChecks, type DoctorDeps } from "../src/commands/doctor.js";
 import { execSync } from "node:child_process";
-import { WINDOWS_EXECUTION_POLICY_PROBE, WINDOWS_POWERSHELL_PROBE, powershellCommand, psmuxInstallCommand, psmuxUserPathCommand, wingetInstallCommand } from "../src/setup-platform.js";
+import { WINDOWS_EXECUTION_POLICY_PROBE, WINDOWS_POWERSHELL_PROBE, powershellCommand, psmuxInstallCommand, psmuxUserPathCommand, wingetInstallCommand, windowsAutostartCommand } from "../src/setup-platform.js";
 import { powershellQuote } from "@openrig/daemon/windows-launch";
 
 function dependencies(overrides: Partial<SetupDeps> = {}): SetupDeps {
@@ -23,6 +23,13 @@ function decode(command: string): string {
 }
 
 describe("native Windows setup", () => {
+  it("registers logon startup with absolute executable paths and preserves deliberate stops", () => {
+    const script = decode(windowsAutostartCommand("C:\\Program Files\\nodejs\\node.exe", "C:\\Users\\A\\npm\\dist\\bin-wrapper.js"));
+    expect(script).toContain("-Execute 'C:\\Program Files\\nodejs\\node.exe'");
+    expect(script).toContain("start --last --json");
+    expect(script).toContain("-AtLogOn -User $user");
+    expect(script).not.toContain("rig.cmd");
+  });
   it("previews native requirements without executing or writing, preserving provider selection", async () => {
     const deps = dependencies();
     const result = await runSetup(deps, { dryRun: true, full: true, providers: ["codex"] });
@@ -184,6 +191,14 @@ describe("native Windows setup", () => {
 });
 
 describe("Windows PowerShell literals", () => {
+  it.runIf(process.platform === "win32")("loads installer hash and archive commands despite an incompatible inherited module path", () => {
+    const output = execSync(powershellCommand("(Get-Command Get-FileHash).Name; (Get-Command Expand-Archive).Name"), {
+      env: { ...process.env, PSModulePath: "C:\\nonexistent-powershell-7-modules" },
+      encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "pipe"],
+    });
+    expect(output).toContain("Get-FileHash");
+    expect(output).toContain("Expand-Archive");
+  });
   // Windows PowerShell also ends a single-quoted literal at U+2018-U+201B.
   const quotes = ["'", "\u2018", "\u2019", "\u201a", "\u201b"];
 

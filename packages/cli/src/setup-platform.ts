@@ -1,14 +1,30 @@
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { homedir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { powershellQuote } from "@openrig/daemon/windows-launch";
 
 /** Encode the script rather than interpolating Windows paths through cmd.exe. */
 export function powershellCommand(script: string): string {
-  return `powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(`$ErrorActionPreference = 'Stop'; [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); ${script}`, "utf16le").toString("base64")}`;
+  // Desktop terminals can inherit PowerShell 7's module path, while these
+  // commands deliberately run Windows PowerShell 5.1. Use its own system
+  // modules for hashing, archive extraction and setup without profile edits.
+  return `powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(`$env:PSModulePath = [IO.Path]::Combine($env:WINDIR, 'System32', 'WindowsPowerShell', 'v1.0', 'Modules'); $ErrorActionPreference = 'Stop'; [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); ${script}`, "utf16le").toString("base64")}`;
 }
 
 export const WINDOWS_POWERSHELL_PROBE = powershellCommand("$PSVersionTable.PSVersion.ToString()");
+
+/** Opt-in per-user startup; absolute paths avoid npm shim and shell PATH dependencies. */
+export function windowsAutostartCommand(node = process.execPath, entry = fileURLToPath(new URL("./bin-wrapper.js", import.meta.url))): string {
+  return powershellCommand(`
+$action = New-ScheduledTaskAction -Execute ${powershellQuote(node)} -Argument ${powershellQuote(`"${entry}" start --last --json`)}
+$user = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+$trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
+$principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
+$settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
+Register-ScheduledTask -TaskName 'OpenRig - Start daemon and kernel' -Description 'Start OpenRig and restore previously running rigs at Windows sign-in.' -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
+`);
+}
 
 /** The policy a new Windows PowerShell starts with: drop any -ExecutionPolicy override this probe inherited. */
 export const WINDOWS_EXECUTION_POLICY_PROBE = powershellCommand("Remove-Item Env:PSExecutionPolicyPreference -ErrorAction SilentlyContinue; [string](Get-ExecutionPolicy)");

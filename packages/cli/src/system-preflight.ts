@@ -1,5 +1,5 @@
 import net from "node:net";
-import { execSync } from "node:child_process";
+import { execSync, execFileSync } from "node:child_process";
 import { accessSync, existsSync, mkdirSync, constants } from "node:fs";
 import path, { dirname } from "node:path";
 import type { ConfigStore, RiggedConfig } from "./config-store.js";
@@ -28,6 +28,12 @@ export interface PreflightResult {
  *  directory)" for the ordinary no-server case. The text still reaches the probe in the thrown error, so a real tmux
  *  failure is still classified and reported. */
 export async function quietPreflightExec(cmd: string): Promise<string> {
+  if (process.platform === "win32" && /^tmux(?: |$)/.test(cmd)) {
+    const binary = path.win32.join(windowsPsmuxDirectory(), "tmux.exe");
+    if (existsSync(binary)) {
+      return execFileSync(binary, cmd.split(" ").slice(1), { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+    }
+  }
   return execSync(cmd, { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
 }
 
@@ -165,7 +171,7 @@ export class SystemPreflight {
       checks.push({
         name: "tmux",
         ok: false,
-        error: platform === "win32" ? "psmux's tmux.exe was not found in PATH." : "tmux was not found in PATH.",
+        error: platform === "win32" ? `psmux probe failed: ${tmuxProbe.detail ?? "no execution details available"}` : "tmux was not found in PATH.",
         reason: platform === "win32" ? "OpenRig uses native psmux to create and control Windows agent sessions, without WSL." : "OpenRig uses tmux to create and control agent sessions.",
         fix: platform === "win32" ? "Run rig setup to install portable psmux, then reopen your terminal." : "Install tmux (brew install tmux on macOS, apt install tmux on Debian/Ubuntu).",
       });

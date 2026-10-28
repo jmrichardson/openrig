@@ -15,7 +15,7 @@ import { describeSkillRouterFootprint } from "@openrig/daemon/router-line";
 import { classifyNodeVersion } from "../node-support.js";
 import {
   WINDOWS_POWERSHELL_PROBE, powershellCommand, psmuxInstallCommand, psmuxUserPathCommand, refreshWindowsPath,
-  windowsExecutionPolicyCheck, windowsPsmuxDirectory, wingetInstallCommand,
+  windowsExecutionPolicyCheck, windowsPsmuxDirectory, wingetInstallCommand, windowsAutostartCommand,
 } from "../setup-platform.js";
 import { windowsHerdrCandidates } from "../herdr-launch-config.js";
 import { powershellQuote } from "@openrig/daemon/windows-launch";
@@ -992,6 +992,7 @@ export function setupCommand(depsOverride?: SetupDeps): Command {
     .option("--dry-run", "Show the plan without making changes")
     .option("--json", "Machine-readable JSON output")
     .option("--full", "Install broader operator workstation tools")
+    .option("--autostart", "Windows: start OpenRig and restore previously running rigs at user sign-in")
     .option("--no-herdr", "Skip the default herdr installation; the OpenRig view can use plain tmux")
     .option("--ghostty", "Install Ghostty on macOS after the person accepts the offer")
     .option("--no-ghostty", "Decline Ghostty; Terminal.app remains available on macOS")
@@ -1005,7 +1006,7 @@ tmux scrollback:
   To keep more:  rig config set terminal.history_limit 50000   then rerun  rig setup
   A running tmux server keeps its old limit until it restarts or you run
   tmux source-file ~/.tmux.conf; before tmux 3.7 that changes new panes only.`)
-    .action(async (opts: { dryRun?: boolean; json?: boolean; full?: boolean; herdr?: boolean; ghostty?: boolean; providers?: string; policy?: string; spec?: string; routerLine?: string }) => {
+    .action(async (opts: { dryRun?: boolean; json?: boolean; full?: boolean; autostart?: boolean; herdr?: boolean; ghostty?: boolean; providers?: string; policy?: string; spec?: string; routerLine?: string }) => {
       const providers = opts.providers === undefined ? undefined : parseSetupProviders(opts.providers);
       if (providers && "error" in providers) {
         console.error(providers.error);
@@ -1021,6 +1022,22 @@ tmux scrollback:
       const deps = depsOverride ?? defaultDeps();
       const doctorDeps = opts.dryRun ? undefined : buildDefaultDoctorDeps(deps);
       const result = await runSetup(deps, { dryRun: opts.dryRun, full: opts.full, policy: opts.policy, specPath: opts.spec, herdr: opts.herdr, ghostty: opts.ghostty, providers, doctorDeps, routerLine });
+      if (opts.autostart) {
+        if (result.platform !== "win32") {
+          result.steps.push({ id: "autostart", status: "fail", message: "--autostart currently supports native Windows only." });
+          result.ready = false;
+        } else if (opts.dryRun) {
+          result.steps.push({ id: "autostart", status: "skipped", message: "Dry run: would register a per-user Windows logon task using absolute Node and OpenRig paths." });
+        } else if (result.ready) {
+          try {
+            deps.exec(windowsAutostartCommand());
+            result.steps.push({ id: "autostart", status: "applied", message: "OpenRig starts at Windows sign-in; deliberately stopped rigs stay stopped." });
+          } catch (error) {
+            result.steps.push({ id: "autostart", status: "fail", message: `Could not register Windows startup: ${String(error)}` });
+            result.ready = false;
+          }
+        } else result.steps.push({ id: "autostart", status: "skipped", message: "Finish setup before enabling automatic startup." });
+      }
 
       if (opts.json) {
         console.log(JSON.stringify({ ...result, nextSteps: goldenPathNextSteps(deps.platform ?? process.platform) }, null, 2));

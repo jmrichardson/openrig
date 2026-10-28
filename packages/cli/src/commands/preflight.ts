@@ -1,6 +1,6 @@
 import { Command } from "commander";
 import { dirname } from "node:path";
-import { SystemPreflight } from "../system-preflight.js";
+import { SystemPreflight, quietPreflightExec } from "../system-preflight.js";
 import { ConfigStore } from "../config-store.js";
 import { getDaemonStatus, type DaemonStatus } from "../daemon-lifecycle.js";
 import { realDeps } from "./daemon.js";
@@ -21,10 +21,7 @@ export function preflightCommand(depsOverride?: PreflightCommandDeps): Command {
       const configStore = new ConfigStore(depsOverride?.configPath);
       const config = configStore.resolve();
 
-      const exec = depsOverride?.exec ?? (async (c: string) => {
-        const { execSync } = await import("node:child_process");
-        return execSync(c, { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
-      });
+      const exec = depsOverride?.exec ?? quietPreflightExec;
 
       const preflight = new SystemPreflight({
         exec,

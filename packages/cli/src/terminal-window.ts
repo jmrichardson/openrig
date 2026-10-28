@@ -283,6 +283,10 @@ function windowsTerminalPrologue(deps: WindowDeps, clearMarkers = true): string[
     if (value !== undefined) environment[key] = value;
   }
   return [
+    // Windows Terminal can outlive the CLI and retain PowerShell 7's module
+    // search path. These panes run Windows PowerShell 5.1; its built-in
+    // commands must not import incompatible PowerShell 7 modules.
+    "$env:PSModulePath = Join-Path $env:WINDIR 'System32\\WindowsPowerShell\\v1.0\\Modules'",
     ...Object.entries(environment).map(([key, value]) => `[Environment]::SetEnvironmentVariable('${key}', ${powershellQuote(value)}, 'Process')`),
     ...(clearMarkers ? ["Remove-Item Env:TMUX, Env:PSMUX_SESSION, Env:PSMUX_TARGET_SESSION -ErrorAction SilentlyContinue"] : []),
   ];
@@ -329,7 +333,7 @@ async function openWindowsTerminalView(client: DaemonClient, view: string, reque
   const surfaceArgs = (pane: Pane) => {
     const title = pane.label.replace(/[;\r\n\0]/g, " ");
     launches.push(renderWindowsLaunch(pane.paneCommand));
-    return ["--title", title, "--suppressApplicationTitle", "powershell.exe", "-NoLogo", "-NoProfile", "-EncodedCommand"];
+    return ["--title", title, "--suppressApplicationTitle", "powershell.exe", "-NoLogo", "-NoProfile", "-NoExit", "-EncodedCommand"];
   };
   const entries: number[] = [];
   type Tile = { pane: Pane } | { first: Tile; second: Tile; direction: string; fraction: number };
@@ -374,10 +378,12 @@ async function openWindowsTerminalView(client: DaemonClient, view: string, reque
   args.push(";", "focus-tab", "--target", "0");
   const script = deps.windowsScript([
     "param([int]$openrigPane)",
+    "$ErrorActionPreference = 'Stop'",
     ...windowsTerminalPrologue(deps),
     "switch ($openrigPane) {",
     ...launches.map((launch, index) => `${index} {\n${launch}\n}`),
     "}",
+    "if ($LASTEXITCODE -ne 0) { Write-Host ('OpenRig terminal attachment failed with exit code ' + $LASTEXITCODE) -ForegroundColor Red }",
     "",
   ].join("\n"));
   for (const [index, slot] of entries.entries()) args[slot] = windowsScriptStub(script, String(index));

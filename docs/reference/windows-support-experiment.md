@@ -328,3 +328,43 @@ CLI's version and, if you use herdr, `herdr --version`.
   (Docker Compose; the daemon runs `docker compose` without a shell, so `docker.exe`
   must be on its PATH) and the CLI-tool probes for package requirements have not been
   exercised natively.
+
+## Reproducible desktop setup and sign-in startup
+
+Run the installed fork from the same native Windows desktop environment used for
+the agent terminals:
+
+    rig setup --providers both --autostart
+    rig preflight
+    rig status
+
+Setup is per Windows user, not per project. The optional --autostart flag registers
+"OpenRig - Start daemon and kernel" for that user's Windows sign-in. It invokes
+Node and the installed CLI by absolute path with start --last --json: rigs stopped
+on purpose stay stopped. Omitting the flag leaves startup scheduling unchanged.
+
+Setup's PowerShell commands select Windows PowerShell's own system modules before
+hashing or extracting the pinned portable psmux release. This prevents an inherited
+PowerShell 7 module path from breaking Get-FileHash or Expand-Archive. No profile
+or persistent execution-policy edits are needed. The CLI resolves its managed
+psmux before loading commands, and preflight executes that binary by absolute
+path. Windows database-owner checks use Restart Manager rather than lsof.
+
+A sandbox or isolated installer environment can see files that the user's desktop
+does not. A successful check in that environment is not desktop installation proof.
+Verify the file and run preflight in the actual desktop terminal before reporting
+success. If desktop psmux is missing, run setup there; copying PATH alone cannot
+repair a missing executable.
+
+For the native Windows Terminal view:
+
+    rig terminal open saved:kernel --provider tmux --window
+
+Tabs remain open after an attachment error so the actual error can be read.
+An accepted Windows Terminal launch request does not prove that an agent is
+visible. The Herdr pane/tab-ID issue seen during desktop acceptance is unresolved;
+use the explicit tmux provider until that integration is qualified.
+
+The operator can respond while hooks fail. "Kernel ready" does not certify that
+all Codex/Claude hooks executed successfully. Diagnose reported hook failures
+separately rather than hiding them in setup output.
