@@ -746,7 +746,31 @@ async function windowsForegroundAllows(rows: NativeProcessRow[], pid: number,
   input: { target: string; tmux: { getPaneCommand?(target: string): Promise<string | null> } }, runtime: NativeRuntime): Promise<boolean> {
   if (rows.find(row => row.pid === pid)?.platform !== "win32") return true;
   const foreground = windowsExecutableName(await input.tmux.getPaneCommand?.(input.target) ?? "");
-  return (runtime === "claude-code" ? ["claude"] : ["codex", "codex-code-mode-host"]).includes(foreground);
+  if ((runtime === "claude-code" ? ["claude"] : ["codex", "codex-code-mode-host"]).includes(foreground)) return true;
+  // psmux can report Codex's npm launcher or retained JS tool instead of codex.exe.
+  // Accept only a proven launcher ancestor or tool descendant of the unique native runtime.
+  if (runtime !== "codex" || !["node", "node_repl"].includes(foreground)) return false;
+  const candidates = nativeProcessCandidates(rows, pid, runtime);
+  if (candidates.length !== 1) return false;
+  const native = candidates[0]!.process;
+  const byPid = new Map(rows.map(row => [row.pid, row]));
+  const descendsFrom = (child: NativeProcessRow, ancestor: number) => {
+    const seen = new Set<number>();
+    let current: NativeProcessRow | undefined = child;
+    while (current?.startedAt && !seen.has(current.pid)) {
+      if (current.pid === ancestor) return true;
+      seen.add(current.pid);
+      const parent = byPid.get(current.ppid);
+      if (!parent?.startedAt || Date.parse(parent.startedAt) > Date.parse(current.startedAt)) return false;
+      current = parent;
+    }
+    return false;
+  };
+  return rows.some(row => row.platform === "win32" && row.executablePath
+    && windowsExecutableName(row.executableName ?? "") === foreground
+    && windowsExecutableName(row.executablePath) === foreground
+    && (descendsFrom(row, native.pid)
+      || (isWindowsRuntimeProcess(row, "codex") && descendsFrom(native, row.pid))));
 }
 
 async function observeNativePaneProcess(input: {
@@ -768,10 +792,7 @@ async function observeNativePaneProcess(input: {
     const pid = await input.tmux.getPanePid(input.target);
     if (!pid) return null;
     const rows = await (input.listProcesses ?? (() => listNativeProcesses({ claudeLaunchPaths: input.scriptLaunch === true })))();
-    if (rows.find(row => row.pid === pid)?.platform === "win32") {
-      const foreground = executableName(await input.tmux.getPaneCommand?.(input.target) ?? "");
-      if (!(runtime === "claude-code" ? ["claude"] : ["codex", "codex-code-mode-host"]).includes(foreground)) return null;
-    }
+    if (!await windowsForegroundAllows(rows, pid, input, runtime)) return null;
     return selectNativeProcess(rows, pid, input.expectedToken, input.requireResume, runtime, input.selectedExecutable,
       runtime === "claude-code" ? input.rotation : undefined, input.scriptLaunch);
   } catch { return null; }

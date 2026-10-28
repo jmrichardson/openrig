@@ -5,6 +5,28 @@ import { operationalLaunchArgs } from "../src/adapters/kernel-authority.js";
 
 const token = "00000000-0000-7000-8000-000000000001";
 const parent = "00000000-0000-7000-8000-0000000000fa";
+
+describe("psmux reporting a Codex tool as foreground", () => {
+  const row = (pid: number, ppid: number, name: string, args = ""): NativeProcessRow => ({
+    platform: "win32", pid, ppid, executableName: name + ".exe", executablePath: `C:\\tools\\${name}.exe`,
+    command: `C:\\tools\\${name}.exe ${args}`, startedAt: "2026-10-28T12:00:00Z",
+  });
+  const sample = () => [row(10, 1, "powershell"), row(11, 10, "codex", `resume ${token}`), row(12, 11, "node_repl")];
+  const verify = (processes: NativeProcessRow[]) => verifyCodexPaneProcess({ target: "%1", expectedToken: token,
+    requireResume: true, tmux: { getPanePid: async () => 10, getPaneCommand: async () => "node_repl" },
+    listProcesses: () => processes });
+  it("accepts the tool only under the exact native runtime", async () => {
+    expect((await verify(sample()))?.process.pid).toBe(11);
+  });
+  it("refuses a sibling tool outside the runtime lineage", async () => {
+    const processes = sample(); processes[2]!.ppid = 10;
+    expect(await verify(processes)).toBeNull();
+  });
+  it("refuses a tool predating its purported native parent", async () => {
+    const processes = sample(); processes[2]!.startedAt = "2026-10-27T12:00:00Z";
+    expect(await verify(processes)).toBeNull();
+  });
+});
 const startedAt = "Sat Jan  1 12:00:00 2000";
 function rows(): NativeProcessRow[] {
   return [
