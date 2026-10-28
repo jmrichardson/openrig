@@ -1,5 +1,4 @@
 import { HerdrViewer, createHerdrViewerRun } from "./herdr-viewer.js";
-import path from "node:path";
 import { HerdrAdapter } from "./herdr-adapter.js";
 import { createHerdrSocketRpc, createHerdrSocketTransport, resolveHerdrSocketPath } from "./herdr-transport.js";
 import type { ProviderStatus } from "./terminal-provider.js";
@@ -9,8 +8,8 @@ import { HerdrFollowView, type ReadFollowInput } from "./herdr-follow-view.js";
  * request. No request mutates process.env or another request's transport.
  */
 export function createHerdrProviders(env: NodeJS.ProcessEnv = process.env, input?: ReadFollowInput) {
+  env = { ...env };
   const defaultSocket = resolveHerdrSocketPath(env);
-  const base = path.dirname(resolveHerdrSocketPath({}));
   let launch = 0;
   const viewers = new Map<string, HerdrViewer>();
   const viewer = (endpoint: NonNullable<ProviderStatus["launch"]>) => {
@@ -34,8 +33,7 @@ export function createHerdrProviders(env: NodeJS.ProcessEnv = process.env, input
     sessionProvider: (session: string) => {
       let provider = sessions.get(session);
       if (!provider) {
-        provider = make({ session, socketPath: session === "default"
-          ? path.join(base, "herdr.sock") : path.join(base, "sessions", session, "herdr.sock") });
+        provider = make({ session, socketPath: resolveHerdrSocketPath(env, session) });
         sessions.set(session, provider);
       }
       return provider;
