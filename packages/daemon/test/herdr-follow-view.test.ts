@@ -97,7 +97,7 @@ function fixture() {
 }
 
 describe("stable task-following workspace", () => {
-  it.each(["", "\x1b[2mAsk Codex to do anything\x1b[22m"])("closes only a departed viewer when the real reader confirms its two-footer Codex composer is empty (%s)", body => {
+  it.each(["", "\x1b[2mAsk Codex to do anything\x1b[22m"])("closes only a departed viewer when the real reader confirms its two-footer Codex composer is empty (%s)", async body => {
     const f = fixture(); f.frames.set("c", codexTwoRowComposer(body));
     await f.follow();
     const before = [...f.panes.values()].map(p => ({ id: p.pane_id, terminal: p.terminal_id, argv: [...p.argv] }));
@@ -116,7 +116,7 @@ describe("stable task-following workspace", () => {
     expect(f.rpc).toHaveLength(0); // unfocused leaver: no focus transfer
   });
 
-  it.each(["typed", "literal placeholder", "unavailable", "ambiguous"])("keeps a departed %s composer through the real reader", kind => {
+  it.each(["typed", "literal placeholder", "unavailable", "ambiguous"])("keeps a departed %s composer through the real reader", async kind => {
     const f = fixture();
     const frame = kind === "unavailable" ? null : codexTwoRowComposer(kind === "literal placeholder" ? "Ask Codex to do anything"
       : kind === "ambiguous" ? "\n› " : "a real draft");
