@@ -383,3 +383,20 @@ dashboard and stopping the daemon preserve psmux agent sessions.
 
 Run these from the actual Windows desktop environment. Do not treat an installer
 sandbox's file-existence check as proof that desktop terminals see the binary.
+
+## Use OpenRig inside Zed or another existing terminal
+
+Run rig open in Zed's integrated terminal to attach the existing kernel operator
+in place. No desktop window, provider flag, new agent or new team is created.
+
+    rig open
+    rig open advisor
+    rig open dashboard
+
+Open additional Zed terminal tabs for advisor/dashboard only when wanted.
+Ctrl+B followed by D detaches and returns to the shell; agents keep running.
+The current-terminal command resolves the saved kernel view through the daemon,
+so it uses the instance's actual seat and psmux launch command instead of guessing
+session names. It requires an interactive terminal and refuses unavailable seats.
+Herdr is not required for this entry point. The older terminal open --window
+command explicitly requests desktop windows and remains available for that use.
