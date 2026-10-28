@@ -371,9 +371,10 @@ separately rather than hiding them in setup output.
 
 ### Replacing an installed package on Windows
 
-Stop the daemon before npm replaces the global package. Windows locks loaded
-native SQLite modules; replacing a package while its daemon runs can fail with
-EBUSY. Stopping the daemon preserves psmux agent sessions.
+Close OpenRig dashboard/TUI processes and stop the daemon before npm replaces
+the global package. Both can load the native SQLite module, which Windows locks;
+replacing the package while either holds it can fail with EBUSY. Closing the
+dashboard and stopping the daemon preserve psmux agent sessions.
 
     rig daemon stop
     npm install -g <the-built-fork-package.tgz>
