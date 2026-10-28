@@ -368,3 +368,17 @@ use the explicit tmux provider until that integration is qualified.
 The operator can respond while hooks fail. "Kernel ready" does not certify that
 all Codex/Claude hooks executed successfully. Diagnose reported hook failures
 separately rather than hiding them in setup output.
+
+### Replacing an installed package on Windows
+
+Stop the daemon before npm replaces the global package. Windows locks loaded
+native SQLite modules; replacing a package while its daemon runs can fail with
+EBUSY. Stopping the daemon preserves psmux agent sessions.
+
+    rig daemon stop
+    npm install -g <the-built-fork-package.tgz>
+    rig setup --providers both --autostart
+    rig start --last
+
+Run these from the actual Windows desktop environment. Do not treat an installer
+sandbox's file-existence check as proof that desktop terminals see the binary.
