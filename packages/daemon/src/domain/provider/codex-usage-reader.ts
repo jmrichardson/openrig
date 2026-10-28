@@ -11,6 +11,7 @@
 
 import { spawn } from "node:child_process";
 import { stopGroup } from "../codex-network-default.js";
+import { resolveWindowsCodexCommand } from "../../adapters/windows-codex-command.js";
 
 export type CodexUsageFailureReason =
   | "binary_not_found"
@@ -69,10 +70,15 @@ export function codexUsageReader(options: CodexUsageReaderOptions = {}): CodexUs
     };
     let child: ReturnType<typeof spawn>;
     try {
-      // Its own process group, so cleanup reaches the reader's descendants and nothing else.
+      // Its own process group, so cleanup reaches the reader's descendants and nothing else (on Windows, which
+      // has none, not detached: a detached child gets no console, and codex.js's console child would open one).
       // Plugins and apps off, as the #275 network reader starts it: no plugin sync during a usage read.
-      child = spawn("codex", CODEX_USAGE_READER_ARGS, { cwd: options.home, env, stdio: ["pipe", "pipe", "ignore"], detached: true });
+      const command = process.platform === "win32"
+        ? resolveWindowsCodexCommand(env.PATH ?? "", process.execPath, options.home)
+        : { command: "codex", args: [] };
+      child = spawn(command.command, [...command.args, ...CODEX_USAGE_READER_ARGS], { cwd: options.home, env, stdio: ["pipe", "pipe", "ignore"], detached: process.platform !== "win32", windowsHide: true });
     } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { ok: false, at: now(), reason: "binary_not_found", detail: "no codex executable on the daemon's PATH" };
       return { ok: false, at: now(), reason: "spawn_failed", detail: `codex app-server could not start: ${firstLine(error)}` };
     }
     const outcome = await converse(child, deadlineMs, maxOutputBytes, now);

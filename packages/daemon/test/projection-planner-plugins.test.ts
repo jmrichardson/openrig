@@ -98,7 +98,7 @@ describe("Projection planner — plugin path semantics", () => {
       const result = configuredPlan({ config, collisions: [], fsOps: mockFs() });
       expect(result.ok).toBe(true);
       if (result.ok) {
-        expect(result.plan.entries[0]!.absolutePath).toBe("/isolated/daemon-home/plugins/openrig-core");
+        expect(result.plan.entries[0]!.absolutePath).toBe(nodePath.resolve("/isolated/daemon-home/plugins/openrig-core"));
         expect(result.plan.entries[0]!.resourcePath).toBe("openrig-home:plugins/openrig-core");
       }
     } finally { vi.unstubAllEnvs(); vi.resetModules(); }
@@ -186,7 +186,7 @@ describe("Projection planner — plugin path semantics", () => {
     const result = planProjection({ config, collisions: [], fsOps: mockFs() });
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.plan.entries[0]!.absolutePath).toBe("/specs/my-agent/plugins/local-plugin");
+      expect(result.plan.entries[0]!.absolutePath).toBe(nodePath.resolve("/specs/my-agent/plugins/local-plugin"));
     }
   });
 
@@ -195,7 +195,7 @@ describe("Projection planner — plugin path semantics", () => {
     const result = planProjection({ config, collisions: [], fsOps: mockFs() });
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.plan.entries[0]!.absolutePath).toBe("/specs/my-agent/plugins/local");
+      expect(result.plan.entries[0]!.absolutePath).toBe(nodePath.resolve("/specs/my-agent/plugins/local"));
     }
   });
 
@@ -216,7 +216,7 @@ describe("Projection planner — plugin path semantics", () => {
       const byId = new Map(result.plan.entries.map((e) => [e.effectiveId, e.absolutePath]));
       expect(byId.get("abs-plugin")).toBe("/abs/plugins/abs-plugin");
       expect(byId.get("home-plugin")).toBe(nodePath.join(os.homedir(), ".openrig/plugins/home-plugin"));
-      expect(byId.get("rel-plugin")).toBe("/specs/agent-X/plugins/rel-plugin");
+      expect(byId.get("rel-plugin")).toBe(nodePath.resolve("/specs/agent-X/plugins/rel-plugin"));
       // All three distinct
       expect(new Set(Array.from(byId.values())).size).toBe(3);
     }

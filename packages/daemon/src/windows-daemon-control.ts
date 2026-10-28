@@ -30,21 +30,25 @@ export async function startWindowsDaemonControl(home: string, shutdown: () => vo
       input += chunk.toString("utf8");
       if (input.length > 4096) { socket.destroy(); return; }
       if (!input.includes("\n")) return;
-      let request: any;
-      try { request = JSON.parse(input); } catch { socket.destroy(); return; }
-      const state = read(path.join(home, "daemon.json"));
-      const token = typeof request.token === "string" ? Buffer.from(request.token) : Buffer.alloc(0);
-      const expected = Buffer.from(record.token);
-      if (request.pid !== record.pid || state?.pid !== record.pid || request.startedAt !== state.startedAt
-        || token.length !== expected.length || !timingSafeEqual(token, expected)) { socket.destroy(); return; }
-      socket.end("accepted\n", () => setImmediate(shutdown));
+      // A throw here would escape the listener and end the daemon without its drain: refuse instead.
+      try {
+        const request: any = JSON.parse(input);
+        // JSON null, an array or a primitive is not a request.
+        if (request === null || typeof request !== "object" || Array.isArray(request)) { socket.destroy(); return; }
+        const state = read(path.join(home, "daemon.json"));
+        const token = typeof request.token === "string" ? Buffer.from(request.token) : Buffer.alloc(0);
+        const expected = Buffer.from(record.token);
+        if (request.pid !== record.pid || state?.pid !== record.pid || request.startedAt !== state.startedAt
+          || token.length !== expected.length || !timingSafeEqual(token, expected)) { socket.destroy(); return; }
+        socket.end("accepted\n", () => setImmediate(shutdown));
+      } catch { socket.destroy(); }
     });
   });
   await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(record.pipe, () => { server.removeListener("error", reject); resolve(); }); });
   try { writeFileSync(file, JSON.stringify(record), { mode: 0o600 }); }
   catch { server.close(); throw new Error("Windows daemon control could not be published"); }
   return () => new Promise<void>((resolve, reject) => server.close(error => {
-    if (read(file)?.token === record.token) { try { unlinkSync(file); } catch { /* retained evidence */ } }
+    if (read(file)?.token === record.token) { try { unlinkSync(file); } catch { /* best effort */ } }
     if (error) reject(new Error("Windows daemon control could not be closed")); else resolve();
   }));
 }

@@ -1,3 +1,4 @@
+import nodePath from "node:path";
 import { LegacyRigSpecCodec as LegacyCodec } from "./rigspec-codec.js";
 import { LegacyRigSpecSchema as LegacySchema } from "./rigspec-schema.js";
 import { RigSpecCodec as PodCodec } from "./rigspec-codec.js";
@@ -41,12 +42,12 @@ export class UpCommandRouter {
   }
 
   route(sourceRef: string): RouteResult {
-    // Rig name detection: no '/' and no file extension → treat as existing rig name.
+    // Rig name detection: no '/' (nor the platform separator, '\' on Windows) and no file extension → treat as existing rig name.
     // OPR.0.4.4.11 (guard G-1): `.rigtopology` counts as a file extension here,
     // so a bare `factory.rigtopology` reaches topology routing. A no-slash
     // EXTENSIONLESS source keeps rig_name precedence byte-for-byte (FR-2
     // negative AC; `./file` is the explicit path escape hatch).
-    if (!sourceRef.includes("/") && !sourceRef.match(/\.(ya?ml|rigbundle|rigtopology)$/i)) {
+    if (!sourceRef.includes("/") && !sourceRef.includes(nodePath.sep) && !sourceRef.match(/\.(ya?ml|rigbundle|rigtopology)$/i)) {
       return { sourceKind: "rig_name", sourceRef };
     }
 

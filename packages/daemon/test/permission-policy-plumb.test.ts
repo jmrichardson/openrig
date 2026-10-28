@@ -6,7 +6,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import type Database from "better-sqlite3";
 import { mkdtempSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { createFullTestDb, createTestApp, migrationsForFullTestDb } from "./helpers/test-app.js";
 import { createDb } from "../src/db/connection.js";
@@ -48,11 +48,11 @@ function rawSpec(members: Record<string, unknown>[], over: Record<string, unknow
 function fsOps() {
   return {
     readFile: (p: string) => {
-      if (p.includes("agents/impl")) return agentYaml("impl");
-      if (p.includes("policies/operator-full.md")) return CUSTOM_POLICY;
+      if (p.includes(join("agents", "impl"))) return agentYaml("impl");
+      if (p.includes(join("policies", "operator-full.md"))) return CUSTOM_POLICY;
       throw new Error(`Not found: ${p}`);
     },
-    exists: (p: string) => p.includes("agents/impl") || p.includes("policies/operator-full.md"),
+    exists: (p: string) => p.includes(join("agents", "impl")) || p.includes(join("policies", "operator-full.md")),
   };
 }
 
@@ -112,7 +112,7 @@ describe("Seam B R6 — full-thread plumb (materialize → columns → export)",
       origin: "custom",
       launchPosture: "full_bypass", // the guard ruling's crux: custom flag CAN be full_bypass
       declaringDir: RIG_ROOT,
-      resolvedTarget: `${RIG_ROOT}/policies/operator-full.md`,
+      resolvedTarget: resolve(RIG_ROOT, "policies/operator-full.md"),
       nodeRef: "policies/operator-full.md",
     });
   });
@@ -144,7 +144,7 @@ describe("Seam B R6 — DB-REOPEN restart proof (dev-guard ruling)", () => {
     expect(prov!.launchPosture).toBe("full_bypass"); // persisted posture is restart-stable
     // AND the ruling's re-derivation: reopen + re-validate the policy from provenance alone
     const rederived = resolvePermissionPolicyAttachment(prov!.nodeRef!, prov!.declaringDir!, {
-      readFile: (p) => { expect(p).toBe(`${RIG_ROOT}/policies/operator-full.md`); return CUSTOM_POLICY; },
+      readFile: (p) => { expect(p).toBe(resolve(RIG_ROOT, "policies/operator-full.md")); return CUSTOM_POLICY; },
     });
     expect(rederived.launchPosture).toBe("full_bypass");
     expect(rederived.surface).toBe("flag");

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { reconcileSkillLoadout, resolvePluginSkills, resolveSkillLoadout, type SkillLoadout } from "../src/domain/skill-catalog.js";
+import { canCreateFileSymlinks } from "../../../test/symlink-capability.mjs";
 
 const roots: string[] = [];
 
@@ -456,7 +457,8 @@ describe("managed skill catalog and composable loadouts", () => {
     expect(existsSync(join(cwd, ".git"))).toBe(false);
   });
 
-  it.each([
+  // POSIX mode bits; Windows uses ACLs
+  it.skipIf(process.platform === "win32").each([
     ["claude-code", ".claude"],
     ["codex", ".agents"],
   ] as const)("preserves a %s projection after a mode-only local edit", (runtime, harnessDir) => {
@@ -627,7 +629,7 @@ describe("managed skill catalog and composable loadouts", () => {
     const external = join(f.root, "external");
     writeSkill(external, "selected");
     mkdirSync(join(f.project, ".agents", "skills"), { recursive: true });
-    symlinkSync(join(external, "selected"), join(f.project, ".agents", "skills", "selected"));
+    symlinkSync(join(external, "selected"), join(f.project, ".agents", "skills", "selected"), process.platform === "win32" ? "junction" : "dir");
     const linked = reconcileSkillLoadout({ loadout: selected.loadout, runtime: "codex", cwd: f.project, apply: true });
     expect(linked).toMatchObject({ ok: false, applied: false, errors: [{ code: "target_conflict" }] });
 
@@ -662,6 +664,8 @@ describe("managed skill catalog and composable loadouts", () => {
     expect(replacement.ok).toBe(true);
     if (!replacement.ok) return;
 
+    // The rollback fault injection below uses a read-only directory (POSIX mode bits; Windows uses ACLs).
+    if (process.platform === "win32") return;
     const manifestDirectory = join(prior.project, ".openrig", "skill-loadouts");
     chmodSync(manifestDirectory, 0o555);
     let rolledBack;
@@ -774,7 +778,8 @@ describe("plugin skills in the managed loadout", () => {
     expect(resolvePluginSkills({ pluginId: "core", pluginRoot: plugin, runtime: "claude-code", pluginType: "codex" }).entries).toEqual([]);
   });
 
-  it("skips a plugin skill it cannot copy exactly and says why", () => {
+  // Needs file-symlink privilege (Windows: Developer Mode or elevation)
+  it.skipIf(!canCreateFileSymlinks)("skips a plugin skill it cannot copy exactly and says why", () => {
     const f = fixture([]);
     const plugin = writePlugin(f.root, [".claude-plugin"], ["good", "linked"]);
     symlinkSync(join(plugin, "skills", "good", "SKILL.md"), join(plugin, "skills", "linked", "extra.md"));

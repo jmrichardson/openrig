@@ -54,6 +54,10 @@ Node.js 22 or 24 and tmux. A Linux distribution's own Node.js can be older; chec
 later, an `npm warn install-scripts` line for `@openrig/cli` means only the postinstall Node.js and SQLite check was
 skipped; `node "$(npm root -g)/@openrig/cli/scripts/check-abi.mjs"` runs it. A WSL error needs its actual versions,
 commands and error text; don't assume a Windows-related pull request fixes it.
+An [experimental native Windows build](windows-support-experiment.md) needs psmux 3.4.0 or newer as `tmux.exe`; for a
+native failure, record `tmux -V`, `$PSVersionTable.PSVersion`, `Get-ExecutionPolicy` and `node --version`. There, `rig`
+failing only in PowerShell seats can mean a `Restricted` or `AllSigned` execution policy, which refuses the seat's
+`rig.ps1`; `rig doctor` reports it.
 
 The one-command install ([getting-started](getting-started.md#install-and-sign-in)) prints its plan with
 `--dry-run` and changes nothing. When a step fails it prints `FAILED [n/4] <command or check> (exit <code>)` and

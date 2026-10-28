@@ -169,9 +169,12 @@ describe("local attachments: images, video and PDF from disk, size-capped, misse
     } finally {
       openSpy.mockRestore(); statSpy.mockRestore(); readFileSpy.mockRestore();
     }
-    const fifo = path.join(dir, "pipe.mp4");
-    execFileSync("mkfifo", [fifo]);
-    expect(defaultReadLocalImage(fifo)).toEqual({ skipped: "not a regular file" }); // returns: no writer needed
+    // Windows file systems have no FIFOs (named pipes live outside them).
+    if (process.platform !== "win32") {
+      const fifo = path.join(dir, "pipe.mp4");
+      execFileSync("mkfifo", [fifo]);
+      expect(defaultReadLocalImage(fifo)).toEqual({ skipped: "not a regular file" }); // returns: no writer needed
+    }
   });
 
   it("a local video rides the three legs into the thread", async () => {

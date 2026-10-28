@@ -52,6 +52,8 @@ export async function createDaemon({ dbPath }) {
       watchdogScheduler: scheduler, slowOpRecorder: recorder,
       healthDiagnosis: { start() {}, stop: async () => { if (mode === 'health-rejection') throw new Error('private health stop rejection'); } },
       daemonLifecycleStore: store, daemonBootEpoch: epoch,
+      // startServer's drain ends the tmux control client; this assembly drives no tmux.
+      tmuxAdapter: { closeControlClient: async () => {} },
     },
   };
 }

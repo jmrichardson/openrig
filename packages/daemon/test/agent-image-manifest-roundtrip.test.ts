@@ -7,7 +7,12 @@ import { parseAgentImageManifest } from "../src/domain/agent-images/manifest-par
 import type { AgentImageManifest } from "../src/domain/agent-images/agent-image-types.js";
 let root: string | undefined;
 afterEach(() => { if (root) rmSync(root, { recursive: true, force: true }); root = undefined; });
-it.each(["true", "123", "null", "model: fast", "#notes", "normal-name"])("round-trips the operator's image name %s and string metadata", (name) => {
+it.each([
+  "true", "123", "null",
+  // The image directory is named after the image; ':' is not allowed in Windows file names.
+  ...(process.platform === "win32" ? [] : ["model: fast"]),
+  "#notes", "normal-name",
+])("round-trips the operator's image name %s and string metadata", (name) => {
   root = mkdtempSync(join(tmpdir(), "openrig-image-roundtrip-"));
   const library = new AgentImageLibraryService({ roots: [{ path: root, sourceType: "user_file" }] });
   const manifest: AgentImageManifest = {

@@ -31,7 +31,7 @@ import { resolveCrashCartKey, type CrashCartKeyAction } from "./crash-cart/keys.
 import { driveRestoreLifecycle, buildRestoreLifecycleVM } from "./crash-cart/restore-lifecycle.js";
 import { restoreKeyAction, type RestoreInputEvent } from "./crash-cart/restore-input.js";
 import { evaluateOneClickGate, restoreConfirmMessage } from "./crash-cart/one-click-gate.js";
-import { daemonStartArgs } from "./crash-cart/start-daemon.js";
+import { daemonStartArgs, fleetRestoreStartCommand } from "./crash-cart/start-daemon.js";
 import { readLocal } from "./local-reading.js";
 import { replyAct, opensOnDefaultFeed, actingAs, answerRequest } from "./attention/attention-model.js";
 import type { AttentionRead } from "@openrig/daemon/attention";
@@ -44,6 +44,7 @@ import { MOTION_FRAME_MS } from "./visual-layout.js";
 import { launchProcess, runSpecLaunch } from "./specs/launch.js";
 import { runCopySession, processCopyTerminal } from "./print-for-copy.js";
 import { openTerminalInWindow, terminalWindowNotice } from "./terminals/open-window.js";
+import { resolveCliEntry } from "./cli-entry.js";
 
 function argOf(args: string[], flag: string): string | undefined {
   const i = args.indexOf(flag);
@@ -55,7 +56,7 @@ async function run(): Promise<void> {
   const instanceId = argOf(args, "--instance") ?? "tui-1";
   const demo = args.includes("--demo");
   // Reuse the entry/runtime that opened this TUI, even under a conflicting PATH.
-  const cliEntry = process.env["OPENRIG_TUI_CLI_ENTRY"];
+  const cliEntry = resolveCliEntry();
   const cliExecutable = cliEntry ? process.execPath : "rig";
   const cliArgs = (args: string[]): string[] => cliEntry ? [cliEntry, ...args] : args;
 
@@ -337,8 +338,9 @@ async function run(): Promise<void> {
     const daemonClient = client;
     restoreCancelRequested = false;
     restoreScrollOffset = 0;
+    const restoreStart = fleetRestoreStartCommand(cliExecutable, cliArgs([]));
     new Promise<void>((resolve, reject) =>
-      execFile("rig", ["daemon", "start"], { cwd: helperCwd(), timeout: 30_000 }, (err) => (err ? reject(err) : resolve())),
+      execFile(restoreStart.executable, restoreStart.args, { timeout: 30_000 }, (err) => (err ? reject(err) : resolve())),
     )
       .then(() => pollRestore(daemonClient))
       .catch((e: unknown) => {

@@ -87,6 +87,7 @@ function mockAdapter(overrides?: Partial<RuntimeAdapter>): RuntimeAdapter {
 }
 
 describe("Node Inventory Projection", () => {
+  useChosenCodexWindowsSandbox();
   let db: Database.Database;
 
   beforeEach(() => {

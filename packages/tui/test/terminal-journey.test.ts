@@ -154,9 +154,12 @@ describe("terminal browser → preview → explicit Open", () => {
       type: "act", act: "open-terminal", view: "saved:fixture", expectedPlan: snap.terminals!.preview!.planId,
     });
     expect(lines.some(l => l.action?.type === "back")).toBe(true);
-    const narrow = terminalLines(view.get(), snap, 54).map(line => line.text).join(" ").replace(/\s+/g, " ");
+    const narrow = terminalLines(view.get(), snap, 54, "linux").map(line => line.text).join(" ").replace(/\s+/g, " ");
     expect(narrow).toContain("On a desktop");
     expect(narrow).toContain("otherwise the same layout in plain tmux");
+    const windows = terminalLines(view.get(), snap, 54, "win32").map(line => line.text).join(" ").replace(/\s+/g, " ");
+    expect(windows).toContain("opens a new Windows Terminal window: Herdr if installed, otherwise the same layout in psmux panes");
+    expect(windows).not.toContain("plain tmux");
     const screen = draw(80, 24);
     expect(screen.lines.join("\n")).toContain("Open terminals");
     expect(screen.contentTargets.some(t => t.action.type === "act" && t.action.act === "open-terminal")).toBe(true);
@@ -175,7 +178,7 @@ describe("terminal browser → preview → explicit Open", () => {
       return app.request(u.pathname + u.search, init);
     }) as typeof fetch });
     view.dispatch({ type: "terminal-preview", view: "saved:remote view" }); await refresh();
-    const text = terminalLines(view.get(), snap, 1000).map(line => line.text).join("\n");
+    const text = terminalLines(view.get(), snap, 1000, "linux").map(line => line.text).join("\n");
     expect(text).toContain("http://selected.example:7654");
     expect(text).toContain("saved:remote view");
     expect(text).toContain("selected daemon's desktop");

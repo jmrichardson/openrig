@@ -214,8 +214,8 @@ describe("persisted choice at the launch boundary", () => {
       checkReady: async () => ({ ready: true }) } as RuntimeAdapter;
     const agent = 'name: impl\nversion: "1.0.0"\nresources:\n  skills: []\nprofiles:\n  default:\n    uses:\n      skills: []\n';
     const setup = createTestApp(db, { adapters: { "claude-code": adapter }, podInstantiatorFsOps: {
-      exists: (p: string) => p.includes("agents/impl"),
-      readFile: (p: string) => { if (p.includes("agents/impl")) return agent; throw new Error("missing"); },
+      exists: (p: string) => p.includes(join("agents", "impl")),
+      readFile: (p: string) => { if (p.includes(join("agents", "impl"))) return agent; throw new Error("missing"); },
     } });
     try {
       const spec = `version: "0.2"

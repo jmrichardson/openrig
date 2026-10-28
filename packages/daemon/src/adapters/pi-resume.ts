@@ -119,13 +119,14 @@ export class PiResumeAdapter {
       openRouterCharge: this.runtime === "pi" && (this.options.openRouterChargeEnabled?.() ?? false),
     });
 
-    const command = this.runtime === "pi" && this.options.seatLaunchEnvironment
+    // A native Windows pane needs the launch environment for OMP too; POSIX OMP keeps its bare command.
+    const command = (this.runtime === "pi" || process.platform === "win32") && this.options.seatLaunchEnvironment
       ? await this.options.seatLaunchEnvironment.command(tmuxSessionName, cmd, { runtime: this.runtime })
       : cmd;
     // Short commands retain the direct path; long commands exec from a private script.
     let textResult = await this.tmux.sendShellCommand(tmuxSessionName, command, undefined, { stageIfLong: true, execInScript: true });
     // This refusal precedes any input: retain the bare-command fallback when routing cannot fit.
-    if (!textResult.ok && textResult.code === "launch_path_too_long" && command !== cmd) {
+    if (process.platform !== "win32" && !textResult.ok && textResult.code === "launch_path_too_long" && command !== cmd) {
       textResult = await this.tmux.sendShellCommand(tmuxSessionName, cmd, undefined, { stageIfLong: true, execInScript: true });
     }
     if (!textResult.ok) {

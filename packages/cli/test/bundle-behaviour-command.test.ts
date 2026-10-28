@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import path from "node:path";
 import { Command } from "commander";
 import { bundleCommand } from "../src/commands/bundle.js";
 import { upCommand } from "../src/commands/up.js";
@@ -39,7 +40,7 @@ describe("bundle view at the real CLI command boundary", () => {
       events.push(url);
       if (url === "/api/bundles/inspect") throw new Error("description unavailable");
       expect(url).toBe("/api/bundles/install");
-      expect(body).toMatchObject({ plan, bundlePath: "/tmp/example.rigbundle" });
+      expect(body).toMatchObject({ plan, bundlePath: path.resolve("/tmp/example.rigbundle") });
       return { status, data: { status: status < 400 ? (plan ? "planned" : "completed") : "failed", retained: true } } as never;
     });
     const deps = runningDeps(client);

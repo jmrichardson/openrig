@@ -117,8 +117,14 @@ describe("Slice-11 secrets — resolution + hygiene (item 7 + 10)", () => {
     const strict: SecretFsOps = { readFileSync: () => "", statMode: () => 0o600 };
     const loose: SecretFsOps = { readFileSync: () => "", statMode: () => 0o644 };
     const absent: SecretFsOps = { readFileSync: () => "", statMode: () => null };
-    expect(checkEnvFilePermissions("/s.env", strict)).toBeNull();
-    expect(checkEnvFilePermissions("/s.env", loose)).toMatch(/0600/);
-    expect(checkEnvFilePermissions("/s.env", absent)).toBeNull();
+    expect(checkEnvFilePermissions("/s.env", strict, "linux")).toBeNull();
+    expect(checkEnvFilePermissions("/s.env", loose, "linux")).toMatch(/0600/);
+    expect(checkEnvFilePermissions("/s.env", absent, "linux")).toBeNull();
+  });
+
+  it("checkEnvFilePermissions makes no POSIX mode claim on Windows, which reports every file as 0666", () => {
+    const windows: SecretFsOps = { readFileSync: () => "", statMode: () => 0o666 };
+    expect(checkEnvFilePermissions("C:\\s.env", windows, "win32")).toBeNull();
+    expect(checkEnvFilePermissions("C:\\s.env", windows, "linux")).toMatch(/0600/);
   });
 });

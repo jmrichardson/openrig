@@ -40,10 +40,15 @@ for (const prefix of ["OPENRIG", "RIGGED"]) {
     });
     let output = "";
     try {
-      const child = spawn("npm", ["test", "-w", "packages/daemon", "--",
+      const args = ["test", "-w", "packages/daemon", "--",
         "test/bundle-routes.test.ts", "test/instance-environment.test.ts", "--maxWorkers=1",
-        "-t", "v2 bundle enters pod-aware path|test instance environment"],
-      { cwd: repo, env, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"] });
+        "-t", "v2 bundle enters pod-aware path|test instance environment"];
+      // npm is npm.cmd on Windows, which Node starts only through a shell (where the | above would
+      // be a pipe): run npm's own CLI script with this Node instead.
+      const child = process.platform === "win32"
+        ? spawn(process.execPath, [join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js"), ...args],
+          { cwd: repo, env, stdio: ["ignore", "pipe", "pipe"] })
+        : spawn("npm", args, { cwd: repo, env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
       child.stdout.on("data", chunk => { output += chunk; });
       child.stderr.on("data", chunk => { output += chunk; });
       const timeout = setTimeout(() => {

@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { join } from "node:path";
 import type Database from "better-sqlite3";
 import { createFullTestDb, createTestApp } from "./helpers/test-app.js";
 import { RigSpecSchema } from "../src/domain/rigspec-schema.js";
@@ -99,10 +100,10 @@ describe("FAC-1 C1: role plumb across ALL THREE node-creation paths (P2-1)", () 
     setup = createTestApp(db, {
       podInstantiatorFsOps: {
         readFile: (p: string) => {
-          if (p.includes("agents/impl")) return agentYaml("impl");
+          if (p.includes(join("agents", "impl"))) return agentYaml("impl");
           throw new Error(`Not found: ${p}`);
         },
-        exists: (p: string) => p.includes("agents/impl"),
+        exists: (p: string) => p.includes(join("agents", "impl")),
       },
     });
   });

@@ -9,11 +9,13 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  rmdirSync,
   lstatSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   buildInternalLeakMessage,
   scanInternalLeaks,
@@ -555,7 +557,7 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
   }
 }
 
-if (import.meta.url === `file://${resolve(process.argv[1])}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   try {
     await main();
   } catch (err) {
@@ -828,6 +830,27 @@ function treeDifferences(expectedRoot, actualRoot) {
 }
 
 function syncTree(sourceRoot, targetRoot, edge, prefix, exec) {
+  if (process.platform === "win32" && exec === execFileSync) {
+    // The staging tree already applies exclusions. Use the same measured differences without requiring rsync.
+    const changes = treeDifferences(sourceRoot, targetRoot).map(({ path, kind }) => {
+      const target = resolve(targetRoot, path);
+      if (!target.startsWith(resolve(targetRoot) + sep)) throw new Error("Generated skill path escapes its target");
+      if (kind === "extra") rmSync(target, { force: true });
+      else {
+        mkdirSync(dirname(target), { recursive: true });
+        if (existsSync(target)) chmodSync(target, 0o600);
+        copyFileSync(join(sourceRoot, path), target);
+        chmodSync(target, lstatSync(join(sourceRoot, path)).mode & 0o777);
+      }
+      return { edge, path: prefix ? prefix + "/" + path : path, reason: kind === "extra" ? "delete" : "write" };
+    });
+    const prune = (dir) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) if (entry.isDirectory()) prune(join(dir, entry.name));
+      if (dir !== targetRoot && !existsSync(join(sourceRoot, relative(targetRoot, dir))) && readdirSync(dir).length === 0) rmdirSync(dir);
+    };
+    prune(targetRoot);
+    return changes;
+  }
   return parseChanges(runRsyncAbsolute(sourceRoot, targetRoot, exec)).map((line) => {
     const path = rsyncChangePath(line);
     return {

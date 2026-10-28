@@ -2,11 +2,11 @@
 // into ~/.claude/skills and ~/.agents/skills from the installed openrig-core plugin, and the mirror check
 // sees the installed-package layout instead of a source checkout.
 
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { Hono } from "hono";
 import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { skillsRoutes } from "../src/routes/skills.js";
 
 const SKILL = "---\nname: openrig-skills\ndescription: index\nmetadata:\n  openrig:\n    stage: shipped\n---\n\n# index\n";
@@ -47,13 +47,13 @@ describe("GET /api/skills/audit on a clean-install fixture (#802)", () => {
   });
   afterEach(() => { rmSync(root, { recursive: true, force: true }); });
 
-  async function audit(): Promise<AuditBody> {
+  async function audit(opts: { contextHome?: boolean; cwd?: string } = {}): Promise<AuditBody> {
     const app = new Hono();
     app.use("*", async (c, next) => {
       c.set("skillLibraryDiscoveryService" as never, {} as never);
-      c.set("homedir" as never, home as never);
+      if (opts.contextHome !== false) c.set("homedir" as never, home as never);
       // The report's daemon ran from $HOME, so its projected copies were discovered as rig_bundled.
-      c.set("cwd" as never, home as never);
+      c.set("cwd" as never, (opts.cwd ?? home) as never);
       c.set("pluginsDir" as never, pluginsDir as never);
       c.set("mirrorRepoRoot" as never, installedPackageRoot as never);
       await next();
@@ -85,8 +85,25 @@ describe("GET /api/skills/audit on a clean-install fixture (#802)", () => {
     appendFileSync(join(home, ".claude/skills/openrig-skills/SKILL.md"), "\nLocal note.\n");
     const body = await audit();
     expect(body.totalFindings).toBe(3);
-    const edited = body.entries.find((e) => e.path.includes("/.claude/"));
+    const edited = body.entries.find((e) => e.path.includes(`${sep}.claude${sep}`));
     expect(edited?.bundledFrom).toBeNull();
     expect(edited?.findings).toHaveLength(3);
+  });
+
+  it("on Windows without HOME, audits the skills under the user's profile", async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { ...platform, value: "win32" });
+    vi.stubEnv("HOME", undefined);
+    vi.stubEnv("USERPROFILE", home);
+    try {
+      const body = await audit({ contextHome: false, cwd: root });
+      expect(body.entries.filter((e) => !e.shadowed).map((e) => e.path).sort()).toEqual([
+        join(home, ".agents/skills/openrig-skills"),
+        join(home, ".claude/skills/openrig-skills"),
+      ]);
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+      vi.unstubAllEnvs();
+    }
   });
 });

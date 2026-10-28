@@ -39,10 +39,14 @@ export function readExperiment(file: string, read = readBounded): ExperimentConf
 export function setExperiment(file: string, enabled: boolean, options: Partial<ExperimentConfig> = {}) {
   const config = { ...readExperiment(file), ...options, enabled };
   readExperiment(file, () => JSON.stringify(config)); // validate before writing
+  // Windows has no O_NOFOLLOW (the flag is undefined there) and no POSIX uid: refuse a link up front and leave
+  // ownership to the profile directory's ACL; the regular-file and single-link checks still apply.
+  const win32 = process.platform === "win32";
+  if (win32 && fs.lstatSync(file, { throwIfNoEntry: false })?.isSymbolicLink()) throw Error("experiment config must be an owned regular file");
   const fd = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_NOFOLLOW, 0o600);
   try {
     const s = fs.fstatSync(fd);
-    if (!s.isFile() || s.nlink !== 1 || s.uid !== process.getuid?.()) throw Error("experiment config must be an owned regular file");
+    if (!s.isFile() || s.nlink !== 1 || (!win32 && s.uid !== process.getuid?.())) throw Error("experiment config must be an owned regular file");
     fs.ftruncateSync(fd, 0); fs.writeFileSync(fd, JSON.stringify(config, null, 2) + "\n");
   } finally { fs.closeSync(fd); }
   return config;

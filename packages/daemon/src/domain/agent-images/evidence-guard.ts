@@ -66,7 +66,7 @@ export function evaluateProtection(opts: EvidenceGuardOpts): ImageProtectionStat
     // basename is `agent.yaml` is agent-spec; otherwise rig-spec.
     const seenReason = new Set<ProtectionReason>();
     for (const ref of refs) {
-      const reason: ProtectionReason = ref.endsWith("/agent.yaml")
+      const reason: ProtectionReason = ref.endsWith("/agent.yaml") || (process.platform === "win32" && ref.endsWith("\\agent.yaml"))
         ? "referenced_by_agent_spec"
         : "referenced_by_rig_spec";
       if (!seenReason.has(reason)) {

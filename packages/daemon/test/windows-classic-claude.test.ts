@@ -25,7 +25,7 @@ describe.runIf(process.platform === "win32")("classic Claude native launch comma
     vi.spyOn(tmux, "getSessionEnv").mockImplementation(async (_session, key) => identity[key] ?? null);
     const launch = new SeatLaunchEnvironment(tmux, { OPENRIG_HOME: home, PATH: process.env.PATH! }, home, cli, undefined, "win32");
     const receiver = path.join(home, "capture argv.cjs");
-    fs.writeFileSync(receiver, `console.log(JSON.stringify({argv:process.argv.slice(2), renderer:process.env.CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN, node:process.env.OPENRIG_NODE_ID, generation:process.env.OPENRIG_OCCUPANT_GENERATION, resumeLaunch:process.env.OPENRIG_RESUME_LAUNCH}));`);
+    fs.writeFileSync(receiver, `console.log(JSON.stringify({argv:process.argv.slice(2), renderer:process.env.CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN, node:process.env.OPENRIG_NODE_ID, generation:process.env.OPENRIG_OCCUPANT_GENERATION, resumeLaunch:process.env.OPENRIG_RESUME_LAUNCH, cliEntry:process.env.OPENRIG_CLI_ENTRY}));`);
     // Exercise the real native executable boundary without starting Claude.
     const render = launch.command.bind(launch);
     vi.spyOn(launch, "command").mockImplementation(async (session, value, identity) => {
@@ -45,7 +45,8 @@ describe.runIf(process.platform === "win32")("classic Claude native launch comma
     const lines = stdout.trim().split(/\r?\n/);
     expect(lines.at(-1)).toBe("parent=");
     const observed = JSON.parse(lines[0]!);
-    expect(observed).toMatchObject({ renderer: "1", node: "node", generation: "new-generation" });
+    // Seat hooks run this entry with Node: the rig.cmd shim cannot be spawned without a shell.
+    expect(observed).toMatchObject({ renderer: "1", node: "node", generation: "new-generation", cliEntry: fs.realpathSync(cli) });
     expect(observed.argv).toContain("model space's");
     if (kind === "resume") { expect(observed.argv).toContain("original-session"); expect(observed.resumeLaunch).toBe("original-session"); }
     else expect(observed.resumeLaunch).toBeUndefined();

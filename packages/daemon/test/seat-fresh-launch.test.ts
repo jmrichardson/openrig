@@ -1062,8 +1062,8 @@ describe("SeatLifecycleService.launchFresh", () => {
     expect(result.ok).toBe(true);
     expect(delivered.map((f) => f.absolutePath).sort()).toEqual([
       "/project/CULTURE-default.md",
-      `${running}/guidance/CULTURE-default.md`,
-      `${running}/onboarding/01-world-and-purpose.md`,
+      path.join(running, "guidance/CULTURE-default.md"),
+      path.join(running, "onboarding/01-world-and-purpose.md"),
     ].sort());
     expect(delivered.every((f) => f.required)).toBe(true);
     const persisted = JSON.parse((db.prepare("SELECT resolved_files_json AS j FROM node_startup_context WHERE node_id=?").get(seat.node.id) as { j: string }).j) as Array<{ absolutePath: string }>;
@@ -1087,7 +1087,7 @@ describe("SeatLifecycleService.launchFresh", () => {
     expect(result.ok).toBe(true);
     const byId = Object.fromEntries((projectedPlan?.entries ?? []).map((e) => [e.effectiveId, e]));
     expect(byId["shared:claude-default-settings"]).toMatchObject({
-      sourcePath: `${runningSpecs}/agents/shared`, absolutePath: `${runningSpecs}/agents/shared/runtime/claude-settings.fragment.json`,
+      sourcePath: path.join(runningSpecs, "agents/shared"), absolutePath: path.join(runningSpecs, "agents/shared/runtime/claude-settings.fragment.json"),
       resourceType: "claude_settings_fragment", category: "runtime_resource",
     });
     expect(byId["shared:openrig-core"]).toMatchObject({ sourcePath: `${oldSpecs}/agents/shared`, absolutePath: "/home/u/.openrig/plugins/openrig-core" });
@@ -1113,12 +1113,12 @@ describe("SeatLifecycleService.launchFresh", () => {
     expect(result.ok).toBe(true);
     // Pre-launch culture and the post-launch send_text role both arrive at the running install; custom is as stored.
     expect(delivered.sort()).toEqual([
-      `${runningSpecs}/${agent}/guidance/role.md`,
-      `${runningSpecs}/${kernel}/culture/CULTURE.md`,
+      path.join(runningSpecs, agent, "guidance/role.md"),
+      path.join(runningSpecs, kernel, "culture/CULTURE.md"),
       "/project/culture/CULTURE.md",
     ].sort());
     const persisted = JSON.parse((db.prepare("SELECT resolved_files_json AS j FROM node_startup_context WHERE node_id=?").get(seat.node.id) as { j: string }).j) as Array<{ path: string; absolutePath: string; deliveryHint: string }>;
-    expect(persisted.find((f) => f.path === "guidance/role.md")).toMatchObject({ absolutePath: `${runningSpecs}/${agent}/guidance/role.md`, deliveryHint: "send_text" });
+    expect(persisted.find((f) => f.path === "guidance/role.md")).toMatchObject({ absolutePath: path.join(runningSpecs, agent, "guidance/role.md"), deliveryHint: "send_text" });
     expect(persisted.some((f) => f.absolutePath.startsWith(oldSpecs))).toBe(false);
   });
 });

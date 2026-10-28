@@ -14,7 +14,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import {
   FilePathSafetyError,
   readAllowlistFromEnv,
@@ -22,6 +22,7 @@ import {
   resolveAllowedFile,
   resolveAllowedPath,
 } from "../src/domain/files/path-safety.js";
+import { canCreateFileSymlinks } from "../../../test/symlink-capability.mjs";
 
 describe("UI Enhancement Pack v0 — readAllowlistFromEnv", () => {
   it("returns empty list when env unset", () => {
@@ -49,7 +50,7 @@ describe("UI Enhancement Pack v0 — readAllowlistFromEnv", () => {
       OPENRIG_FILES_ALLOWLIST: "x:/path/a, x:/path/b",
     });
     expect(list).toHaveLength(1);
-    expect(list[0]?.canonicalPath).toContain("/path/b");
+    expect(list[0]?.canonicalPath).toBe(resolve("/path/b"));
   });
 
   it("falls back to RIGGED_FILES_ALLOWLIST when OPENRIG_FILES_ALLOWLIST is empty", () => {
@@ -116,13 +117,59 @@ describe("UI Enhancement Pack v0 — resolveAllowedPath", () => {
     catch (e) { expect((e as FilePathSafetyError).code).toBe("path_invalid"); }
   });
 
-  it("rejects symlink whose realpath escapes the root", () => {
+  // Windows path rules; elsewhere these are ordinary relative names (see path-safety.test.ts).
+  it.skipIf(process.platform !== "win32").each(["C:secret.md", "C:\\secret.md", "C:/secret.md", "\\secret.md", "\\\\server\\share\\secret.md"])("rejects rooted Windows relative input %s before reading", (path) => {
+    expect(() => resolveAllowedPath(allowlist, "workspace", path)).toThrowError(/must not be absolute/);
+  });
+
+  it("reads nested native paths with spaces through the configured allowlist", () => {
+    const dir = join(tempDir, "workspace", "nested space");
+    mkdirSync(dir);
+    writeFileSync(join(dir, "notes.md"), "notes");
+    const roots = readAllowlistFromEnv({ OPENRIG_FILES_ALLOWLIST: `workspace:${allowlist[0]!.canonicalPath}` });
+    expect(resolveAllowedFile(roots, "workspace", join("nested space", "notes.md")))
+      .toBe(realpathSync(join(dir, "notes.md")));
+  });
+
+  it.skipIf(!canCreateFileSymlinks)("rejects symlink whose realpath escapes the root", () => {
     // Create a symlink inside the workspace pointing OUTSIDE the root.
     symlinkSync(join(tempDir, "outside-root", "secret.txt"), join(tempDir, "workspace", "escape-link"));
     expect(() => resolveAllowedPath(allowlist, "workspace", "escape-link"))
       .toThrowError(/falls outside allowlist root/);
     try { resolveAllowedPath(allowlist, "workspace", "escape-link"); }
     catch (e) { expect((e as FilePathSafetyError).code).toBe("path_escape"); }
+  });
+
+  it("rejects a linked directory whose realpath escapes the root", () => {
+    // A directory junction exercises realpath escape without Windows symlink privilege.
+    symlinkSync(join(tempDir, "outside-root"), join(tempDir, "workspace", "escape-link"), process.platform === "win32" ? "junction" : "dir");
+    const escaped = join("escape-link", "secret.txt");
+    expect(() => resolveAllowedPath(allowlist, "workspace", escaped))
+      .toThrowError(/falls outside allowlist root/);
+    try { resolveAllowedPath(allowlist, "workspace", escaped); }
+    catch (e) { expect((e as FilePathSafetyError).code).toBe("path_escape"); }
+  });
+
+  it("rejects a linked directory into a sibling that shares the root's name prefix", () => {
+    mkdirSync(join(tempDir, "workspace-other"));
+    writeFileSync(join(tempDir, "workspace-other", "leak.md"), "leak");
+    symlinkSync(join(tempDir, "workspace-other"), join(tempDir, "workspace", "sibling-link"), process.platform === "win32" ? "junction" : "dir");
+    expect(() => resolveAllowedPath(allowlist, "workspace", join("sibling-link", "leak.md")))
+      .toThrowError(/falls outside allowlist root/);
+  });
+
+  it("allows a root-level name that only starts with '..'", () => {
+    writeFileSync(join(tempDir, "workspace", "..notes.md"), "ok");
+    expect(resolveAllowedFile(allowlist, "workspace", "..notes.md")).toBe(realpathSync(join(tempDir, "workspace", "..notes.md")));
+  });
+
+  it.skipIf(process.platform !== "win32")("contains a junction whose target differs from the root only in drive-letter casing", () => {
+    // realpathSync reports the junction's stored target casing, not the root's.
+    const root = allowlist[0]!.canonicalPath, drive = root[0]!;
+    const recased = (drive === drive.toUpperCase() ? drive.toLowerCase() : drive.toUpperCase()) + root.slice(1);
+    symlinkSync(join(recased, "subdir"), join(tempDir, "workspace", "recased-link"), "junction");
+    expect(resolveAllowedFile(allowlist, "workspace", join("recased-link", "nested.md")).toLowerCase())
+      .toBe(join(root, "subdir", "nested.md").toLowerCase());
   });
 
   it("does NOT match a sibling path with the same prefix (path.sep boundary)", () => {

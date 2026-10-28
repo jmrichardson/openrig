@@ -14,6 +14,7 @@
 // SEMANTIC FENCE: this order is PRESENTATION ONLY. Any consumer that treats the first warning as
 // higher-priority is a FINDING, not an ordering input — this pin freezes presentation, never semantics.
 import { describe, expect, it } from "vitest";
+import { join } from "node:path";
 import { rigPreflight } from "../src/domain/rigspec-preflight.js";
 import type { AgentResolverFsOps } from "../src/domain/agent-resolver.js";
 
@@ -36,9 +37,9 @@ profiles:
 
 function fsOps(): AgentResolverFsOps {
   return {
-    exists: (p) => p.includes("agents/impl"),
+    exists: (p) => p.includes(join("agents", "impl")),
     readFile: (p) => {
-      if (p.includes("agents/impl")) return AGENT_YAML;
+      if (p.includes(join("agents", "impl"))) return AGENT_YAML;
       throw new Error(`not found: ${p}`);
     },
   };

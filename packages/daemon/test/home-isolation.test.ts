@@ -95,7 +95,7 @@ describe("homeIsolationAdvisory", () => {
   });
 
   it("compares through symlinks", () => {
-    const d = dirs(); const link = path.join(d.root, "link"); fs.symlinkSync(d.scratch, link);
+    const d = dirs(); const link = path.join(d.root, "link"); fs.symlinkSync(d.scratch, link, process.platform === "win32" ? "junction" : "dir");
     expect(homeIsolationAdvisory({ accountHome: d.real, openrigHome: path.join(link, ".openrig"), home: d.scratch, codexHome: path.join(d.scratch, ".codex") })).toBeUndefined();
   });
 });

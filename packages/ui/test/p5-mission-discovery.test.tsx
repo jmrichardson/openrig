@@ -205,6 +205,19 @@ describe("ProjectTreeView P5-5/P5-6 mission discovery", () => {
     expect(await findByTestId("project-mission-shell-redesign-v1")).toBeTruthy();
   });
 
+  it("discovers missions under a Windows workspace.root through a parent root reported with other drive casing", async () => {
+    const { findByTestId, queryByTestId } = renderTree({
+      workspaceRoot: "C:\\Users\\admin\\.openrig\\workspace",
+      roots: [{ name: "home", path: "c:\\Users\\admin" }],
+      listings: {
+        "home:.openrig/workspace/missions": [{ name: "release-readiness", type: "dir" }],
+      },
+      slices: [],
+    });
+    expect(await findByTestId("project-mission-release-readiness")).toBeTruthy();
+    expect(queryByTestId("project-discovery-degraded")).toBeNull();
+  });
+
   it("file-type entries under missions/ are not surfaced as missions", async () => {
     const { findByTestId, queryByTestId } = renderTree({
       workspaceRoot: "/Users/admin/.openrig/workspace",

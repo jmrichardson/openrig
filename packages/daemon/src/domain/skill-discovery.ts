@@ -79,13 +79,16 @@ export interface SkillProvenanceResult {
 }
 
 const FRONTMATTER_RE = /^---\s*\n([\s\S]*?)\n---\s*\n?([\s\S]*)$/;
+// Windows only: an editor or a Git for Windows checkout (core.autocrlf) may end the last
+// frontmatter line with CRLF. Other platforms keep the LF match above.
+const FRONTMATTER_RE_WIN32 = /^---\s*\n([\s\S]*?)\r?\n---\s*\n?([\s\S]*)$/;
 
 /** Parse a SKILL.md document into frontmatter + body, validating the
  *  shape Claude Code and Codex both require: a YAML frontmatter block
  *  delimited by `---` lines, with at minimum `name` + `description`
  *  fields, plus a non-empty body. */
 export function parseSkillFrontmatter(content: string): ParseResult {
-  const match = FRONTMATTER_RE.exec(content);
+  const match = (process.platform === "win32" ? FRONTMATTER_RE_WIN32 : FRONTMATTER_RE).exec(content);
   if (!match) {
     return { ok: false, reason: "no YAML frontmatter delimited by --- lines" };
   }

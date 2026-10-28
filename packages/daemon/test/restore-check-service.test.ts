@@ -5,13 +5,14 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { createFullTestDb } from "./helpers/test-app.js";
 import { getNodeInventory } from "../src/domain/node-inventory.js";
 import { SeatIdentityStore } from "../src/domain/seat-identity-store.js";
+import { claudeActivityRelayPath } from "../src/domain/claude-activity-hooks.js";
 import {
   RestoreCheckService,
   type RestoreCheckDeps,
   type NodeInventoryEntry,
 } from "../src/domain/restore-check-service.js";
 
-const RELAY_PATH = "/custom-instance/state/claude-activity-hooks/activity-relay.cjs";
+const RELAY_PATH = claudeActivityRelayPath("/custom-instance");
 
 const VALID_HOST_INFRA_DECLARATION = JSON.stringify({
   schemaVersion: 1,

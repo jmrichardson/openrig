@@ -19,9 +19,11 @@ import { describe, it, expect, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { PluginVendorService } from "../src/domain/plugin-vendor-service.js";
 
-// Injectable fs ops for test mock
+// Injectable fs ops for test mock. The service joins paths with node:path, so
+// keys are stored with "/" separators on every platform.
 function mockFs(initialFiles?: Record<string, string>) {
   const store: Record<string, string> = { ...initialFiles };
+  const key = (p: string) => p.replaceAll("\\", "/");
   return {
     readFile: (p: string) => { if (p in store) return store[p]!; throw new Error(`Not found: ${p}`); },
     writeFile: (p: string, c: string) => { store[p] = c; },
@@ -31,10 +33,10 @@ function mockFs(initialFiles?: Record<string, string>) {
     },
     exists: (p: string) => p in store || Object.keys(store).some((k) => k.startsWith(p + "/")),
     mkdirp: () => {},
-    listFiles: (dir: string) => Object.keys(store).filter((k) => k.startsWith(dir + "/")).map((k) => k.slice(dir.length + 1)),
+    listFiles: (dir: string) => Object.keys(store).filter((k) => k.startsWith(key(dir) + "/")).map((k) => k.slice(key(dir).length + 1)),
     rmrf: (p: string) => {
       for (const k of Object.keys(store)) {
-        if (k === p || k.startsWith(p + "/")) delete store[k];
+        if (k === key(p) || k.startsWith(key(p) + "/")) delete store[k];
       }
     },
     _store: store,

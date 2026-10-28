@@ -86,7 +86,7 @@ describe("rig host pair (OPR.0.4.6.MH1 FR-6)", () => {
 
     const tokenPath = path.join(dir, "secrets", "host-vps-a.token");
     expect(fs.readFileSync(tokenPath, "utf8")).toBe("issued-bearer\n");
-    expect(fs.statSync(tokenPath).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") expect(fs.statSync(tokenPath).mode & 0o777).toBe(0o600); // POSIX mode bits; Windows uses ACLs
     const yaml = fs.readFileSync(path.join(dir, "hosts.yaml"), "utf8");
     expect(yaml).toContain("id: vps-a");
     expect(yaml).toContain(`bearer_file: ${tokenPath}`);
@@ -158,7 +158,7 @@ describe("rig host pair (OPR.0.4.6.MH1 FR-6)", () => {
     expect(deps.postCalls()).toBe(0);
     expect(fs.readFileSync(path.join(dir, "hosts.yaml"), "utf8")).toBe(yamlBefore);
     expect(fs.readFileSync(tokenPath, "utf8")).toBe("live-credential\n");
-    expect(fs.statSync(tokenPath).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") expect(fs.statSync(tokenPath).mode & 0o777).toBe(0o600); // POSIX mode bits; Windows uses ACLs
   });
 
   it("B1: a pre-existing token file at the derived path rejects the pair before target contact — file untouched", async () => {
@@ -174,7 +174,7 @@ describe("rig host pair (OPR.0.4.6.MH1 FR-6)", () => {
 
     expect(deps.postCalls()).toBe(0);
     expect(fs.readFileSync(tokenPath, "utf8")).toBe("stale-but-not-ours-to-delete\n");
-    expect(fs.statSync(tokenPath).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") expect(fs.statSync(tokenPath).mode & 0o777).toBe(0o600); // POSIX mode bits; Windows uses ACLs
     expect(fs.existsSync(path.join(dir, "hosts.yaml"))).toBe(false);
   });
 

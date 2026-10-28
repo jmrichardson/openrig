@@ -3,12 +3,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { inspectBundleBehaviour } from "../src/domain/bundle-behaviour-inspect.js";
+import { canCreateFileSymlinks } from "../../../test/symlink-capability.mjs";
 
 const owned: string[] = [];
 afterEach(() => { for (const dir of owned.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); });
 
 describe("private archive text reader", () => {
-  it("does not follow outside links and makes unscanned members explicit", () => {
+  // Creates a file symlink, which Windows allows only with SeCreateSymbolicLinkPrivilege.
+  it.skipIf(!canCreateFileSymlinks)("does not follow outside links and makes unscanned members explicit", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "bundle-view-reader-"));
     owned.push(root);
     const archive = path.join(root, "archive");

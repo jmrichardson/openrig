@@ -151,6 +151,67 @@ describe("attributed proof judgments and derived readiness", () => {
   });
 });
 
+describe("receipts and refs from native checkouts", () => {
+  // Only Windows reads CRLF receipts; Linux and macOS keep the LF-only match.
+  it.for([
+    { platform: "win32", crlf: true, outcome: "the accepted judgment" },
+    { platform: "linux", crlf: false, outcome: "an incomplete judgment" },
+    { platform: "darwin", crlf: false, outcome: "an incomplete judgment" },
+  ] as const)("on $platform a CRLF-rewritten receipt reads as $outcome", ({ platform, crlf }) => {
+    const f = fixture();
+    const accepted = f.judge();
+    const receipt = join(f.alpha, "proof", "judgments", "00000001.md");
+    fs.writeFileSync(receipt, fs.readFileSync(receipt, "utf8").replace(/\n/g, "\r\n"));
+    const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { ...descriptor, value: platform });
+    let readiness: ReturnType<typeof readSliceReadiness>;
+    try {
+      readiness = readSliceReadiness(f.alpha);
+    } finally {
+      Object.defineProperty(process, "platform", descriptor);
+    }
+    if (crlf) {
+      expect(readiness.issues).toEqual([]);
+      expect(readiness.items[0]).toMatchObject({ state: "accepted", judgment: { id: accepted.judgment.id } });
+    } else {
+      expect(readiness.items).toEqual([]);
+      expect(readiness.issues).toHaveLength(1);
+      expect(readiness.issues[0]).toMatch(/00000001\.md: incomplete judgment$/);
+    }
+  });
+
+  it.runIf(process.platform === "win32")("reads receipts a CRLF checkout rewrote and still records a correction on them", () => {
+    const f = fixture();
+    const accepted = f.judge({ ...f.input(), reason: "Observed outcome holds\nacross two lines" });
+    const receipt = join(f.alpha, "proof", "judgments", "00000001.md");
+    fs.writeFileSync(receipt, fs.readFileSync(receipt, "utf8").replace(/\n/g, "\r\n"));
+    const readiness = readSliceReadiness(f.alpha);
+    expect(readiness.issues).toEqual([]);
+    expect(readiness.items[0]).toMatchObject({ state: "accepted", judgment: { id: accepted.judgment.id } });
+    const correction = f.judge(f.input(undefined, "reject"));
+    expect(correction.judgment.previous).toBe(accepted.judgment.id);
+    expect(readSliceReadiness(f.alpha).items[0]!.state).toBe("rejected");
+  });
+
+  it("records the policy source as a '/'-separated workspace path", () => {
+    const f = fixture();
+    const mission = join(f.mission, "mission.yaml");
+    f.write(mission, { ...YAML.parse(fs.readFileSync(mission, "utf8")), proofPolicy: { judges: ["judge@trial"] } });
+    expect(f.judge().judgment.policySource).toBe("missions/trial/mission.yaml");
+  });
+
+  it.skipIf(process.platform !== "win32")("accepts Windows evidence refs that differ from the workspace only in drive casing or separators", () => {
+    const f = fixture();
+    const absolute = join(f.alpha, "proof", "evidence.md");
+    const drive = absolute[0]!;
+    const recased = (drive === drive.toUpperCase() ? drive.toLowerCase() : drive.toUpperCase()) + absolute.slice(1);
+    const expected = evidenceAt(f.root, f.alpha, "proof/evidence.md");
+    expect(expected.ref).toBe("missions/trial/slices/01-alpha/proof/evidence.md");
+    expect(evidenceAt(f.root, f.alpha, recased)).toEqual(expected);
+    expect(evidenceAt(f.root, f.alpha, "missions\\trial\\slices\\01-alpha\\proof\\evidence.md")).toEqual(expected);
+  });
+});
+
 
 describe("retained authority negative controls", () => {
   it("invalidates policy and new children while preserving sibling and publication history", () => {
@@ -296,6 +357,8 @@ describe("retained authority negative controls", () => {
   });
 });
 
+// Linux and macOS freeze the worker with SIGSTOP and thaw it with SIGCONT. Windows has
+// neither signal, so there the worker parks on a blocking stdin read that resume() releases.
 async function worker(f: ReturnType<typeof fixture>, input: JudgeInput, crash: "before" | "after" | "stale-read" | "write-error" | "fsync-error" | null = null) {
   const module = new URL("../src/domain/proof/judgments.ts", import.meta.url).href;
   const script = `
@@ -336,6 +399,9 @@ async function worker(f: ReturnType<typeof fixture>, input: JudgeInput, crash: "
   `;
   const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], { stdio: ["pipe", "ignore", "pipe", "ipc"] });
   await once(child, "message"); return child;
+}
+function resume(child: ChildProcess) {
+  if (process.platform === "win32") child.stdin!.write("\n"); else child.kill("SIGCONT");
 }
 async function request(child: ChildProcess) {
   const reply = once(child, "message"); child.send!("go"); return (await reply)[0];

@@ -80,6 +80,7 @@ function service(herdr: TerminalProvider, cmux = new RecordingCmux()): { svc: Te
     listRigNames: () => [RIG],
     resolveHost: () => null,
     hasSession: () => true,
+    platform: "linux",
   } as TerminalServiceDeps;
   return { svc: new TerminalService(deps), cmux };
 }
@@ -103,7 +104,7 @@ const cellSeats = (root: unknown, composed: ComposedView): string[] => {
 describe("S08 — the rig opens as one Herdr space, 16 cells per tab", () => {
   it("17 live seats → workspace named after the rig, tabs of 16 then 1, each cell on its own seat, in order", async () => {
     const { transport, requests } = herdrTransport();
-    const { svc } = service(new HerdrAdapter({ transportFactory: () => transport, newLaunchToken: () => "tok" }));
+    const { svc } = service(new HerdrAdapter({ transportFactory: () => transport, platform: "linux", newLaunchToken: () => "tok" }));
     const preview = await svc.previewView({ view: `rig:${RIG}` });
     if (!("composed" in preview)) throw new Error("expected preview");
     const res = await svc.openView({ view: `rig:${RIG}`, expectedPlan: preview.planId });
@@ -119,7 +120,7 @@ describe("S08 — the rig opens as one Herdr space, 16 cells per tab", () => {
 
   it("the first tab is a 4×4 equal grid; the preview plan pages the same way", async () => {
     const { transport } = herdrTransport();
-    const { svc } = service(new HerdrAdapter({ transportFactory: () => transport }));
+    const { svc } = service(new HerdrAdapter({ transportFactory: () => transport, platform: "linux" }));
     const preview = await svc.previewView({ view: `rig:${RIG}` }) as { grids: Array<{ columns: number; rows: number; blanks: number }>; composed: ComposedView };
     expect(preview.composed.pages.map((p) => p.length)).toEqual([16, 1]);
     expect(preview.grids.map((g) => [g.columns, g.rows, g.blanks])).toEqual([[4, 4, 0], [1, 1, 0]]);
@@ -128,7 +129,7 @@ describe("S08 — the rig opens as one Herdr space, 16 cells per tab", () => {
 
   it("after layout it focuses the first populated tab, then closes the blank starting tab", async () => {
     const { transport, requests } = herdrTransport();
-    const { svc } = service(new HerdrAdapter({ transportFactory: () => transport }));
+    const { svc } = service(new HerdrAdapter({ transportFactory: () => transport, platform: "linux" }));
     const res = await svc.openView({ view: `rig:${RIG}` });
     // #707: each applied page is followed by one pane.list read (this fake lists every pane alive, so nothing changes).
     expect(requests.map((r) => r.method)).toEqual(["workspace.list", "workspace.create", "layout.apply", "pane.list", "layout.apply", "pane.list", "tab.focus", "tab.close"]);
@@ -142,7 +143,7 @@ describe("S08 — the rig opens as one Herdr space, 16 cells per tab", () => {
     const { transport, requests } = herdrTransport((m) =>
       m === "workspace.create" ? { type: "c", workspace: { workspace_id: "w1" }, tab: { tab_id: "w1:t0" } }
         : m === "layout.apply" ? { type: "l", layout: { tab_id: "w1:t0" } } : { type: "ok" });
-    const { svc } = service(new HerdrAdapter({ transportFactory: () => transport }));
+    const { svc } = service(new HerdrAdapter({ transportFactory: () => transport, platform: "linux" }));
     await svc.openView({ view: `rig:${RIG}` });
     expect(requests.some((r) => r.method === "tab.close")).toBe(false);
   });
@@ -184,7 +185,7 @@ describe("S08 — the rig opens as one Herdr space, 16 cells per tab", () => {
       if (m === "pane.list") return { type: "pane_list", panes };
       return { type: "ok" };
     });
-    const { svc } = service(new HerdrAdapter({ transportFactory: () => transport }));
+    const { svc } = service(new HerdrAdapter({ transportFactory: () => transport, platform: "linux" }));
     const res = await svc.openView({ view: `rig:${RIG}` });
     expect(requests.filter((r) => r.method === "workspace.create").map((c) => c.params["label"])).toEqual([RIG, `${RIG} (3)`]);
     expect(res.ok).toBe(true);
@@ -204,7 +205,7 @@ describe("S08 — the rig opens as one Herdr space, 16 cells per tab", () => {
       if (m === "pane.list") return { type: "pane_list", panes };
       throw new Error(`${m} unsupported`);
     });
-    const { svc } = service(new HerdrAdapter({ transportFactory: () => transport }));
+    const { svc } = service(new HerdrAdapter({ transportFactory: () => transport, platform: "linux" }));
     const res = await svc.openView({ view: `rig:${RIG}` });
     expect(res.opened).toHaveLength(17);
     expect(res.degraded).toEqual([]);
@@ -224,7 +225,7 @@ describe("S08 — the rig opens as one Herdr space, 16 cells per tab", () => {
       if (m === "pane.list") return { type: "pane_list", panes };
       return { type: "ok" };
     });
-    const { svc } = service(new HerdrAdapter({ transportFactory: () => transport }));
+    const { svc } = service(new HerdrAdapter({ transportFactory: () => transport, platform: "linux" }));
     const res = await svc.openView({ view: `rig:${RIG}` });
     expect(res.opened).toHaveLength(16);
     expect(res.degraded.map((d) => d.seat)).toEqual([rows[16]!.canonicalSessionName]);
@@ -246,7 +247,7 @@ describe("S08 correction — the starting tab is kept unless it is known blank",
       if (m === "pane.list") return { type: "pane_list", panes: labels.map(label => ({ tab_id: "t2", label })) };
       return { type: "ok" };
     });
-    const { svc } = service(new HerdrAdapter({ transportFactory: () => transport }));
+    const { svc } = service(new HerdrAdapter({ transportFactory: () => transport, platform: "linux" }));
     const res = await svc.openView({ view: `rig:${RIG}` });
     expect(closes(requests)).toEqual([]);
     expect(requests.find((r) => r.method === "tab.focus")!.params).toEqual({ tab_id: "t2" });
@@ -257,7 +258,7 @@ describe("S08 correction — the starting tab is kept unless it is known blank",
 
   it("no page reports a tab id: no focus or close, with direct attach recovery", async () => {
     const { transport, requests } = herdrTransport((m) => (m === "workspace.create" ? create : { type: "l" }));
-    const { svc } = service(new HerdrAdapter({ transportFactory: () => transport }));
+    const { svc } = service(new HerdrAdapter({ transportFactory: () => transport, platform: "linux" }));
     const res = await svc.openView({ view: `rig:${RIG}` });
     expect(requests.map((r) => r.method)).toEqual(["workspace.list", "workspace.create", "layout.apply", "layout.apply"]);
     expect(res.ok).toBe(false);
@@ -285,7 +286,7 @@ describe("S08 correction — the starting tab is kept unless it is known blank",
       if (m === "pane.list") return { type: "pane_list", panes: labels.map(label => ({ tab_id: "t2", label })) };
       return { type: "ok" };
     });
-    const { svc } = service(new HerdrAdapter({ transportFactory: () => transport }));
+    const { svc } = service(new HerdrAdapter({ transportFactory: () => transport, platform: "linux" }));
     const res = await svc.openView({ view: `rig:${RIG}` });
     expect(closes(requests)).toEqual([]);
     expect(res.opened).toEqual([rows[16]!.canonicalSessionName]);
@@ -295,7 +296,7 @@ describe("S08 correction — the starting tab is kept unless it is known blank",
 
   it("every page fails: nothing is focused or closed", async () => {
     const { transport, requests } = herdrTransport((m) => { if (m === "workspace.create") return create; throw new Error("refused"); });
-    const { svc } = service(new HerdrAdapter({ transportFactory: () => transport }));
+    const { svc } = service(new HerdrAdapter({ transportFactory: () => transport, platform: "linux" }));
     const res = await svc.openView({ view: `rig:${RIG}` });
     expect(requests.map((r) => r.method)).toEqual(["workspace.list", "workspace.create", "layout.apply", "layout.apply"]);
     expect(res.opened).toEqual([]);
@@ -304,7 +305,7 @@ describe("S08 correction — the starting tab is kept unless it is known blank",
 
   it("all pages known and none is the starting tab: the close still happens", async () => {
     const { transport, requests } = herdrTransport();
-    const { svc } = service(new HerdrAdapter({ transportFactory: () => transport }));
+    const { svc } = service(new HerdrAdapter({ transportFactory: () => transport, platform: "linux" }));
     const res = await svc.openView({ view: `rig:${RIG}` });
     expect(closes(requests).map((r) => r.params)).toEqual([{ tab_id: "w1:t0" }]);
     expect(res.notes).toEqual([TEAM_HANDOFF_NOTE]);
@@ -316,7 +317,7 @@ describe("S08 correction — catalog pages match the Herdr open", () => {
   const saved = { id: "ten", name: "Ten", members: ten.map((r) => ({ seat: r.canonicalSessionName, tmuxSession: r.tmuxSession })) };
   function catalogService(batch: boolean): TerminalService {
     const { transport } = herdrTransport();
-    const herdr = new HerdrAdapter({ transportFactory: () => transport });
+    const herdr = new HerdrAdapter({ transportFactory: () => transport, platform: "linux" });
     return new TerminalService({
       resolveProvider: (n) => (n === "herdr" ? herdr : null),
       viewsStore: { get: (id) => (id === "ten" ? saved : null), list: () => [saved] },
@@ -342,7 +343,7 @@ describe("S08 correction — catalog pages match the Herdr open", () => {
 describe("S08 — cmux is unchanged", () => {
   it("cmux still pages at the default 9 and keeps its 12-per-workspace and 2-column limits", async () => {
     const { transport } = herdrTransport();
-    const { svc, cmux } = service(new HerdrAdapter({ transportFactory: () => transport }));
+    const { svc, cmux } = service(new HerdrAdapter({ transportFactory: () => transport, platform: "linux" }));
     await svc.openView({ view: `rig:${RIG}`, provider: "cmux" });
     expect(cmux.last!.pages.map((p) => p.length)).toEqual([9, 8]);
     expect(PANES_PER_PAGE).toBe(9);
@@ -361,7 +362,7 @@ describe("desktop Herdr endpoint", () => {
     const { transport } = herdrTransport();
     transport.probe = async () => ({ alive });
     const launch = { socketPath: "/fixture/daemon/herdr.sock", session: "fixture-daemon" };
-    const adapter = new HerdrAdapter({ transportFactory: () => transport, launch });
+    const adapter = new HerdrAdapter({ transportFactory: () => transport, platform: "linux", launch });
     expect(await adapter.status()).toMatchObject({ available: alive, launch });
   });
 });

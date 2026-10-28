@@ -11,8 +11,19 @@ const restoreScript = path.join(skillRoot, "scripts", "restore-from-jsonl.mjs");
 // /tmp/claude-compaction-restore (production), but becomes per-run isolated when the
 // hermetic env-var OPENRIG_COMPACTION_OUT_ROOT is set — so concurrent writers with the
 // same injected clock + sessionId no longer collide on the same `${sessionId}-${stamp}`
-// dir. Mirrors the injectable-clock seam (OPENRIG_TEST_CLOCK_NOW). Empty/absent = /tmp.
-const outRoot = process.env.OPENRIG_COMPACTION_OUT_ROOT || "/tmp/claude-compaction-restore";
+// dir. Mirrors the injectable-clock seam (OPENRIG_TEST_CLOCK_NOW). Empty/absent = the shared default.
+// Git for Windows mounts /tmp at %TEMP% (os.tmpdir()), so Node and Claude's Git Bash name one folder.
+const defaultOutRoot = process.platform === "win32" ? path.join(os.tmpdir(), "claude-compaction-restore") : "/tmp/claude-compaction-restore";
+const outRoot = process.env.OPENRIG_COMPACTION_OUT_ROOT || defaultOutRoot;
+// The folder as one shell word for the restore command below; forward slashes survive Git Bash and PowerShell.
+// Single quotes keep $ and ` literal in both; a folder with an apostrophe (C:\Users\O'Brien) takes double
+// quotes instead, or, if it also holds $ or `, the Git Bash form the command's ~ already assumes.
+const windowsShellWord = (value) => {
+  if (!value.includes("'")) return `'${value}'`;
+  if (!/[$`]/.test(value)) return `"${value}"`;
+  return `'${value.replaceAll("'", "'\\''")}'`;
+};
+const defaultOutArg = process.platform === "win32" ? windowsShellWord(defaultOutRoot.replaceAll("\\", "/")) : defaultOutRoot;
 const defaultRestoreInstruction =
   "Read the claude-compaction-restore skill and follow its \"If You Just Compacted\" protocol.";
 
@@ -276,7 +287,7 @@ try {
   }
 
   const parsed = JSON.parse(result.stdout);
-  const baseRestore = `Pre-compaction restore seed packet prepared at ${parsed.outputDir}. This hook output is informational. After compaction, OpenRig may send a later normal user message asking you to restore from this packet; treat that later normal user message as the action request. The restore protocol is: load/read the claude-compaction-restore skill, run "node ~/.claude/skills/claude-compaction-restore/scripts/restore-from-jsonl.mjs --out /tmp/claude-compaction-restore --json" yourself when needed, read the generated restore-instructions.md, read the generated touched-files.md, identify remembered important files, read those files in full, read root/as-built/codemap docs before real work, then reply with "restored from packet at <path>; resumed at step <X>" with the files you read in full. If any step fails, report the failure explicitly.`;
+  const baseRestore = `Pre-compaction restore seed packet prepared at ${parsed.outputDir}. This hook output is informational. After compaction, OpenRig may send a later normal user message asking you to restore from this packet; treat that later normal user message as the action request. The restore protocol is: load/read the claude-compaction-restore skill, run "node ~/.claude/skills/claude-compaction-restore/scripts/restore-from-jsonl.mjs --out ${defaultOutArg} --json" yourself when needed, read the generated restore-instructions.md, read the generated touched-files.md, identify remembered important files, read those files in full, read root/as-built/codemap docs before real work, then reply with "restored from packet at <path>; resumed at step <X>" with the files you read in full. If any step fails, report the failure explicitly.`;
   const markerPath = writePendingRestoreMarker(input, parsed, baseRestore, customMessage);
   emit({
     continue: true,

@@ -151,12 +151,28 @@ describe("HistoryQuery", () => {
 
       const exec: ExecDep = vi.fn(async () => ({ stdout: "", exitCode: 2 }));
 
-      const hq = new HistoryQuery({ transcriptsRoot: tmpDir, exec });
+      const hq = new HistoryQuery({ transcriptsRoot: tmpDir, exec, platform: "linux" });
       const result = await hq.search("my-rig", "deployment strategy");
 
       expect(result.insufficient).toBe(true);
       expect(result.backend).toBe("none");
       expect(result.error).toContain("both failed");
+    });
+
+    it("on Windows, whose Git install keeps grep off PATH, reads the transcripts itself when rg and grep fail", async () => {
+      const rigDir = join(tmpDir, "my-rig");
+      mkdirSync(rigDir, { recursive: true });
+      writeFileSync(join(rigDir, "dev.log"), "setup done\r\nThe Deployment started\r\nunrelated\r\n");
+      writeFileSync(join(rigDir, "qa.log"), "strategy (a+b) review\n");
+      writeFileSync(join(rigDir, "notes.txt"), "deployment outside the logs\n");
+      const exec: ExecDep = vi.fn(async () => ({ stdout: "", exitCode: 2 }));
+
+      const hq = new HistoryQuery({ transcriptsRoot: tmpDir, exec, platform: "win32" });
+      const result = await hq.search("my-rig", "deployment strategy (a+b)");
+
+      expect(result).toMatchObject({ backend: "read", insufficient: false });
+      expect(result.excerpts.sort()).toEqual(["The Deployment started", "strategy (a+b) review"]);
+      expect(result.error).toBeUndefined();
     });
 
     it("strips ANSI from excerpts", async () => {

@@ -61,11 +61,15 @@ describe("TUI desktop terminal action", () => {
       }; },
     } as unknown as DaemonClient;
     snap = await hydrateSnapshot(client, undefined, null, null, null, view.get());
-    const text = terminalLines(view.get(), snap, 1000).map(line => line.text).join("\n");
+    const text = terminalLines(view.get(), snap, 1000, "linux").map(line => line.text).join("\n");
     expect(text).toContain(action.view);
     expect(text).toContain("Headless or remote: open a NEW terminal/tab");
     expect(text).toContain("http://selected.example:7654");
     expect(text).toContain("env -u TMUX ssh -t viewer@other.example \"tmux attach -r -t '=seat with spaces'\"");
+    // Windows PowerShell has no env: the same words, re-quoted, with TMUX cleared.
+    const windows = terminalLines(view.get(), snap, 1000, "win32").map(line => line.text).join("\n");
+    expect(windows).toContain("Remove-Item Env:TMUX -ErrorAction SilentlyContinue; & ssh -t 'viewer@other.example' 'tmux attach -r -t ''=seat with spaces'''");
+    expect(windows).not.toContain("env -u TMUX");
     expect(reads).toEqual(["catalog", action.view]);
     expect(f.calls()).toHaveLength(1);
   });

@@ -1,9 +1,15 @@
 import { readFileSync } from "node:fs";
 import { parse } from "yaml";
 
+/** Whether a context ref names `file` in some folder. Windows refs, which compile from the
+ * project's native root, may also separate with "\". */
+export function contextRefNames(ref: string, file: string, platform: NodeJS.Platform = process.platform): boolean {
+  return ref.endsWith("/" + file) || (platform === "win32" && ref.endsWith("\\" + file));
+}
+
 /** Agent planning is current guidance, not a second executable graph or status store. */
 export function workflowPlanningContext(contextRefs: string[] | undefined, instanceId: string): string[] {
-  const mission = contextRefs?.find(ref => ref.endsWith("/mission.yaml"));
+  const mission = contextRefs?.find(ref => contextRefNames(ref, "mission.yaml"));
   if (!mission) return [];
   const lines = [
     "Workflow plan: The plan can change. Inspect authored versus running steps with rig workflow revise " + instanceId + "; file edits alone do not adopt a revision.",

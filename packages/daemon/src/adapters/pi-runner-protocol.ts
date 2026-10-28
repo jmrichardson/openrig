@@ -211,7 +211,7 @@ export function buildPiChildEnv(
     // OS process/runtime locations, not provider credentials. Node and native
     // dependencies require SystemRoot; gh uses APPDATA to locate the existing
     // Windows login configuration. The Pi directory remains explicitly pinned.
-    for (const name of ["SystemRoot", "SYSTEMROOT", "WINDIR", "ComSpec", "COMSPEC", "PATHEXT", "TEMP", "TMP", "USERPROFILE", "APPDATA", "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"]) {
+    for (const name of ["SystemRoot", "SYSTEMROOT", "WINDIR", "ComSpec", "COMSPEC", "PATHEXT", "TEMP", "TMP", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "ProgramData", "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"]) {
       if (source[name] !== undefined) env[name] = source[name]!;
     }
   }
@@ -233,6 +233,9 @@ export function buildPiChildEnv(
     // and ~/.env. Project cwd/.env remains an OMP discovery surface. The
     // runner resolves the OMP binary before this HOME applies.
     env.HOME = nodePath.dirname(opts.agentDir);
+    // Windows runtimes resolve os.homedir() from USERPROFILE, not HOME.
+    // Keep both pointing at the seat so the operator's ~/.omp cannot leak in.
+    if ((opts.platform ?? process.platform) === "win32") env.USERPROFILE = env.HOME;
     // OMP seats also pin their managed identity and daemon locator from the
     // runner's own arguments (never the hook token, which belongs to the
     // runner's POST client).

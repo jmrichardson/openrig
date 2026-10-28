@@ -28,12 +28,15 @@ export function isFixtureScopedHome(home: string): boolean {
   // 1. Explicit sentinel marker file in the home — the most honest signal.
   if (existsSync(join(home, FIXTURE_HOME_MARKER))) return true;
   // 2. Temp-path QA-fixture convention: an `openrig-qa*` home under a
-  //    system temp root.
-  const tempRoots = [tmpdir(), "/tmp", "/private/tmp", "/var/folders"];
+  //    system temp root. Windows paths may use either separator, so compare
+  //    them in the forward-slash form the convention is written in.
+  const win32 = process.platform === "win32";
+  const candidate = win32 ? home.replaceAll("\\", "/") : home;
+  const tempRoots = [win32 ? tmpdir().replaceAll("\\", "/") : tmpdir(), "/tmp", "/private/tmp", "/var/folders"];
   const underTemp = tempRoots.some(
-    (root) => home === root || home.startsWith(root.endsWith("/") ? root : `${root}/`),
+    (root) => candidate === root || candidate.startsWith(root.endsWith("/") ? root : `${root}/`),
   );
-  return underTemp && /(^|\/)openrig-qa[^/]*/.test(home);
+  return underTemp && /(^|\/)openrig-qa[^/]*/.test(candidate);
 }
 
 export function getOpenRigHome(): string {

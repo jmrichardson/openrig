@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Command } from "commander";
@@ -27,13 +27,19 @@ beforeEach(() => {
   fixture.home = mkdtempSync(path.join(tmpdir(), "openrig-doctor-executor-"));
   vi.stubEnv("OPENRIG_HOME", fixture.home);
   vi.stubEnv("CODEX_HOME", path.join(fixture.home, "codex"));
+  if (process.platform === "win32") {
+    // Native Windows recognises Claude Code by a claude.exe on PATH, as the daemon does.
+    mkdirSync(path.join(fixture.home, "bin"));
+    writeFileSync(path.join(fixture.home, "bin", "claude.exe"), "");
+    vi.stubEnv("PATH", path.join(fixture.home, "bin"));
+  }
   vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false })));
   vi.spyOn(console, "log").mockImplementation(() => {});
   fixture.exec.mockReset().mockImplementation((command: string, options: { timeout?: number }) => {
     // Deterministic slow-success discriminator: a newly imposed deadline would
     // turn an otherwise successful existing tmux probe into a failure.
     if (command.startsWith("tmux ") && options.timeout !== undefined) throw new Error("ETIMEDOUT: synthetic slow successful probe");
-    if (command === "tmux -V") return "tmux 3.4";
+    if (command === "tmux -V") return process.platform === "win32" ? "tmux 3.4.0\npsmux 3.4.0" : "tmux 3.4";
     if (command === "tmux show-options -gqv mouse") return "on";
     if (command === "cmux capabilities --json") return '{"capabilities":[]}';
     return "available";
@@ -60,7 +66,7 @@ describe("doctor default executor", () => {
     expect(prior.some(([command]) => command === "tmux list-sessions")).toBe(true);
     expect(prior.every(([,options]) => !Object.hasOwn(options, "timeout"))).toBe(true);
     const auth = calls.filter(([command]) => /^(claude|codex) /.test(command));
-    expect(auth.map(([command]) => command)).toEqual(["claude --version", "claude auth status", "codex --version", "codex login status"]);
+    expect(auth.map(([command]) => command)).toEqual([...(process.platform === "win32" ? [] : ["claude --version"]), "claude auth status", "codex --version", "codex login status"]);
     expect(auth.every(([,options]) => options.timeout === 30_000)).toBe(true);
   });
 

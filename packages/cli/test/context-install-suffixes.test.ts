@@ -29,6 +29,14 @@ describe("install and serving agree on context-pack text assets", () => {
     expect(() => parseManifest(raw, path)).toThrow(/unsupported suffix/);
     expect(() => validateContextPackManifestForInstall(path)).toThrow(/unsupported suffix/);
   });
+
+  it.each(["C:notes.md", "c:sub/notes.md"])("refuses the drive-relative path %s on Windows before install", (relativePath) => {
+    const path = join(root, "manifest.yaml");
+    writeFileSync(path, `name: helpers\nversion: 1.0.0\ntaxonomy: world\nfiles:\n  - path: ${relativePath}\n    role: reference\n`);
+    expect(() => validateContextPackManifestForInstall(path, "win32")).toThrow(/must be a relative path inside the pack/);
+    // POSIX keeps its existing rule: a colon is an ordinary file-name character there.
+    expect(() => validateContextPackManifestForInstall(path, "linux")).not.toThrow();
+  });
 });
 
 

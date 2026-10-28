@@ -33,7 +33,7 @@ Paths in backticks are relative to the repository root.
 | MCP | `createMcpServer()` in `packages/cli/src/mcp-server.ts`; stdio command in `packages/cli/src/commands/mcp.ts`. |
 | Terminal UI | `packages/tui/src/main.ts`, `packages/tui/src/state.ts`, `packages/tui/src/render.ts`; HTTP in `packages/tui/src/daemon-client.ts`. |
 | Web UI | `packages/ui/src/main.tsx`, `packages/ui/src/routes.tsx`. |
-| npm assembly | `scripts/build-package.sh`, `scripts/rewrite-daemon-imports.mjs`, `packages/cli/package.json`. |
+| npm assembly | `scripts/build-package.sh` (on native Windows `npm run build:package:windows` runs it under Git Bash through `scripts/run-package-build.mjs`), `scripts/rewrite-daemon-imports.mjs`, `packages/cli/package.json`. |
 
 The daemon's route handlers obtain domain services from request context. `startup.ts` constructs
 those services, repositories and runtime adapters; `server.ts` wires them into the application.

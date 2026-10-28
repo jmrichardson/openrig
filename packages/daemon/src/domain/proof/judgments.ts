@@ -8,6 +8,7 @@ import { validateMissionComposition } from "../lifecycle-manifest.js";
 import type { ScopeFsDeps } from "../scope/scope-view-projection.js";
 import { resolveNodeFileVia } from "../scope/node-file.js";
 import { parseFrontmatter } from "../slices/slice-indexer.js";
+import { isPathInsideRoot } from "../cwd-resolution.js";
 
 /** Addressed Markdown owns judgments. These views are rebuilt, never written upstream. */
 export type JudgmentVerdict = "accept" | "reject" | "withdraw";
@@ -128,7 +129,9 @@ function ledger(dir: string, io: ScopeFsDeps): Judgment[] {
     const expected = `${String(receipts.length + 1).padStart(8, "0")}.md`;
     if (name !== expected) throw new JudgmentError("journal_conflict", `${home}: expected ${expected}, found ${name}; inspect retained receipts`);
     const raw = io.readFile(path.join(home, name));
-    const fm = raw && /^---\n([\s\S]*?)\n---(?:\n|$)/.exec(raw);
+    // A Git for Windows checkout (core.autocrlf) rewrites committed receipts with CRLF; other
+    // platforms keep the LF-only match.
+    const fm = raw && (process.platform === "win32" ? /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/ : /^---\n([\s\S]*?)\n---(?:\n|$)/).exec(raw);
     if (!fm) throw new JudgmentError("journal_invalid", `${home}/${name}: incomplete judgment`);
     const obj = mapping(YAML.parse(fm[1]!), name), { id, ...payload } = obj;
     if (id !== hash(payload) || obj.version !== 1 || obj.sequence !== receipts.length + 1 || typeof obj.itemId !== "string" || typeof obj.itemRevision !== "string" || typeof obj.policyRevision !== "string" || typeof obj.actor !== "string" || typeof obj.operationId !== "string" || typeof obj.intent !== "string" || !["accept", "reject", "withdraw"].includes(String(obj.verdict)) || !Array.isArray(obj.evidence)) throw new JudgmentError("journal_invalid", `${home}/${name}: malformed or changed judgment; inspect history`);
@@ -148,14 +151,18 @@ function contained(root: string, target: string): string {
   let existing = requested;
   while (!fs.existsSync(existing)) existing = path.dirname(existing);
   const full = path.resolve(fs.realpathSync(existing), path.relative(existing, requested));
-  if (full !== base && !full.startsWith(base + path.sep)) throw new JudgmentError("path_escape", `Path escapes ${base}; paths must stay within the selected workspace`);
+  // Windows realpathSync keeps each caller's casing (c:\ vs C:\), so compare segments there.
+  const escapes = process.platform === "win32" ? !isPathInsideRoot(full, base) : full !== base && !full.startsWith(base + path.sep);
+  if (escapes) throw new JudgmentError("path_escape", `Path escapes ${base}; paths must stay within the selected workspace`);
   return full;
 }
 export function evidenceAt(root: string, dir: string, ref: string): Evidence {
   if (!ref || typeof ref !== "string") throw new JudgmentError("evidence_required", "Reference readable evidence under the project workspace");
   const { ref: file, headerPath } = parseAddress(ref);
   const fragment = headerPath.join("/");
-  const target = contained(root, path.isAbsolute(file!) ? file! : file!.startsWith("missions/") ? file! : path.resolve(dir, file!));
+  // A Windows ref may also separate with "\", as PowerShell completion writes it.
+  const fromWorkspace = file!.startsWith("missions/") || (process.platform === "win32" && file!.startsWith("missions\\"));
+  const target = contained(root, path.isAbsolute(file!) ? file! : fromWorkspace ? file! : path.resolve(dir, file!));
   if (!fs.existsSync(target) || !fs.statSync(target).isFile()) throw new JudgmentError("evidence_missing", `Evidence is unavailable: ${ref}`);
   const bytes = fs.readFileSync(target);
   let addressed: Buffer | string = bytes;
@@ -270,7 +277,7 @@ export function recordJudgment(missionsRoot: string, input: JudgeInput, actor: s
   }
   const latest = receipts.filter(r => r.itemId === item.id).at(-1);
   if (input.expectedRevision !== item.revision || input.expectedPrevious !== (latest?.id ?? null)) throw new JudgmentError("revision_conflict", "Item or correction changed; inspect rig proof show and judge the current evidence", 409);
-  const payload = { version: 1 as const, scope: path.relative(root, dir).split(path.sep).join("/"), sequence: receipts.length + 1, operationId, itemId: item.id, itemRevision: item.revision, policyRevision: current.policy.revision, policySource: path.relative(root, current.policy.source), previous: latest?.id ?? null, actor, provenance, at: new Date().toISOString(), verdict: input.verdict, reason: input.reason, evidence, subject, intent };
+  const payload = { version: 1 as const, scope: path.relative(root, dir).split(path.sep).join("/"), sequence: receipts.length + 1, operationId, itemId: item.id, itemRevision: item.revision, policyRevision: current.policy.revision, policySource: path.relative(root, current.policy.source).split(path.sep).join("/"), previous: latest?.id ?? null, actor, provenance, at: new Date().toISOString(), verdict: input.verdict, reason: input.reason, evidence, subject, intent };
   const judgment: Judgment = { ...payload, id: hash(payload) };
   const home = contained(root, path.join(dir, "proof", "judgments"));
   fs.mkdirSync(home, { recursive: true });

@@ -90,8 +90,8 @@ describe("queue whoami role binding", () => {
     expect(result.note).toContain("record write");
     expect(result.note).toContain("not");
     expect(result.files[0]).toMatchObject({ ownerRoot, absolutePath: ownerRoot + "/" + path });
-    expect(result.files[0].resolvedPath).toContain("/packages/daemon/specs/rigs/launch/kernel/agents/advisor/lead/guidance/role.md");
-    expect(result.files[0].resolvedPath).not.toContain("/old/");
+    expect(result.files[0].resolvedPath).toContain(join("/packages/daemon/specs/rigs/launch/kernel/agents/advisor/lead/guidance/role.md"));
+    expect(result.files[0].resolvedPath).not.toContain(join("/old/"));
     expect(JSON.parse((f.db.prepare("SELECT resolved_files_json FROM node_startup_context WHERE node_id=?").get(a) as any).resolved_files_json)[0].ownerRoot).toBe(ownerRoot);
   });
   it("keeps an existing development-checkout role at its recorded path", async () => {

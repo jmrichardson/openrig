@@ -5,6 +5,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import Database from "better-sqlite3";
 import { runAsyncSite } from "./sync-site-wrap.js";
+import { readWindowsProcessFacts } from "./windows-process-facts.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -30,6 +31,10 @@ export interface CodexThreadEvidence {
 export type ResolveHomeDirByPid = (pid: number) => Promise<string | undefined> | string | undefined;
 
 export async function defaultResolveHomeDirByPid(pid: number): Promise<string | undefined> {
+  if (process.platform === "win32") {
+    const facts = await readWindowsProcessFacts(pid);
+    return facts?.env.HOME || facts?.env.USERPROFILE || undefined;
+  }
   try {
     // BSD/macOS `ps` supports `eww` to expose the full process environment.
     // If OpenRig grows a Linux daemon target, this likely needs a /proc-based path.
@@ -394,6 +399,12 @@ function readCodexThreadIdFromLogs(
  *  back to the ungated read rather than inventing a gate). */
 export function lstartToMinTs(identity: string | undefined): number | undefined {
   if (!identity) return undefined;
+  // CIM provides UTC ISO timestamps. Preserve the same conservative whole-second
+  // ownership boundary as ps so recycled PIDs never recover an earlier conversation.
+  if (process.platform === "win32" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(identity)) {
+    const parsed = Date.parse(identity);
+    return Number.isFinite(parsed) ? Math.floor(parsed / 1000) : undefined;
+  }
   const m = identity.match(/^\w{3}\s+(\w{3})\s+(\d+)\s+(\d{2}:\d{2}:\d{2})\s+(\d{4})$/);
   if (!m) return undefined;
   const parsed = Date.parse(`${m[1]} ${m[2]}, ${m[4]} ${m[3]}`);

@@ -1235,13 +1235,16 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
       const resolved = resolveWindowsPiCommand(process.env.PATH ?? "", process.execPath);
       command = resolved.command;
       prefix = resolved.prefix;
-    } catch {
-      console.error("[pi-runner] ERROR Windows Pi requires a native executable or a recognized @earendil-works npm installation on the runner PATH.");
+    } catch (error) {
+      console.error(`[pi-runner] ERROR Windows Pi requires a native executable or a recognized @earendil-works npm installation on the runner PATH (${(error as Error).message}).`);
+      // As for OMP above: record the exit for this launch so the adapter fails it now. The durable cursor survives.
       const at = new Date().toISOString();
-        let prior: PiRunnerState | null = null;
-        try { prior = parsePiRunnerState(fs.readFileSync(paths.runnerStatePath, "utf8")); } catch { /* unavailable cursor */ }
+      let prior: PiRunnerState | null = null;
+      try { prior = parsePiRunnerState(fs.readFileSync(paths.runnerStatePath, "utf8")); } catch { /* unavailable cursor */ }
+      try {
         fs.writeFileSync(paths.runnerStatePath, JSON.stringify({ ready: false, launchId: args.launchId, updatedAt: at,
           ...(prior?.lastEntryId ? { lastEntryId: prior.lastEntryId } : {}), exited: { code: 127, at } }));
+      } catch { /* the pane ERROR marker still fails readiness */ }
       process.exitCode = 127;
       return;
     }

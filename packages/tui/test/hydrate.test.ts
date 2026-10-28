@@ -707,6 +707,39 @@ describe("snapshot hydration over the §4.A reads (Phase 2)", () => {
     expect(snap.specs.find((s) => s.name === "conveyor")?.kind).toBe("workflow");
   });
 
+  const windowsAgentRefs = ["local:..\\..\\..\\agents\\development\\implementer", "path:C:\\work\\agents\\implementer.yaml", "path:\\\\host\\share\\agents\\implementer\\"];
+  async function hydrateWithAgentRef(ref: string, platform: NodeJS.Platform) {
+    const responses: Record<string, unknown> = {};
+    for (const route of ["/api/specs/library/a1/review", "/api/rigs/01JRIG/spec.json"]) {
+      responses[route] = JSON.parse(JSON.stringify(FIXTURES[route]).replaceAll(
+        "local:../../../agents/development/implementer", JSON.stringify(ref).slice(1, -1),
+      ));
+    }
+    const original = process.platform;
+    Object.defineProperty(process, "platform", { value: platform, configurable: true });
+    try {
+      return await hydrateSnapshot(fixtureClient({}, responses));
+    } finally {
+      Object.defineProperty(process, "platform", { value: original, configurable: true });
+    }
+  }
+
+  it.each(windowsAgentRefs)("joins the Windows agent ref %s to the same catalog identity on win32", async (ref) => {
+    const snap = await hydrateWithAgentRef(ref, "win32");
+    expect(snap.specs.find(s => s.name === "myrig")?.agentRefs).toEqual(["implementer", "qa-agent"]);
+    expect(snap.specs.find(s => s.name === "myrig")).toMatchObject({ pods: [{ members: [{ agentRef: "implementer" }, { agentRef: "qa-agent" }] }] });
+    expect(snap.specs.find(s => s.name === "implementer")?.usedByRigs).toEqual(["myrig"]);
+  });
+
+  it.each(["linux", "darwin"] as const)("keeps a backslash agent ref as authored on %s", async (platform) => {
+    for (const ref of ["local:agents\\implementer", ...windowsAgentRefs]) {
+      const snap = await hydrateWithAgentRef(ref, platform);
+      expect(snap.specs.find(s => s.name === "myrig")?.agentRefs).toEqual([ref, "qa-agent"]);
+      expect(snap.specs.find(s => s.name === "myrig")).toMatchObject({ pods: [{ members: [{ agentRef: ref }, { agentRef: "qa-agent" }] }] });
+      expect(snap.specs.find(s => s.name === "implementer")?.usedByRigs).toEqual([]);
+    }
+  });
+
   it("PULSE BLOCKED: resolves blockedOn (qitem id) to the blocker's OWNER via GET /:qitemId; human-park skipped; a miss degrades QUIETLY", async () => {
     const blockedList = [
       // agent-block: blockedOn is a qitem POINTER → resolves to the owner

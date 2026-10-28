@@ -17,7 +17,7 @@ import type { ClaudeCompactionPolicy, SettingsStore } from "../src/domain/user-s
 
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, dirname } from "node:path";
+import { join, dirname, sep } from "node:path";
 const fixtureHomes: string[] = [];
 // The home these tests pass explicitly (and assert in prompt text). A fixed path such as
 // /tmp/openrig-test-home accumulates files across runs and fails when that path is a file,
@@ -1115,7 +1115,7 @@ describe("ClaudeCompactionEnforcer", () => {
     it("guided sequence for one seat: below-threshold trigger sends prep → /compact (trust-bridge), then the EXISTING poll drains restore→audit (no second path)", async () => {
       const settings = makeSettingsStore(POLICY_ENABLED_AT_80);
       const { transport, send } = makeSessionTransport();
-      const enforcer = new ClaudeCompactionEnforcer(settings, transport, { openrigHome: HOME });
+      const enforcer = new ClaudeCompactionEnforcer(settings, transport, { openrigHome: testHome });
 
       const outcome = await enforcer.triggerManualCompact({
         sessionName: SEAT,
@@ -1214,7 +1214,7 @@ describe("ClaudeCompactionEnforcer", () => {
       it("sequential call after compact-sent but before the back-half drains: no second prep, no second /compact", async () => {
         const settings = makeSettingsStore(POLICY_ENABLED_AT_80);
         const { transport, send } = makeSessionTransport();
-        const enforcer = new ClaudeCompactionEnforcer(settings, transport, { openrigHome: HOME });
+        const enforcer = new ClaudeCompactionEnforcer(settings, transport, { openrigHome: testHome });
 
         expect(await enforcer.triggerManualCompact({ sessionName: SEAT, runtime: "claude-code", usedPercentage: 20 }))
           .toEqual({ triggered: true, stage: "compact-sent" });
@@ -1258,7 +1258,7 @@ describe("ClaudeCompactionEnforcer", () => {
     it("threshold-independent + deterministic: runs the guided sequence even when auto-compaction is DISABLED, and the back-half still drains via the single path", async () => {
       const settings = makeSettingsStore(POLICY_DISABLED);
       const { transport, send } = makeSessionTransport();
-      const enforcer = new ClaudeCompactionEnforcer(settings, transport, { openrigHome: HOME });
+      const enforcer = new ClaudeCompactionEnforcer(settings, transport, { openrigHome: testHome });
 
       const outcome = await enforcer.triggerManualCompact({
         sessionName: SEAT, runtime: "claude-code", usedPercentage: 20, transcriptPath: "/tmp/claude.jsonl",
@@ -1285,7 +1285,7 @@ describe("ClaudeCompactionEnforcer", () => {
     it("GHOST-STAGE (a) PM-pin: an AUTOMATION-initiated manual trigger is NOT drain-exempt — a disabled tick drains nothing (no laundering bypass)", async () => {
       const settings = makeSettingsStore(POLICY_DISABLED);
       const { transport, send } = makeSessionTransport();
-      const enforcer = new ClaudeCompactionEnforcer(settings, transport, { openrigHome: HOME });
+      const enforcer = new ClaudeCompactionEnforcer(settings, transport, { openrigHome: testHome });
 
       // Automation calls the manual verb WITHOUT operator initiation (fail-safe default). The verb
       // still runs (prep + /compact), but the resulting stage must NOT be drain-exempt — otherwise
@@ -1404,7 +1404,7 @@ describe("ClaudeCompactionEnforcer", () => {
       const { transport, send } = makeSessionTransport();
       const enforcer = new ClaudeCompactionEnforcer(settings, transport, {
         dedupWindowMs: 60_000,
-        openrigHome: HOME,
+        openrigHome: testHome,
       });
 
       let now = 1_700_000_000_000;
@@ -1477,7 +1477,7 @@ describe("ClaudeCompactionEnforcer", () => {
         return { ok: true };
       });
       const transport = { send } as unknown as SessionTransport;
-      const enforcer = new ClaudeCompactionEnforcer(settings, transport, { openrigHome: HOME });
+      const enforcer = new ClaudeCompactionEnforcer(settings, transport, { openrigHome: testHome });
 
       const isRestore = (c: unknown[]) =>
         typeof c[1] === "string" && (c[1] as string).includes("Please respond to this normal user message now");

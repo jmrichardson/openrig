@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import nodePath from "node:path";
 import { routePlugins, type PluginsRouterFsOps, type RoutePluginsInput } from "../src/domain/bundle-plugins-router.js";
 
 // Item 6 / slice-05 Checkpoint 7.3c: bundle-plugins-router pure-function tests.
@@ -20,8 +21,8 @@ function mockFs(initial: { dirs?: string[]; files?: Record<string, string> } = {
   };
 }
 
-const BUNDLE_ROOT = "/bundle/root";
-const TARGET = "/operator/.openrig/plugins";
+const BUNDLE_ROOT = nodePath.resolve("/bundle/root");
+const TARGET = nodePath.resolve("/operator/.openrig/plugins");
 
 function makeInput(overrides?: Partial<RoutePluginsInput>): RoutePluginsInput {
   return {
@@ -44,7 +45,7 @@ describe("routePlugins", () => {
 
   // P2: single plugin routes end-to-end
   it("routes one plugin: copyDir called from source to target/<id>", () => {
-    const fs = mockFs({ dirs: [`${BUNDLE_ROOT}/plugins/gstack`] });
+    const fs = mockFs({ dirs: [nodePath.join(BUNDLE_ROOT, "plugins/gstack")] });
     const result = routePlugins(
       makeInput({
         declaredPlugins: [{ id: "gstack", source: { kind: "local", path: "plugins/gstack" } }],
@@ -53,17 +54,17 @@ describe("routePlugins", () => {
     );
     expect(result.routedCount).toBe(1);
     expect(result.records[0]!.status).toBe("routed");
-    expect(result.records[0]!.installedAt).toBe(`${TARGET}/gstack`);
+    expect(result.records[0]!.installedAt).toBe(nodePath.join(TARGET, "gstack"));
     expect(fs._copyCalls).toHaveLength(1);
     expect(fs._copyCalls[0]).toEqual({
-      src: `${BUNDLE_ROOT}/plugins/gstack`,
-      dest: `${TARGET}/gstack`,
+      src: nodePath.join(BUNDLE_ROOT, "plugins/gstack"),
+      dest: nodePath.join(TARGET, "gstack"),
     });
   });
 
   // P3: multiple plugins
   it("routes multiple plugins each landing at target/<id>", () => {
-    const fs = mockFs({ dirs: [`${BUNDLE_ROOT}/plugins/a`, `${BUNDLE_ROOT}/plugins/b`] });
+    const fs = mockFs({ dirs: [nodePath.join(BUNDLE_ROOT, "plugins/a"), nodePath.join(BUNDLE_ROOT, "plugins/b")] });
     const result = routePlugins(
       makeInput({
         declaredPlugins: [
@@ -93,7 +94,7 @@ describe("routePlugins", () => {
 
   // P5: source path is a file (not a directory) is rejected
   it("source path that is a file (not directory) produces status=not_directory", () => {
-    const fs = mockFs({ files: { [`${BUNDLE_ROOT}/plugins/notadir.txt`]: "content" } });
+    const fs = mockFs({ files: { [nodePath.join(BUNDLE_ROOT, "plugins/notadir.txt")]: "content" } });
     const result = routePlugins(
       makeInput({
         declaredPlugins: [{ id: "x", source: { kind: "local", path: "plugins/notadir.txt" } }],
@@ -121,7 +122,7 @@ describe("routePlugins", () => {
   // P7: TARGET-side containment — plugin id that resolves outside target rejected
   // (banked both-sides-trust-boundary lesson applied)
   it("plugin id with traversal escapes target plugins library — status=unsafe (target containment)", () => {
-    const fs = mockFs({ dirs: [`${BUNDLE_ROOT}/plugins/legitsource`] });
+    const fs = mockFs({ dirs: [nodePath.join(BUNDLE_ROOT, "plugins/legitsource")] });
     const result = routePlugins(
       makeInput({
         declaredPlugins: [{ id: "../escape-id", source: { kind: "local", path: "plugins/legitsource" } }],
@@ -135,7 +136,7 @@ describe("routePlugins", () => {
 
   // P8: invalid plugin entry (missing id or wrong source.kind) rejected
   it("plugin reference with non-local source.kind rejected", () => {
-    const fs = mockFs({ dirs: [`${BUNDLE_ROOT}/plugins/x`] });
+    const fs = mockFs({ dirs: [nodePath.join(BUNDLE_ROOT, "plugins/x")] });
     const result = routePlugins(
       makeInput({
         declaredPlugins: [{ id: "x", source: { kind: "remote" as "local", path: "plugins/x" } }],
@@ -150,8 +151,8 @@ describe("routePlugins", () => {
   // P9: mixed list — routed + missing + unsafe + not_directory aggregate
   it("mixed plugin list aggregates by status correctly", () => {
     const fs = mockFs({
-      dirs: [`${BUNDLE_ROOT}/plugins/ok`],
-      files: { [`${BUNDLE_ROOT}/plugins/file.txt`]: "x" },
+      dirs: [nodePath.join(BUNDLE_ROOT, "plugins/ok")],
+      files: { [nodePath.join(BUNDLE_ROOT, "plugins/file.txt")]: "x" },
     });
     const result = routePlugins(
       makeInput({

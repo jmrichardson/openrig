@@ -28,7 +28,8 @@ describe("transcript reads during atomic capture publication", () => {
       let count = 0;
       while (!Atomics.load(stop, 0)) {
         fs.writeFileSync(workerData.target + '.next', count++ % 2 ? workerData.large : workerData.small);
-        fs.renameSync(workerData.target + '.next', workerData.target);
+        // Windows refuses to replace a file a reader holds open (EPERM); that publication is skipped.
+        try { fs.renameSync(workerData.target + '.next', workerData.target); } catch (error) { if (error.code !== 'EPERM') throw error; }
       }
     `, { eval: true, workerData: { target, large, small, flag } });
     let inconsistent = 0;

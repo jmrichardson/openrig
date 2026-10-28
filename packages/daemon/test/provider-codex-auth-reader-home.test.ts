@@ -18,7 +18,8 @@ vi.mock("node:os", async (importOriginal) => {
 
 const { readCodexAuthMetadata } = await import("../src/domain/provider/codex-auth-reader.js");
 
-describe("readCodexAuthMetadata — falsy HOME resolves under the account home (parity with the CLI)", () => {
+// Codex for Windows reads ~/.codex from USERPROFILE, never HOME or userInfo(); provider-codex-auth-reader.test.ts pins that path.
+describe.skipIf(process.platform === "win32")("readCodexAuthMetadata — falsy HOME resolves under the account home (parity with the CLI)", () => {
   let savedHome: string | undefined;
   let savedCodexHome: string | undefined;
 

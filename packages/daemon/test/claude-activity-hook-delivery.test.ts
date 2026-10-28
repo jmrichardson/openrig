@@ -20,7 +20,7 @@ import { ClaudeCodeAdapter, type ClaudeAdapterFsOps } from "../src/adapters/clau
 import { shellQuote } from "../src/adapters/shell-quote.js";
 import type { NodeBinding } from "../src/domain/runtime-adapter.js";
 import { readFileSync, existsSync, statSync } from "node:fs";
-import { basename, dirname, resolve as pathResolve } from "node:path";
+import { basename, dirname, join, resolve as pathResolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { planProjection, type ProjectionPlan, type ProjectionEntry } from "../src/domain/projection-planner.js";
 import { resolveNodeConfig, type ResolutionContext } from "../src/domain/profile-resolver.js";
@@ -31,8 +31,8 @@ const CWD = "/project";
 const RELAY_SRC = "/assets/plugins/openrig-core/hooks/scripts/activity-relay.cjs";
 const MANIFEST_SRC = "/assets/plugins/openrig-core/hooks/claude.json";
 const STATE_DIR = "/custom-instance/O'Brien";
-const RELAY_DEST = `${STATE_DIR}/state/claude-activity-hooks/activity-relay.cjs`;
-const SETTINGS = "/project/.claude/settings.local.json";
+const RELAY_DEST = pathResolve(STATE_DIR, "state", "claude-activity-hooks", "activity-relay.cjs");
+const SETTINGS = join(CWD, ".claude", "settings.local.json");
 // The concrete, absolute, shell-quoted leg-B firing shape — never ${CLAUDE_PLUGIN_ROOT}.
 const OWNED_CMD = `${shellQuote(process.execPath)} ${shellQuote(RELAY_DEST)}`;
 const OWNED_MARKER = "state/claude-activity-hooks/activity-relay.cjs";
@@ -148,7 +148,8 @@ function committedMode(filePath: string): string | null {
 // PRESERVES the source mode (no adapter chmod policy). So the SHIPPED asset itself must be
 // executable — this regression STATS the real committed asset, not a synthetic 0o755 fixture.
 describe("Claude activity-hook delivery — shipped relay asset executable mode (0755 contract)", () => {
-  it("the committed activity-relay.cjs asset is executable 0755 (so the preserved projection meets the contract)", () => {
+  // POSIX mode bits; Windows working trees report no execute bit.
+  it.skipIf(process.platform === "win32")("the committed activity-relay.cjs asset is executable 0755 (so the preserved projection meets the contract)", () => {
     const assetPath = pathResolve(import.meta.dirname, "../assets/plugins/openrig-core/hooks/scripts/activity-relay.cjs");
     const mode = statSync(assetPath).mode & 0o777;
     expect(mode & 0o111, `shipped relay mode is 0${mode.toString(8)}, expected executable`).not.toBe(0);
@@ -283,7 +284,7 @@ describe("Claude activity-hook delivery — instance path transition", () => {
       activityRelayPath: RELAY_SRC, claudeHooksManifestPath: MANIFEST_SRC });
     await other.project(plan([activityEntry()]), binding("/other-project"));
     expect(fs._store[RELAY_DEST]).toBe("// relay");
-    expect(fs._store["/other-instance/state/claude-activity-hooks/activity-relay.cjs"])
+    expect(fs._store[pathResolve("/other-instance", "state", "claude-activity-hooks", "activity-relay.cjs")])
       .toBe("// second installed version");
   });
 });
@@ -373,12 +374,12 @@ describe("Claude activity-hook delivery — cwd at the filesystem root", () => {
     const fs = enableFs();
     const res = await makeAdapter(fs).project(plan([activityEntry()]), binding("/"));
     expect(res.projected).toContain("claude-activity-hooks");
-    expect(allCommands(JSON.parse(fs._store["/.claude/settings.local.json"]!)).length).toBeGreaterThan(0);
+    expect(allCommands(JSON.parse(fs._store[join("/", ".claude", "settings.local.json")]!)).length).toBeGreaterThan(0);
   });
 
   it("an unwritable root reports skipped and names the filesystem root as the reason", async () => {
     const fs = enableFs();
-    fs.mkdirp = (p: string) => { if (p === "/.claude") throw new Error(`ENOENT: no such file or directory, mkdir '${p}'`); };
+    fs.mkdirp = (p: string) => { if (p === join("/", ".claude")) throw new Error(`ENOENT: no such file or directory, mkdir '${p}'`); };
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       const res = await makeAdapter(fs).project(plan([activityEntry()]), binding("/"));
@@ -397,7 +398,7 @@ describe("Claude activity-hook delivery — cwd at the filesystem root", () => {
 describe("Claude activity-hook delivery — ownership round-trips shellQuote (apostrophe cwd)", () => {
   it("cwd with an apostrophe (O'Brien): enable x2 keeps exactly one owned entry/event, disable strips all", async () => {
     const cwd = "/project/O'Brien";
-    const settingsPath = `${cwd}/.claude/settings.local.json`;
+    const settingsPath = join(cwd, ".claude", "settings.local.json");
     const ownedCmd = OWNED_CMD;
     const fs = enableFs();
     const adapter = makeAdapter(fs);

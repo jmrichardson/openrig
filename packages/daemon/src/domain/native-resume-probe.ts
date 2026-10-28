@@ -1,6 +1,14 @@
 import { currentClaudeMcpMenu } from "./claude-mcp-menu.js";
 import { shellQuote } from "../adapters/shell-quote.js";
 import { claudePostureFlag, codexPostureArg } from "../adapters/yolo-mode.js";
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import path from "node:path";
+import { isRuntimeShell } from "./shell-classifier.js";
+import {
+  CODEX_WINDOWS_EXECUTION_POLICY_OVERRIDE, CODEX_WINDOWS_SANDBOX_OVERRIDE, codexWindowsExecutionPolicyChosen,
+  codexWindowsSandboxChosen, codexWindowsSandboxConfigFiles,
+} from "./codex-windows-sandbox.js";
 
 // L3 adds `attention_required` for the Claude resume-selection prompt proxy.
 // Distinct from `inconclusive` (we don't know yet) and `failed` (terminal
@@ -57,9 +65,31 @@ export function buildNativeResumeCommand(
     return `claude ${claudePostureFlag(process.env)} --resume ${shellQuote(resumeToken)}${nameSuffix}`;
   }
   if (runtime === "codex") {
-    return buildCodexResumeCore(resumeToken, codexConfigProfile, undefined, undefined, undefined, undefined, undefined, codexDaemonOptOut === true);
+    return buildCodexResumeCore(resumeToken, codexConfigProfile, undefined, undefined, undefined, undefined, printedCodexPostureArg(codexConfigProfile), codexDaemonOptOut === true);
   }
   return null;
+}
+
+/**
+ * The posture a printed (not launched) Codex resume command carries. On native Windows it adds the overrides a
+ * managed launch adds: the sandbox one when the user's Codex config chooses no Windows sandbox, and the execution
+ * policy one when that config sets none, so the printed command starts Codex as OpenRig would.
+ * Elsewhere undefined: buildCodexResumeCore's own posture decision applies.
+ */
+export function printedCodexPostureArg(
+  codexConfigProfile?: string | null,
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  if (platform !== "win32") return undefined;
+  // An empty CODEX_HOME is unset, for Codex and for the managed launch.
+  const codexHome = env["CODEX_HOME"] || path.join(homedir(), ".codex");
+  const layers = codexWindowsSandboxConfigFiles(codexHome, codexConfigProfile?.trim() || undefined).map((file) => {
+    try { return readFileSync(file, "utf8"); } catch { return null; /* no readable config chooses nothing */ }
+  });
+  const profileArg = codexConfigProfile ? ` -p ${shellQuote(codexConfigProfile)}` : "";
+  return codexPostureArg(profileArg, env) + (codexWindowsSandboxChosen(layers) ? "" : ` -c ${shellQuote(CODEX_WINDOWS_SANDBOX_OVERRIDE)}`)
+    + (codexWindowsExecutionPolicyChosen(layers) ? "" : ` -c ${shellQuote(CODEX_WINDOWS_EXECUTION_POLICY_OVERRIDE)}`);
 }
 
 export function buildCodexResumeCore(
@@ -99,10 +129,14 @@ export function buildCodexResumeCore(
 }
 
 export function assessNativeResumeProbe(
-  input: NativeResumeProbeInput
+  input: NativeResumeProbeInput,
+  platform: NodeJS.Platform = process.platform,
 ): NativeResumeProbeResult {
   const runtime = input.runtime ?? "";
-  const paneCommand = input.paneCommand ?? "";
+  // psmux reports a native executable in any case, with or without `.exe`, or as a full path.
+  const paneCommand = platform === "win32"
+    ? path.win32.basename(input.paneCommand ?? "").replace(/\.exe$/i, "").toLowerCase()
+    : input.paneCommand ?? "";
   const paneContent = input.paneContent ?? "";
 
   if (runtime === "claude-code") {
@@ -177,7 +211,7 @@ export function assessNativeResumeProbe(
         ? { status: "resumed", code: "active_runtime", detail: "Claude auto-mode TUI and the exact managed native identity were verified." }
         : { status: "inconclusive", code: "claude_auto_identity_required", detail: "Auto-mode screen text requires proof of the launched Claude identity." };
     }
-    if (SHELL_COMMANDS.has(paneCommand)) {
+    if (isRuntimeShell(paneCommand, platform)) {
       return {
         status: "failed",
         code: "returned_to_shell",
@@ -274,7 +308,7 @@ export function assessNativeResumeProbe(
         detail: "Codex reached an update flow, so process-alive alone is not proof of a restored conversation.",
       };
     }
-    if (SHELL_COMMANDS.has(paneCommand)) {
+    if (isRuntimeShell(paneCommand, platform)) {
       return {
         status: "failed",
         code: "returned_to_shell",
@@ -295,10 +329,10 @@ export function assessNativeResumeProbe(
   };
 }
 
-export function isProbeShellReady(input: ProbeShellReadyInput): boolean {
+export function isProbeShellReady(input: ProbeShellReadyInput, platform: NodeJS.Platform = process.platform): boolean {
   const paneCommand = input.paneCommand ?? "";
   const paneContent = input.paneContent?.trim() ?? "";
-  return SHELL_COMMANDS.has(paneCommand) && paneContent.length > 0;
+  return isRuntimeShell(paneCommand, platform) && paneContent.length > 0;
 }
 
 function looksLikeClaudeTui(paneContent: string): boolean {

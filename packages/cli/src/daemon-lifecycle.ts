@@ -1144,7 +1144,7 @@ export function readLogs(deps: LifecycleDeps): string | null {
   return deps.readFile(logFile);
 }
 
-export function tailLogs(deps: LifecycleDeps, opts: { follow: boolean }): void {
+export function tailLogs(deps: LifecycleDeps, opts: { follow: boolean }, platform: NodeJS.Platform = process.platform): void {
   const logFile = resolveLifecycleFile(deps, "daemon.log");
   if (!deps.exists(logFile)) return;
 

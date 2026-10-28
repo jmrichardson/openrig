@@ -6,6 +6,7 @@
 // (no fs touches in the parser itself; caller hands in raw YAML).
 
 import { parse as parseYaml } from "yaml";
+import { isRootedPath, ROOTED_PATH_RULE } from "../path-safety.js";
 import {
   ATOM_PRIORITIES,
   ATOM_PURPOSES,
@@ -136,10 +137,10 @@ export function parseManifest(rawYaml: string, sourcePath: string): ContextPackM
         { sourcePath, index: i },
       );
     }
-    if (path.split(/[\\/]/).includes("..") || path.startsWith("/")) {
+    if (path.split(/[\\/]/).includes("..") || isRootedPath(path)) {
       throw new ContextPackError(
         "manifest_invalid",
-        `manifest at ${sourcePath} files[${i}].path '${path}' must be a relative path inside the pack (no '..' segments, no leading '/')`,
+        `manifest at ${sourcePath} files[${i}].path '${path}' must be a relative path inside the pack (no '..' segments, no ${ROOTED_PATH_RULE})`,
         { sourcePath, index: i, path },
       );
     }

@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { DEFAULT_SYSTEM_WORLD_MANIFEST } from "../src/domain/system-world.js";
+import { writeFakeRig } from "./helpers/refocus-hook-fakes.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..", "..", "..");
@@ -32,10 +33,18 @@ function write(root: string, relative: string, bytes: string): void {
   fs.writeFileSync(target, bytes);
 }
 
+// A Windows seat reaches rig through OPENRIG_CLI_ENTRY, because the rig.cmd shim needs a
+// shell; hand the fake rig to the helpers that way there.
+function helperEnv(env?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  if (process.platform !== "win32" || !env?.OPENRIG_RIG_BIN) return { ...process.env, ...env };
+  const { OPENRIG_RIG_BIN, ...rest } = env;
+  return { ...process.env, ...rest, OPENRIG_CLI_ENTRY: OPENRIG_RIG_BIN };
+}
+
 function runJson(script: string, args: string[], env?: NodeJS.ProcessEnv): any {
   const stdout = execFileSync(process.execPath, [path.join(skillRoot, "scripts", script), ...args], {
     encoding: "utf8",
-    env: { ...process.env, ...env },
+    env: helperEnv(env),
   });
   return JSON.parse(stdout);
 }
@@ -47,7 +56,7 @@ function runJsonResult(script: string, args: string[], env?: NodeJS.ProcessEnv):
 function runJsonFileResult(scriptPath: string, args: string[], env?: NodeJS.ProcessEnv): { status: number | null; body: any } {
   const result = spawnSync(process.execPath, [scriptPath, ...args], {
     encoding: "utf8",
-    env: { ...process.env, ...env },
+    env: helperEnv(env),
   });
   const output = result.status === 0 ? result.stdout : result.stderr;
   return { status: result.status, body: JSON.parse(output) };
@@ -245,7 +254,8 @@ describe("refresh-managed-plugin helper", () => {
     expect(fs.readFileSync(path.join(live, "skills/private/SKILL.md"), "utf8")).toBe("private");
   });
 
-  it("preserves a MODE-ONLY local modification instead of chmodding it back", () => {
+  // POSIX mode bits; Windows uses ACLs
+  it.skipIf(process.platform === "win32")("preserves a MODE-ONLY local modification instead of chmodding it back", () => {
     // R2 F1 at 13531c17. The inventory carries each file's mode, but equality
     // compared kind and hash only, so a file whose bytes still match the
     // ancestor but whose mode the operator changed was classified refresh-safe
@@ -284,7 +294,8 @@ describe("refresh-managed-plugin helper", () => {
     expect(fs.statSync(path.join(live, "hooks/run.cjs")).mode & 0o777).toBe(0o600);
   });
 
-  it("still refreshes when the live file matches the ancestor in bytes AND mode", () => {
+  // POSIX mode bits; Windows uses ACLs
+  it.skipIf(process.platform === "win32")("still refreshes when the live file matches the ancestor in bytes AND mode", () => {
     // The other side of the same axis: including mode in equality must not
     // freeze a file the operator never touched. A packaged mode advance still
     // lands when live is byte- and mode-identical to the ancestor.
@@ -322,7 +333,7 @@ describe("refresh-managed-plugin helper", () => {
     write(target, "skills/linked/SKILL.md", "new skill");
     fs.mkdirSync(path.join(live, "skills"), { recursive: true });
     fs.mkdirSync(external, { recursive: true });
-    fs.symlinkSync(external, path.join(live, "skills/linked"), "dir");
+    fs.symlinkSync(external, path.join(live, "skills/linked"), process.platform === "win32" ? "junction" : "dir");
 
     const planned = runJson("refresh-managed-plugin.mjs", [
       "--ancestor", ancestor,
@@ -426,22 +437,24 @@ describe("backup-sqlite helper", () => {
 describe("inspect-upgrade helper", () => {
   it("keeps all-rig node evidence and teaches the next probe when a surface is unavailable", () => {
     const root = temporaryRoot();
-    const fakeRig = path.join(root, "rig");
-    fs.writeFileSync(fakeRig, `#!/bin/sh
-case "$*" in
-  "--version") echo "0.5.7 (abc12345)" ;;
-  "daemon status") echo 'Daemon running (pid 42)' ;;
-  "ps --nodes -A --json") echo '[{"rigName":"demo","logicalId":"lead"},{"rigName":"other","logicalId":"worker"}]' ;;
-  "plugin list --json") echo 'plugin lookup unavailable' >&2; exit 9 ;;
-  *) exit 7 ;;
-esac
-`, { mode: 0o755 });
+    const fakeRig = writeFakeRig(root, `const replies = {
+  "--version": [0, "0.5.7 (abc12345)\\n", ""],
+  "daemon status": [0, "Daemon running (pid 42)\\n", ""],
+  "ps --nodes -A --json": [0, '[{"rigName":"demo","logicalId":"lead"},{"rigName":"other","logicalId":"worker"}]\\n', ""],
+  "plugin list --json": [9, "", "plugin lookup unavailable\\n"],
+};
+const [status, stdout, stderr] = replies[process.argv.slice(2).join(" ")] ?? [7, "", ""];
+process.stdout.write(stdout);
+process.stderr.write(stderr);
+process.exit(status);
+`);
 
     const report = runJson("inspect-upgrade.mjs", [], { OPENRIG_RIG_BIN: fakeRig });
     expect(report.rigVersion.ok).toBe(true);
     expect(report.daemonStatus.ok).toBe(true);
     expect(report.nodes.ok).toBe(true);
-    expect(report.nodes.command).toEqual([fakeRig, "ps", "--nodes", "-A", "--json"]);
+    // On Windows the helper runs the CLI entry with Node and reports it as rig.
+    expect(report.nodes.command).toEqual([process.platform === "win32" ? "rig" : fakeRig, "ps", "--nodes", "-A", "--json"]);
     expect(report.nodes.value).toEqual([
       { rigName: "demo", logicalId: "lead" },
       { rigName: "other", logicalId: "worker" },
@@ -450,9 +463,27 @@ esac
     expect(report.plugins.next).toMatch(/run .*plugin list --json/i);
     expect(report.ready).toBe(false);
   });
+
+  // Outside a seat no OPENRIG_CLI_ENTRY is set, and Node cannot start npm's rig.cmd shim without a shell.
+  it.runIf(process.platform === "win32")("reaches rig outside a seat through the @openrig/cli install behind rig.cmd on PATH", () => {
+    const prefix = path.join(temporaryRoot(), "npm prefix");
+    write(prefix, "rig.cmd", "@exit /b 99\r\n");
+    write(prefix, "node_modules/@openrig/cli/package.json", JSON.stringify({ name: "@openrig/cli", bin: { rig: "dist/bin-wrapper.js" } }));
+    write(prefix, "node_modules/@openrig/cli/dist/bin-wrapper.js",
+      'process.stdout.write(process.argv.slice(2).join(" ") === "--version" ? "0.6.10 (abc12345)\\n" : "{}\\n");\n');
+    const env: NodeJS.ProcessEnv = {};
+    for (const [key, value] of Object.entries(process.env)) {
+      if (!/^(path|openrig_cli_entry|openrig_rig_bin)$/i.test(key)) env[key] = value;
+    }
+    env.PATH = `${path.join(prefix, "absent")};${prefix};${process.env.PATH}`;
+    const report = JSON.parse(execFileSync(process.execPath, [path.join(skillRoot, "scripts", "inspect-upgrade.mjs")], { encoding: "utf8", env }));
+    expect(report.rigVersion).toMatchObject({ ok: true, value: "0.6.10 (abc12345)" });
+    expect(report.ready).toBe(true);
+  });
 });
 
-describe("0.5.9 telemetry-state migration helper", () => {
+// Migrates 0.5.8 homes, which predate native Windows; its fake rig is a shell script.
+describe.skipIf(process.platform === "win32")("0.5.9 telemetry-state migration helper", () => {
   const helper = "migrate-telemetry-state-0.5.9.mjs";
 
   it("prints help without inventorying and refuses unknown options before planning", () => {

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import type BetterSqlite3 from "better-sqlite3";
+import { join } from "node:path";
 import { createDb } from "../src/db/connection.js";
 import { migrate } from "../src/db/migrate.js";
 import { ALL_MIGRATIONS } from "../src/db/all-migrations.js";
@@ -56,7 +57,7 @@ describe("loadCrashCartDiscovery — fail-closed FIRST, always clean up", () => 
     const deps = baseDeps({ readDaemonJson: () => undefined, configuredDbPath: "/private/custom.sqlite" });
     const result = await loadCrashCartDiscovery(deps);
     expect(result.dbPath.path).toBe("/private/custom.sqlite");
-    expect(deps.copyFile).toHaveBeenCalledWith("/private/custom.sqlite", "/scratch/tmp/cc-xyz/custom.sqlite");
+    expect(deps.copyFile).toHaveBeenCalledWith("/private/custom.sqlite", join("/scratch/tmp/cc-xyz", "custom.sqlite"));
   });
   it("does not turn a permission failure into an empty instance", async () => {
     const deps = baseDeps({ readDaemonJson: () => undefined, exists: () => { throw new Error("EACCES"); } });

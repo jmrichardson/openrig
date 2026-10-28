@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolveBinEntry, resolveNodeReexecBinary, run } from "../src/bin-wrapper.js";
+import { canCreateFileSymlinks } from "../../../test/symlink-capability.mjs";
 
 describe("bin-wrapper", () => {
   let tempDir: string | null = null;
@@ -15,7 +16,7 @@ describe("bin-wrapper", () => {
     }
   });
 
-  it("resolves the real dist entry from a symlinked wrapper path", () => {
+  it.skipIf(!canCreateFileSymlinks)("resolves the real dist entry from a symlinked wrapper path", () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openrig-bin-wrapper-"));
     const wrapperSource = fileURLToPath(new URL("../src/bin-wrapper.ts", import.meta.url));
     const symlinkPath = path.join(tempDir, "rig");
@@ -33,8 +34,10 @@ describe("bin-wrapper", () => {
 
     const wrapperSource = fileURLToPath(new URL("../src/bin-wrapper.ts", import.meta.url));
     const rigPath = path.join(binDir, "rig");
-    const siblingNodePath = path.join(binDir, "node");
-    fs.symlinkSync(wrapperSource, rigPath);
+    const siblingNodePath = path.join(binDir, process.platform === "win32" ? "node.exe" : "node");
+    // npm links the bin on POSIX; on Windows it writes shim files instead.
+    if (process.platform === "win32") fs.writeFileSync(rigPath, "");
+    else fs.symlinkSync(wrapperSource, rigPath);
     fs.writeFileSync(siblingNodePath, "");
 
     const reexecNode = resolveNodeReexecBinary(
@@ -91,8 +94,10 @@ describe("bin-wrapper", () => {
 
     const wrapperSource = fileURLToPath(new URL("../src/bin-wrapper.ts", import.meta.url));
     const rigPath = path.join(binDir, "rig");
-    const siblingNodePath = path.join(binDir, "node");
-    fs.symlinkSync(wrapperSource, rigPath);
+    const siblingNodePath = path.join(binDir, process.platform === "win32" ? "node.exe" : "node");
+    // npm links the bin on POSIX; on Windows it writes shim files instead.
+    if (process.platform === "win32") fs.writeFileSync(rigPath, "");
+    else fs.symlinkSync(wrapperSource, rigPath);
     fs.writeFileSync(siblingNodePath, "");
 
     const reexecNode = resolveNodeReexecBinary(

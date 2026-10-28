@@ -227,6 +227,12 @@ export function resolveAllowlisted(allowlist: AllowlistRoot[], absDir: string): 
     return null;
   }
   for (const r of allowlist) {
+    if (process.platform === "win32") {
+      // Windows paths compare case-insensitively, and realpathSync keeps the casing it was given.
+      const rel = path.relative(r.canonicalPath, real);
+      if (rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel)) return { root: r.name, rel };
+      continue;
+    }
     if (real === r.canonicalPath || real.startsWith(r.canonicalPath + path.sep)) {
       return { root: r.name, rel: path.relative(r.canonicalPath, real) };
     }

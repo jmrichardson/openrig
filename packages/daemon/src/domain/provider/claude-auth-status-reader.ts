@@ -4,7 +4,9 @@
 //
 // `claude` is resolved on the reader's PATH and run by absolute path, in its own process group with stdin
 // closed, bounded (10 s); however it ends, its group is stopped (a moment, TERM, KILL) and the child reaped, so
-// nothing it started keeps running. Facts are taken only from an exit-0 answer, with one exception from Claude's
+// nothing it started keeps running. (Windows has no process groups: a `claude` still running is ended with its
+// process tree, and a helper it leaves behind after exiting by itself is not reached there.)
+// Facts are taken only from an exit-0 answer, with one exception from Claude's
 // documented contract: logged out, it prints {"loggedIn": false, ...} and exits 1, which is not_logged_in (no
 // identity fact is taken from it). Any other nonzero exit is auth_status_failed, whatever it printed. Only loggedIn, authMethod, email and orgId are read, plus orgName and
 // subscriptionType as labels. It runs with the HOME, CLAUDE_CONFIG_DIR and PATH a seat session gets, without
@@ -15,6 +17,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { UsageReadOutcome } from "./usage-windows.js";
+import { stopGroup } from "../codex-network-default.js";
 
 export type ClaudeAuthFailureReason = "binary_not_found" | "auth_status_failed" | "not_logged_in" | "not_subscription_login";
 
@@ -54,7 +57,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 export function resolveClaudeExecutable(env: NodeJS.ProcessEnv): string | null {
   for (const dir of (env.PATH ?? "").split(path.delimiter)) {
     if (!dir) continue;
-    const candidate = path.join(dir, "claude");
+    const candidate = path.join(dir, process.platform === "win32" ? "claude.exe" : "claude");
     try {
       fs.accessSync(candidate, fs.constants.X_OK);
       if (fs.statSync(candidate).isFile()) return path.resolve(candidate);
@@ -110,7 +113,7 @@ export function runClaudeCommand(file: string, env: NodeJS.ProcessEnv, cwd: stri
   return new Promise((resolve) => {
     let child: ReturnType<typeof spawn>;
     try {
-      child = spawn(file, args, { env, cwd, stdio: ["ignore", "pipe", "ignore"], detached: true });
+      child = spawn(file, args, { env, cwd, stdio: ["ignore", "pipe", "ignore"], detached: process.platform !== "win32", windowsHide: true });
     } catch (error) {
       resolve({ code: null, stdout: "", error: error as NodeJS.ErrnoException, timedOut: false });
       return;
@@ -128,7 +131,10 @@ export function runClaudeCommand(file: string, env: NodeJS.ProcessEnv, cwd: stri
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      if (child.pid !== undefined) {
+      if (child.pid !== undefined && process.platform === "win32") {
+        // No process groups: the shared stopGroup ends a still-running tree with taskkill /T.
+        await stopGroup(child, graceMs);
+      } else if (child.pid !== undefined) {
         await stopProcessGroup(child.pid, graceMs);
         // A killed group leaves the group list before Node reaps the child: wait, bounded, for the reap too
         // (as the Codex reader's stopGroup does), so the read never returns with its own child unreaped.

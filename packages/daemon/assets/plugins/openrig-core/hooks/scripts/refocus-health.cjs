@@ -4,6 +4,13 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { spawnSync } = require("node:child_process");
 
+// Native Windows cannot spawn the rig.cmd/rig.ps1 shims without a shell. A Windows
+// seat names its CLI entry instead, which this Node runs directly.
+function spawnRig(args, options) {
+  const entry = process.platform === "win32" && process.env.OPENRIG_CLI_ENTRY;
+  return entry ? spawnSync(process.execPath, [entry, ...args], options) : spawnSync("rig", args, options);
+}
+
 // One issue per failure episode, after three unsuccessful attempts. Retrying an
 // uncertain stream write uses the same id; a successful delivery starts afresh.
 // `deadlineMs` is when the caller must be done, counted from process start: the
@@ -23,7 +30,7 @@ function recordRefocusResult({ home, seat, identity, failed, deadlineMs = 4_500,
     // Persist the id before contacting the daemon, including timeout/unknown outcomes.
     fs.writeFileSync(file, JSON.stringify(state), { mode: 0o600 });
     if (state.failures < 3 || state.reportedAt) return;
-    const result = spawnSync("rig", [
+    const result = spawnRig([
       "stream", "emit", "--source", seat, "--id", state.issueId,
       "--hint-type", "issue", "--hint-tags", "issue,refocus",
       "--body", `Refocus failed on ${state.failures} consecutive attempts for ${seat}. Orientation remains unverified; inspect this seat's refocus hook diagnostics.`,
@@ -40,4 +47,4 @@ function recordRefocusResult({ home, seat, identity, failed, deadlineMs = 4_500,
   }
 }
 
-module.exports = { recordRefocusResult };
+module.exports = { recordRefocusResult, spawnRig };

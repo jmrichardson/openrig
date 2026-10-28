@@ -47,11 +47,18 @@ export async function runWithDeadline(argv, { timeoutMs, killAfterMs = 15000 }) 
   if (!argv.length || !Number.isFinite(timeoutMs) || timeoutMs <= 0 || killAfterMs <= 0) {
     throw new Error('Command and positive finite deadline required');
   }
+  // Windows has no process groups and no TERM a console program can catch: the group signal
+  // below would reach nothing, so a deadline there ends the child's whole tree with taskkill /T /F.
+  const windows = process.platform === 'win32';
   return new Promise(resolveResult => {
-    const child = spawn(argv[0], argv.slice(1), { stdio: 'inherit', detached: true });
+    const child = spawn(argv[0], argv.slice(1), windows ? { stdio: 'inherit', windowsHide: true } : { stdio: 'inherit', detached: true });
     let forced, escalation, finished = false;
     const signalChild = signal => {
       if (!child.pid) return;
+      if (windows) {
+        spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+        return;
+      }
       try { process.kill(-child.pid, signal); } catch (error) {
         if (error.code !== 'ESRCH') throw error;
       }
@@ -70,7 +77,8 @@ export async function runWithDeadline(argv, { timeoutMs, killAfterMs = 15000 }) 
     const finish = code => {
       if (finished) return;
       finished = true;
-      if (forced !== undefined) signalChild('SIGKILL');
+      // On Windows the tree was already ended whole; its pid may since name another process.
+      if (forced !== undefined && !windows) signalChild('SIGKILL');
       clearTimeout(timeout); clearTimeout(escalation);
       process.removeListener('SIGINT', interrupt);
       process.removeListener('SIGTERM', shutdown);

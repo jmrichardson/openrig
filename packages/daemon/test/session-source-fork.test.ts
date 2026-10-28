@@ -1,4 +1,5 @@
 import { mockShellCommand } from "./helpers/shell-command-mock.js";
+import { CODEX_LAUNCH_DEFAULTS } from "./helpers/codex-state.js";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type Database from "better-sqlite3";
 import { createFullTestDb } from "./helpers/test-app.js";
@@ -492,7 +493,7 @@ describe("CodexRuntimeAdapter.launchHarness fork branch", () => {
     const sendText = tmux.sendText as ReturnType<typeof vi.fn>;
     const sentCmd = sendText.mock.calls[0]?.[1] as string;
     // The no-profile floor and managed update setting precede the fork subcommand.
-    expect(sentCmd).toMatch(/^codex -s workspace-write '-c' 'check_for_update_on_startup=false' fork/);
+    expect(sentCmd.startsWith(`codex -s workspace-write ${CODEX_LAUNCH_DEFAULTS} fork`)).toBe(true);
     expect(sentCmd).toContain("PARENT-THREAD-ABC");
     if (result.ok) {
       expect(result.resumeToken).toBe("NEW-CODEX-THREAD-XYZ");

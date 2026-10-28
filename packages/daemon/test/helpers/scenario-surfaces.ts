@@ -18,6 +18,7 @@
 
 import net from "node:net";
 import { runRig } from "./scenario-daemon.js";
+import { controlEndpoint } from "../../../tui/src/socket-server.js";
 import type { ExpectSurface } from "./scenario-schema.js";
 
 export interface SurfaceContext {
@@ -140,7 +141,8 @@ function readTuiSocket(ctx: SurfaceContext, opts: ReadSurfaceOptions): Promise<u
   }
   const timeoutMs = opts.timeoutMs ?? 5000;
   return new Promise((resolve, reject) => {
-    const conn = net.createConnection(sockPath);
+    // The TUI listens on a named pipe derived from the path on Windows.
+    const conn = net.createConnection(controlEndpoint(sockPath));
     let buf = "";
     const timer = setTimeout(() => {
       conn.destroy();

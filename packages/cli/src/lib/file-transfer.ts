@@ -61,7 +61,7 @@ export const REMOTE_PATH_CHARSET = /^[A-Za-z0-9._/-]+$/;
 /** The FR-4 short closed named deny list (dot-directory segments). */
 export const DENIED_SEGMENTS = [".openrig", ".ssh", ".codex", ".claude"] as const;
 
-export function parseFilePathArg(raw: string, isRegisteredHost: (id: string) => boolean = () => false): FileArgParse {
+export function parseFilePathArg(raw: string, isRegisteredHost: (id: string) => boolean = () => false, platform: NodeJS.Platform = process.platform): FileArgParse {
   if (raw === "") return { ok: false, error: "empty path operand" };
   if (raw.startsWith("-")) {
     // G18-P1 belt: a flag-shaped operand is refused outright; the ./ escape
@@ -73,6 +73,10 @@ export function parseFilePathArg(raw: string, isRegisteredHost: (id: string) => 
   }
   // Local-prefix escapes: these are ALWAYS local, colon or not (N18-1).
   if (raw.startsWith("/") || raw.startsWith("./") || raw.startsWith("../") || raw.startsWith("~")) {
+    return { ok: true, arg: { kind: "local", path: raw } };
+  }
+  // Windows: a drive path's "C:" is not a host qualifier, and backslash forms are local escapes too.
+  if (platform === "win32" && /^(?:[A-Za-z]:[\\/]|\\|\.\.?\\)/.test(raw)) {
     return { ok: true, arg: { kind: "local", path: raw } };
   }
   const colon = raw.indexOf(":");
@@ -224,7 +228,7 @@ function resolveRemoteSide(hostId: string, rawPath: string, deps: PlanDeps): { o
 
 /** Validate the whole invocation — EVERY rejection here happens before any
  *  spawn (the fail-closed set; spawn-spy-asserted in tests). */
-export function planFileCopy(rawSrc: string, rawDst: string, opts: { dryRun?: boolean } & PlanDeps = {}): PlanResult {
+export function planFileCopy(rawSrc: string, rawDst: string, opts: { dryRun?: boolean; platform?: NodeJS.Platform } & PlanDeps = {}): PlanResult {
   // Use one registry snapshot for both classification and validation. A remote
   // choice must never turn into a local copy after a later resolution error.
   let registry: ReturnType<typeof loadHostRegistry> | undefined;
@@ -233,9 +237,9 @@ export function planFileCopy(rawSrc: string, rawDst: string, opts: { dryRun?: bo
     const loaded = registryLoader();
     return loaded.ok && resolveHost(loaded.registry, id).ok;
   };
-  const srcParse = parseFilePathArg(rawSrc, isRegisteredHost);
+  const srcParse = parseFilePathArg(rawSrc, isRegisteredHost, opts.platform);
   if (!srcParse.ok) return { ok: false, error: srcParse.error, code: "bad_operand" };
-  const dstParse = parseFilePathArg(rawDst, isRegisteredHost);
+  const dstParse = parseFilePathArg(rawDst, isRegisteredHost, opts.platform);
   if (!dstParse.ok) return { ok: false, error: dstParse.error, code: "bad_operand" };
 
   if (srcParse.arg.kind === "remote" && dstParse.arg.kind === "remote") {
@@ -283,7 +287,7 @@ export function buildRsyncArgv(plan: CopyPlan): string[] {
 
 // ── execution + classification ──────────────────────────────────────────────
 
-export type FileCopyFailedStep = "none" | "rsync-missing" | "permission-gate" | "ssh-unreachable" | "remote-command-failed";
+export type FileCopyFailedStep = "none" | "rsync-missing" | "unsupported-platform" | "permission-gate" | "ssh-unreachable" | "remote-command-failed";
 
 export interface FileCopyResult {
   ok: boolean;
@@ -337,7 +341,18 @@ export function classifyRsyncResult(exitCode: number | null, stdout: string, std
   return { ok: false, failedStep: "remote-command-failed", exitCode, stdout, stderr };
 }
 
-export async function runFileCopy(plan: CopyPlan, deps: { spawn?: SpawnFn } = {}): Promise<FileCopyResult> {
+export async function runFileCopy(plan: CopyPlan, deps: { spawn?: SpawnFn; platform?: NodeJS.Platform } = {}): Promise<FileCopyResult> {
+  if ((deps.platform ?? process.platform) === "win32") {
+    // Every local operand resolves to a drive path here, and rsync reads "C:" as a remote host.
+    return {
+      ok: false,
+      failedStep: "unsupported-platform",
+      exitCode: null,
+      stdout: "",
+      stderr: "",
+      hint: "rig file copy runs rsync, which reads a Windows drive path such as C:\\notes.md as a remote host, so nothing was started or copied. Copy with OpenSSH's scp instead: scp <local-file> <user>@<host>:<absolute-path>.",
+    };
+  }
   const argv = buildRsyncArgv(plan);
   const spawn = deps.spawn ?? nodeSpawn;
   const child = spawn("rsync", argv, { stdio: ["ignore", "pipe", "pipe"] });

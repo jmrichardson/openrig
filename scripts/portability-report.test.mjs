@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { addedLines, findPortabilityIssues, renderReport } from "./portability-report.mjs";
+import { canCreateFileSymlinks } from "../test/symlink-capability.mjs";
+
+const NEEDS_SYMLINKS = !canCreateFileSymlinks && "needs file symlink privilege";
 
 const diff = [
   "diff --git a/docs/a.md b/docs/a.md",
@@ -97,7 +100,7 @@ test("the report says so when nothing is found and groups findings when somethin
   assert.match(report, /docs\/a\.md:10/);
 });
 
-test("the CLI executes through a script path containing spaces and a hash", async () => {
+test("the CLI executes through a script path containing spaces and a hash", { skip: NEEDS_SYMLINKS }, async () => {
   const { mkdtempSync, symlinkSync, rmSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
@@ -114,7 +117,7 @@ test("the CLI executes through a script path containing spaces and a hash", asyn
 });
 
 
-test("the CLI executes with preserve-symlinks-main and imports without argv remain inert", async () => {
+test("the CLI executes with preserve-symlinks-main and imports without argv remain inert", { skip: NEEDS_SYMLINKS }, async () => {
   const { mkdtempSync, symlinkSync, rmSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");

@@ -26,10 +26,18 @@ SESSION_CHARS = re.compile(r"[A-Za-z0-9\-_.@]+")
 HUMAN_CLASS_SESSION = re.compile(r"human(?:-[A-Za-z0-9._-]+)?@(?:kernel|host)|[A-Za-z0-9._:-]+@external")
 
 
+def rig_command(*args):
+    # Native Windows cannot start the rig.cmd/rig.ps1 shims without a shell. A Windows seat names
+    # its CLI entry, and the refocus hook the Node that runs it.
+    if os.name == "nt" and os.environ.get("OPENRIG_CLI_NODE") and os.environ.get("OPENRIG_CLI_ENTRY"):
+        return [os.environ["OPENRIG_CLI_NODE"], os.environ["OPENRIG_CLI_ENTRY"], *args]
+    return ["rig", *args]
+
+
 def rig_output(*args):
     try:
         result = subprocess.run(
-            ["rig", *args], capture_output=True, text=True, timeout=10, check=False
+            rig_command(*args), capture_output=True, text=True, timeout=10, check=False
         )
     except (OSError, subprocess.SubprocessError):
         return None
@@ -80,14 +88,38 @@ NOTES_FILE_PRECEDENCE = ("NOTES.md", "MISSION_NOTES.md")
 
 
 def resolve_notes(node):
-    for name in NOTES_FILE_PRECEDENCE:
-        candidate = node / name
-        try:
-            if candidate.is_file() and os.access(candidate, os.R_OK):
-                return (candidate, name), None
-        except OSError:
-            pass
-    return None, None
+    try:
+        result = subprocess.run(
+            rig_command("scope", "resolve-notes", str(node), "--json"),
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return None, "resolver command timed out"
+    except OSError as error:
+        return None, f"resolver command could not start: {error}"
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip().splitlines()
+        suffix = f": {detail[0]}" if detail else ""
+        return None, f"resolver command exited {result.returncode}{suffix}"
+    try:
+        payload = json.loads(result.stdout)
+    except (json.JSONDecodeError, TypeError):
+        return None, "resolver command returned malformed JSON"
+    if not isinstance(payload, dict) or payload.get("ok") is not True or "resolution" not in payload:
+        return None, "resolver command returned an invalid success shape"
+    resolution = payload["resolution"]
+    if resolution is None:
+        return None, None
+    if not isinstance(resolution, dict):
+        return None, "resolver command returned an invalid resolution shape"
+    resolved_path = resolution.get("path")
+    resolved_name = resolution.get("name")
+    if not isinstance(resolved_path, str) or not isinstance(resolved_name, str):
+        return None, "resolver command returned an invalid resolution shape"
+    return (Path(resolved_path), resolved_name), None
 
 
 def intent(text):

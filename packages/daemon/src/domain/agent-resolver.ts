@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { parse as parseYaml } from "yaml";
 import { parseAgentSpec, validateAgentSpec, normalizeAgentSpec } from "./agent-manifest.js";
 import type { AgentSpec, AgentResources } from "./types.js";
+import { isRootedPath } from "./path-safety.js";
 
 // -- Types --
 
@@ -315,11 +316,15 @@ function resolveRefToAbsPath(ref: string, baseDir: string): string | null {
   if (ref.startsWith("local:")) {
     const relPath = ref.slice("local:".length);
     if (!relPath) return null;
+    // Windows would resolve a drive- or root-relative ref outside baseDir.
+    if (process.platform === "win32" && isRootedPath(relPath)) return null;
     return nodePath.resolve(baseDir, relPath);
   }
   if (ref.startsWith("path:")) {
     const absPath = ref.slice("path:".length);
     if (!absPath) return null;
+    // Nor is a Windows drive-relative ref ("C:agents") absolute.
+    if (process.platform === "win32" && !nodePath.isAbsolute(absPath)) return null;
     return absPath;
   }
   return null;

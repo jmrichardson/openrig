@@ -2,6 +2,7 @@ import { isEscalationTargetRef } from "./escalation-target-ref.js";
 import nodePath from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { effortPrecedence, readSeatEffort } from "./seat-effort.js";
+import { projectionResourceDirectory } from "./projection-resource-path.js";
 import type Database from "better-sqlite3";
 import {
   resolvePermissionPolicyAttachment,

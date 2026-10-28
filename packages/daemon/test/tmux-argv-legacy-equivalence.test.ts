@@ -95,7 +95,7 @@ function recordingAdapter(calls: RunCall[], opts: { failing?: string[]; guard?: 
     try {
       return await original(argv, legacy, scope);
     } finally {
-      calls.push({ site: Number(frame?.[1]), argv, legacy: execs[before]! });
+      calls.push({ site: Number(frame?.[1]), argv, legacy: execs[before], kind: opts.psmux ? "psmux" : "tmux" });
     }
   };
   return adapter;

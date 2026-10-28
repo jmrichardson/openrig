@@ -1046,7 +1046,7 @@ describe("S20 — start auto-start: routing env never becomes bind intent", () =
         post: vi.fn(async () => { throw new Error("SENTINEL-STOP"); }),
         get: vi.fn(async () => { throw new Error("SENTINEL-STOP"); }),
       }) as never,
-      preflightExec: async (cmd: string) => (cmd === "tmux -V" ? "tmux 3.6a" : ""),
+      preflightExec: async (cmd: string) => (cmd === "tmux -V" ? (process.platform === "win32" ? "tmux 3.4.0\npsmux 3.4.0" : "tmux 3.6a") : ""),
       promptYesNo: async () => false,
     }));
     try {

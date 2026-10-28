@@ -3,6 +3,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { Hono } from "hono";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { realpathSync, writeFileSync } from "node:fs";
 import type Database from "better-sqlite3";
@@ -19,7 +20,9 @@ import { SliceIndexer } from "../src/domain/slices/slice-indexer.js";
 import { ReviewGatherer } from "../src/domain/review/gather.js";
 import { FileWriteService } from "../src/domain/files/file-write-service.js";
 import { reviewRoutes } from "../src/routes/review.js";
+import { resolveAllowlisted } from "../src/domain/review/freeze.js";
 import { makeFixtureWorkspace, writeFixtureSlice, writeFullGateSet, type FixtureWorkspace } from "./review-fixtures.js";
+import { canCreateFileSymlinks } from "../../../test/symlink-capability.mjs";
 
 const NOW = "2026-07-04T12:00:00.000Z";
 
@@ -268,7 +271,8 @@ describe("POST /api/review/freeze", () => {
     expect(html).not.toContain('href="../../outside-secret.mp4"'); // no escaping link either
   });
 
-  it("a symlink inside the slice pointing outside is refused (realpath containment)", async () => {
+  // Creating a file symlink needs SeCreateSymbolicLinkPrivilege on Windows.
+  it.skipIf(!canCreateFileSymlinks)("a symlink inside the slice pointing outside is refused (realpath containment)", async () => {
     const dir = approvedSlice("37-symlink");
     const outside = path.join(ws.root, "outside-symlinked.png");
     const secret = Buffer.from("89504e470d0a1a0a53594d4c494e4b5f4d41524b", "hex");
@@ -286,5 +290,29 @@ describe("POST /api/review/freeze", () => {
     expect((await freeze("nope")).status).toBe(404);
     const bad = await app.request("/api/review/freeze", { method: "POST", body: "not json" });
     expect(bad.status).toBe(400);
+  });
+});
+
+describe("resolveAllowlisted", () => {
+  let root: string;
+  beforeEach(() => {
+    root = realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "freeze-allowlist-")));
+    fs.mkdirSync(path.join(root, "slices", "one"), { recursive: true });
+    fs.mkdirSync(`${root}-sibling`);
+  });
+  afterEach(() => { for (const dir of [root, `${root}-sibling`]) fs.rmSync(dir, { recursive: true, force: true }); });
+
+  it("maps a folder under a root to its relative path, and refuses a sibling sharing the root's prefix", () => {
+    const allowlist = [{ name: "work", canonicalPath: root }];
+    expect(resolveAllowlisted(allowlist, path.join(root, "slices", "one"))).toEqual({ root: "work", rel: path.join("slices", "one") });
+    expect(resolveAllowlisted(allowlist, root)).toEqual({ root: "work", rel: "" });
+    expect(resolveAllowlisted(allowlist, `${root}-sibling`)).toBeNull();
+    expect(resolveAllowlisted(allowlist, path.join(root, "absent"))).toBeNull();
+  });
+
+  // realpathSync keeps the casing it was given, while the configured root keeps its own.
+  it.runIf(process.platform === "win32")("matches a root spelled in another case on Windows", () => {
+    const allowlist = [{ name: "work", canonicalPath: root.toLowerCase() }];
+    expect(resolveAllowlisted(allowlist, path.join(root.toUpperCase(), "slices", "one"))).toEqual({ root: "work", rel: path.join("slices", "one") });
   });
 });

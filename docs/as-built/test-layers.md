@@ -30,8 +30,9 @@ npm test          # = npm run test:repo && npm run test:workspaces
 ```
 
 Then add the layers your change calls for, using the ladder below. CI also runs a
-network-denied macOS test pass and a containerised installed-package scenario on every PR
-to `main`. In the PR description, say which layers you ran and which you could not run.
+network-denied macOS test pass, a containerised installed-package scenario and a focused
+native Windows job on every PR to `main`. In the PR description, say which layers you ran
+and which you could not run.
 
 ## The ladder
 
@@ -44,7 +45,7 @@ to `main`. In the PR description, say which layers you ran and which you could n
 | Web UI suite | `npm run test:ui` | jsdom unit tests for `packages/ui` | Real browser rendering | When you touch `packages/ui`, or a daemon API the UI reads. The web UI is in maintenance mode, so this suite is advisory locally and is not part of `npm test`. |
 | Generated files | `npm run mirror-skills:check`, `npm run generate-context-packs:check` (both part of `npm test`) | Shipped skill homes are publishable, generated copies match their homes, all edges match their recorded hashes, and every static context pack passes the daemon's own manifest parser and the leak scan | Whether the skill content is any good | Edit a shipped skill's one in-repo home, run `npm run mirror-skills` to regenerate its other copies and refresh digests, then run the checks and commit the result. The apply reads nothing outside the repository. See "A shipped skill" in [ARCHITECTURE.md](../../ARCHITECTURE.md#a-shipped-skill). |
 | Local gate | `npm run gate` | Lint plus `npm test` on a clean tree, tied to `HEAD`, one run per machine at a time, with a JSON receipt | Anything that lint and `npm test` don't already prove | Optional. Useful when several agents share one machine, or when you want a receipt tied to a commit. |
-| Packaging | `npm run build:package`, `npm run test:tui-package`, `bash scripts/smoke-fresh-install.sh` | The publishable `@openrig/cli` assembles, the packed TUI launches, and a fresh install starts a daemon | Behaviour beyond startup | When you touch dependencies, bin entries, build scripts, or files a package ships |
+| Packaging | `npm run build:package` (on native Windows, `npm run build:package:windows`, which runs `scripts/build-package.sh` under Git for Windows' bash), `npm run test:tui-package`, `bash scripts/smoke-fresh-install.sh` | The publishable `@openrig/cli` assembles, the packed TUI launches, and a fresh install starts a daemon | Behaviour beyond startup | When you touch dependencies, bin entries, build scripts, or files a package ships |
 | Stub scenarios, host mode | `node --import tsx packages/daemon/scripts/run-scenarios.mjs [scenario.yaml …]` | A scenario's steps and assertions pass against a scratch daemon, real tmux and `runtime: stub` seats | The installed package. Seeded-regression pairing. Everything under [What a stub can and cannot prove](#what-a-stub-can-and-cannot-prove). | While you write or debug a scenario |
 | Stub scenarios, installed package in a container | CI job `installed-scenario`. Before pushing: `DOCKER_HOST=ssh://<your-host> bash scripts/run-pr-scenarios.sh --remote …` | A clean Linux install starts. A claimed queue item survives a daemon restart. A planted fault is caught at the intended assertion. Two stub seats' scripted output reads back through `rig transcript` and `rig capture` (passing form only). | Native runtimes. Most command families (see [Help wanted](#help-wanted-command-families-without-a-behavioural-scenario)). | Changes that can affect daemon startup, packaging, queue durability or the scenario harness |
 | Live-model evals | `npm run eval -w packages/daemon -- --provider rig …` | Whether a real Claude Code seat runs the expected `rig context get <entry>` for natural prompts | Determinism. Codex. Anything without a case. | Changes to shipped skills or context entries meant to steer agents. **Uses provider credits.** |
@@ -127,6 +128,22 @@ paths, network addresses, email addresses. It never fails because of a finding. 
 matched text locally (credentials show only their first characters), run
 `node scripts/portability-report.mjs`. By default it compares the
 merge-base with `origin/main` against `HEAD`; pass `--staged` to check staged changes instead.
+
+A third workflow, `.github/workflows/windows-native.yml` (job `native`), covers the
+[experimental native Windows path](../reference/windows-support-experiment.md). Like `tests.yml`,
+it runs on pull requests to `main` and on manual dispatch. It runs on `windows-latest` with
+Node 22: `npm ci`, `npm run build` and `npm run lint`, then
+the repository script suite (`node --test scripts/*.test.mjs`) and the same four repository
+checks `npm run test:repo` runs, each called directly. It downloads the portable psmux 3.4.0
+release, checks its pinned SHA256, and sets `OPENRIG_TEST_PSMUX` and a private
+`PSMUX_DATA_DIR` so the real-psmux tests run. It then runs a hand-picked list of daemon, cli
+and tui test files that cover the native paths, assembles the package with
+`npm run build:package:windows`, and checks that the packaged `help` context pack is
+`docs/reference/help.md` byte for byte. It does not run the full package suites, and no
+provider credentials are supplied. A test file with cases that run only on Windows
+(`runIf(process.platform === "win32")` or `skipIf(process.platform !== "win32")`) runs in CI
+only if it is on that list; `scripts/windows-native-workflow.test.mjs`, in the script suite,
+fails when such a file is missing from it.
 
 The UI suite is a CI matrix leg even though it is advisory locally. Check your PR's status to
 see whether a red UI leg is treated as blocking. Branch-protection settings are not in the

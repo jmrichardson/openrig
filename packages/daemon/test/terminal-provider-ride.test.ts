@@ -203,7 +203,7 @@ describe("view-composer partition vectors", () => {
       { canonicalSessionName: "unknown@rig", attachmentType: "tmux", runtime: "unknown" },
     ]);
     const view = composeView("rig:rig", members, ctxWith([]));
-    const grid = buildGridRoot(view.opened).root;
+    const grid = buildGridRoot(view.opened, undefined, "linux").root;
     const panes: HerdrPaneNode[] = [];
     const collect = (node: HerdrLayoutNode) => {
       if (node.type === "pane") panes.push(node);
@@ -327,7 +327,7 @@ describe("herdr layout plan — fresh-tab-on-relaunch (BR-5) + equal auto-grid r
   });
 
   it("one grid root per page (N=2 → 2×1) — pane leaves carry <agent> · <slice> AND the composed shell command via sh -c", () => {
-    const plan = planHerdrLayout(view, "l1");
+    const plan = planHerdrLayout(view, "l1", undefined, "linux");
     expect(plan.pages).toHaveLength(1);
     expect(plan.pages[0]!.blanks).toBe(0);
     // N=2 is a single equal right strip at ratio 1/2 (argv command shape
@@ -366,7 +366,7 @@ describe("herdr layout plan — fresh-tab-on-relaunch (BR-5) + equal auto-grid r
       paneCommand: `attach s${i + 1}`,
       readOnly: false,
     }));
-    const grid = buildGridRoot(panes);
+    const grid = buildGridRoot(panes, undefined, "linux");
     expect(grid.blanks).toBe(blanks);
 
     const leaves = walkLeaves(grid.root);
@@ -497,7 +497,7 @@ describe("herdr adapter — socket ping probe + workspace.create → layout.appl
 
   it("openView = fresh workspace.create then ONE atomic layout.apply per page (capture-verified params)", async () => {
     const { transport, requests } = fakeSocketTransport();
-    const adapter = new HerdrAdapter({ transportFactory: () => transport, newLaunchToken: () => "tok" });
+    const adapter = new HerdrAdapter({ transportFactory: () => transport, newLaunchToken: () => "tok", platform: "linux" });
     const res = await adapter.openView(view);
     expect(res.ok).toBe(true);
     expect(res.opened).toEqual(["a@r"]);
@@ -647,9 +647,9 @@ describe("herdr socket transport — ping probe, envelope unwrap, socket path (F
   });
 
   it("resolveHerdrSocketPath: env override → per-session → the default; version parse", () => {
-    expect(resolveHerdrSocketPath({ HERDR_SOCKET_PATH: "/x/h.sock" })).toBe("/x/h.sock");
-    expect(resolveHerdrSocketPath({ HERDR_SESSION: "s1" })).toContain(path.join("sessions", "s1", "herdr.sock"));
-    expect(resolveHerdrSocketPath({})).toContain(path.join(".config", "herdr", "herdr.sock"));
+    expect(resolveHerdrSocketPath({ HERDR_SOCKET_PATH: "/x/h.sock" }, "linux")).toBe("/x/h.sock");
+    expect(resolveHerdrSocketPath({ HERDR_SESSION: "s1" }, "linux")).toContain(path.join("sessions", "s1", "herdr.sock"));
+    expect(resolveHerdrSocketPath({}, "linux")).toContain(path.join(".config", "herdr", "herdr.sock"));
     expect(parseHerdrVersion("herdr 0.7.1")).toBe("0.7.1");
     expect(parseHerdrVersion(undefined)).toBeNull();
   });

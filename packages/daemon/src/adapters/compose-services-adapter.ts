@@ -1,5 +1,6 @@
 import { connect } from "node:net";
-import type { ExecFn } from "./tmux.js";
+import type { ArgvExecFn, ExecFn } from "./tmux.js";
+import { execArgvCommand } from "./tmux-exec.js";
 
 // -- Result types --
 
@@ -70,11 +71,13 @@ export function composeMissingMessage(detail: string): string {
 /**
  * I/O adapter for Docker Compose. Shells out to `docker compose`.
  * Lives in adapters/ alongside tmux.ts — infrastructure I/O, not domain logic.
+ * On Windows, cmd.exe would keep sq()'s quotes and has no /dev/null or nc: compose
+ * runs as argv without a shell, and the readiness probes run in-process.
  */
 export class ComposeServicesAdapter {
   private exec: ExecFn;
 
-  constructor(exec: ExecFn) {
+  constructor(exec: ExecFn, private readonly platform: "posix" | "win32" = "posix", private readonly execArgv: ArgvExecFn = execArgvCommand) {
     this.exec = exec;
   }
 
@@ -108,6 +111,13 @@ export class ComposeServicesAdapter {
     }
   }
 
+  /** The POSIX shell command, or on Windows the same compose invocation as argv. */
+  private run(cmd: string, opts: { composeFile: string; projectName: string; profiles?: string[] }, ...command: string[]): Promise<string> {
+    if (this.platform !== "win32") return this.exec(cmd);
+    const profiles = (opts.profiles ?? []).flatMap((p) => ["--profile", p]);
+    return this.execArgv(["docker", "compose", "-f", opts.composeFile, "-p", opts.projectName, ...profiles, ...command]);
+  }
+
   /** Start services with docker compose up -d. Readiness is handled by services-readiness, not --wait. */
   async up(opts: {
     composeFile: string;
@@ -117,7 +127,7 @@ export class ComposeServicesAdapter {
     const args = this.baseArgs(opts.composeFile, opts.projectName, opts.profiles);
     const cmd = `docker compose ${args} up -d 2>&1`;
     try {
-      await this.exec(cmd);
+      await this.run(cmd, opts, "up", "-d");
       return { ok: true };
     } catch (err) {
       const compose = await this.composeMissingBehind(err);
@@ -140,7 +150,7 @@ export class ComposeServicesAdapter {
     const volumeFlag = opts.policy === "down_and_volumes" ? " --volumes" : "";
     const cmd = `docker compose ${args} down${volumeFlag} 2>&1`;
     try {
-      await this.exec(cmd);
+      await this.run(cmd, opts, "down", ...(volumeFlag ? ["--volumes"] : []));
       return { ok: true };
     } catch (err) {
       // Without Compose v2 nothing of this project could have started through it. When plain Docker confirms the project
@@ -160,7 +170,7 @@ export class ComposeServicesAdapter {
     const args = this.baseArgs(opts.composeFile, opts.projectName, opts.profiles);
     const cmd = `docker compose ${args} ps --format json 2>&1`;
     try {
-      const output = await this.exec(cmd);
+      const output = await this.run(cmd, opts, "ps", "--format", "json");
       const parseInput = this.extractComposePsPayload(output);
       const services = this.parseComposePs(parseInput);
       // `[]` is how array-format Compose releases report a project with no containers.
@@ -186,7 +196,7 @@ export class ComposeServicesAdapter {
     const tailArg = Number.isFinite(opts.tail) ? ` --tail ${opts.tail}` : "";
     const cmd = `docker compose ${args} logs${tailArg}${serviceArg} 2>&1`;
     try {
-      const output = await this.exec(cmd);
+      const output = await this.run(cmd, opts, "logs", ...(tailArg ? ["--tail", String(opts.tail)] : []), ...(opts.service ? [opts.service] : []));
       return { ok: true, output };
     } catch (err) {
       return { ok: false, output: "", error: formatExecError(err) };
@@ -217,6 +227,12 @@ export class ComposeServicesAdapter {
    * redirects are not followed. This proves the server answered, not application readiness. */
   async probeHttp(url: string, timeoutMs: number = 5000): Promise<boolean> {
     try {
+      if (this.platform === "win32") {
+        // curl -sf without -L: the response's own status, within the same whole-second bound.
+        const response = await fetch(url, { redirect: "manual", signal: AbortSignal.timeout(Math.ceil(timeoutMs / 1000) * 1000) });
+        await response.body?.cancel();
+        return response.status >= 200 && response.status < 400;
+      }
       const cmd = `curl -sf -o /dev/null -w '%{http_code}' --max-time ${Math.ceil(timeoutMs / 1000)} ${sq(url)} 2>/dev/null`;
       const output = await this.exec(cmd);
       const code = parseInt(output.trim(), 10);
@@ -252,6 +268,7 @@ export class ComposeServicesAdapter {
     if (!/^[A-Za-z0-9][A-Za-z0-9._+-]*$/.test(portStr) || !/[A-Za-z]/.test(portStr)) {
       return { ok: false, reason: "malformed" };
     }
+    if (this.platform === "win32") return { ok: false, reason: "named_port_needs_nc" };
     try {
       await this.exec("command -v nc");
     } catch {

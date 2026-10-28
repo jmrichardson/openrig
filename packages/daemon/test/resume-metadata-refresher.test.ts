@@ -26,6 +26,14 @@ function mockTmux(overrides?: Partial<TmuxAdapter>): TmuxAdapter {
   } as unknown as TmuxAdapter;
 }
 
+const WINDOWS_POWERSHELL = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
+
+/** A CIM Win32_Process row: the OS image is argv[0]'s quoted path. */
+function windowsRow(pid: number, ppid: number, executablePath: string, args: string, startedAt: string) {
+  return { platform: "win32" as const, pid, ppid, executablePath, executableName: nodePath.win32.basename(executablePath),
+    command: `"${executablePath}" ${args}`, startedAt };
+}
+
 function createCodexLogsDb(homeDir: string, pid: number, threadId: string, dbName = "logs_1.sqlite"): void {
   const codexDir = nodePath.join(homeDir, ".codex");
   fs.mkdirSync(codexDir, { recursive: true });
@@ -120,6 +128,65 @@ describe("ResumeMetadataRefresher", () => {
       "019d45c3-e909-7152-b52e-34edab4070ed",
       "scrape"
     );
+  });
+
+  // Windows keeps an exited parent's PID as ParentProcessId and reuses PIDs, so an older Codex can
+  // look like a child of the current pane shell.
+  it.each([["2026-10-17T12:00:01.000Z", true], ["2026-10-17T11:59:59.000Z", false]] as const)(
+    "refreshes a native Windows Codex child only when it started after the pane shell (%s)", async (startedAt, captured) => {
+      const sessionRegistry = {
+        isForkClaimingHeldToken: vi.fn(() => false),
+        updateResumeToken: vi.fn(),
+      } as unknown as SessionRegistry;
+      const rows = [
+        windowsRow(900, 1, WINDOWS_POWERSHELL, "-NoLogo", "2026-10-17T12:00:00.000Z"),
+        windowsRow(901, 900, "C:\\Users\\a b\\codex\\codex.exe", "-s workspace-write", startedAt),
+      ];
+      const readCodexThreadIdByPid = vi.fn((pid: number) => pid === 901 ? "019d45c3-e909-7152-b52e-34edab4070ed" : undefined);
+      const refresher = new ResumeMetadataRefresher({
+        sessionRegistry,
+        tmuxAdapter: mockTmux({ getPanePid: vi.fn(async () => 900) }),
+        listProcesses: () => rows,
+        readCodexThreadIdByPid,
+        sleep: async () => {},
+      });
+
+      await refresher.refresh([{ sessionId: "sess-1", sessionName: "dev-qa@demo-rig", runtime: "codex", resumeType: null, resumeToken: null }]);
+
+      expect(readCodexThreadIdByPid).toHaveBeenCalledTimes(captured ? 1 : 0);
+      expect(sessionRegistry.updateResumeToken).toHaveBeenCalledTimes(captured ? 1 : 0);
+    });
+
+  // A Windows row is a Codex by its OS image (or Node running Codex's npm entry), never by an argv mention.
+  it.each([
+    ["a PowerShell whose argv mentions codex", [
+      windowsRow(901, 900, WINDOWS_POWERSHELL, "-NoProfile -Command codex resume", "2026-10-17T12:00:01.000Z"),
+    ], []],
+    ["an npm Node launcher above its vendor binary", [
+      windowsRow(901, 900, "C:\\Program Files\\nodejs\\node.exe",
+        "\"C:\\Users\\a b\\AppData\\Roaming\\npm\\node_modules\\@openai\\codex\\bin\\codex.js\" -s workspace-write", "2026-10-17T12:00:01.000Z"),
+      windowsRow(902, 901, "C:\\Users\\a b\\AppData\\Roaming\\npm\\node_modules\\@openai\\codex\\vendor\\x86_64-pc-windows-msvc\\codex\\codex.exe",
+        "-s workspace-write", "2026-10-17T12:00:02.000Z"),
+    ], [902, 901]],
+  ] as const)("reads a native Windows Codex thread id only from Codex processes: %s", async (_shape, children, tried) => {
+    const sessionRegistry = {
+      isForkClaimingHeldToken: vi.fn(() => false),
+      updateResumeToken: vi.fn(),
+    } as unknown as SessionRegistry;
+    const readCodexThreadIdByPid = vi.fn((_pid: number) => undefined);
+    const refresher = new ResumeMetadataRefresher({
+      sessionRegistry,
+      tmuxAdapter: mockTmux({ getPanePid: vi.fn(async () => 900) }),
+      listProcesses: () => [windowsRow(900, 1, WINDOWS_POWERSHELL, "-NoLogo", "2026-10-17T12:00:00.000Z"), ...children],
+      readCodexThreadIdByPid,
+      sleep: async () => {},
+    });
+
+    await refresher.refresh([{ sessionId: "sess-1", sessionName: "dev-qa@demo-rig", runtime: "codex", resumeType: null, resumeToken: null }]);
+
+    // The deepest Codex is tried first.
+    expect(readCodexThreadIdByPid.mock.calls.map(([pid]) => pid).slice(0, tried.length)).toEqual(tried);
+    expect(new Set(readCodexThreadIdByPid.mock.calls.map(([pid]) => pid))).toEqual(new Set(tried));
   });
 
   it("refreshes missing Codex resume token from a nested wrapper -> vendor codex process tree", async () => {

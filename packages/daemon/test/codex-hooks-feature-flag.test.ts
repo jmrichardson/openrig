@@ -12,6 +12,7 @@
 // 4. User override (setting=false) → daemon does NOT mutate Codex config
 
 import { describe, it, expect, vi } from "vitest";
+import path from "node:path";
 import { CodexRuntimeAdapter, type CodexAdapterFsOps } from "../src/adapters/codex-runtime-adapter.js";
 import { SETTINGS_VALID_KEYS } from "../src/domain/user-settings/settings-store.js";
 
@@ -40,6 +41,9 @@ function mockCodexFs(files?: Record<string, string>): CodexAdapterFsOps & { _sto
   } as CodexAdapterFsOps & { _store: Record<string, string> };
 }
 
+// The adapter joins its home with node:path, as on a real host.
+const CONFIG = path.join("/home/test", ".codex", "config.toml");
+
 describe("Slice 3.5 — Codex feature flag (runtime.codex.hooks_enabled)", () => {
   // ============================================================
   // HG-5.1: setting exists in canonical valid-keys lists
@@ -59,7 +63,7 @@ describe("Slice 3.5 — Codex feature flag (runtime.codex.hooks_enabled)", () =>
 
     adapter.ensureCodexFeatureFlag(true, { codexVersion: "0.120.0" });
 
-    const written = fs._store["/home/test/.codex/config.toml"];
+    const written = fs._store[CONFIG];
     expect(written).toBeDefined();
     expect(written).toContain("[features]");
     expect(written).toContain("codex_hooks = true");
@@ -71,18 +75,18 @@ describe("Slice 3.5 — Codex feature flag (runtime.codex.hooks_enabled)", () =>
 
     adapter.ensureCodexFeatureFlag(true, { codexVersion: "0.120.0" });
 
-    expect(fs._store["/custom-codex/config.toml"]).toContain("codex_hooks = true");
-    expect(fs._store["/home/test/.codex/config.toml"]).toBeUndefined();
+    expect(fs._store[path.join("/custom-codex", "config.toml")]).toContain("codex_hooks = true");
+    expect(fs._store[CONFIG]).toBeUndefined();
   });
 
   it("HG-5.2 — ensureCodexFeatureFlag(true) sets codex_hooks = true while preserving existing config content", () => {
     const existing = `[model_provider]\nname = "openai"\n\n[other_section]\nfoo = "bar"\n`;
-    const fs = mockCodexFs({ "/home/test/.codex/config.toml": existing });
+    const fs = mockCodexFs({ [CONFIG]: existing });
     const adapter = new CodexRuntimeAdapter({ tmux: mockTmux(), fsOps: fs });
 
     adapter.ensureCodexFeatureFlag(true, { codexVersion: "0.120.0" });
 
-    const written = fs._store["/home/test/.codex/config.toml"]!;
+    const written = fs._store[CONFIG]!;
     expect(written).toContain('name = "openai"');
     expect(written).toContain('foo = "bar"');
     expect(written).toContain("[features]");
@@ -100,7 +104,7 @@ describe("Slice 3.5 — Codex feature flag (runtime.codex.hooks_enabled)", () =>
     adapter.ensureCodexFeatureFlag(true, { codexVersion: "0.120.0" });
     adapter.ensureCodexFeatureFlag(true, { codexVersion: "0.120.0" });
 
-    const written = fs._store["/home/test/.codex/config.toml"]!;
+    const written = fs._store[CONFIG]!;
     const matches = written.match(/codex_hooks = true/g) ?? [];
     expect(matches).toHaveLength(1);
     const featuresMatches = written.match(/\[features\]/g) ?? [];
@@ -109,12 +113,12 @@ describe("Slice 3.5 — Codex feature flag (runtime.codex.hooks_enabled)", () =>
 
   it("HG-5.3 — pre-existing [features] block with other flags is preserved when adding codex_hooks", () => {
     const existing = `[features]\nother_flag = false\n`;
-    const fs = mockCodexFs({ "/home/test/.codex/config.toml": existing });
+    const fs = mockCodexFs({ [CONFIG]: existing });
     const adapter = new CodexRuntimeAdapter({ tmux: mockTmux(), fsOps: fs });
 
     adapter.ensureCodexFeatureFlag(true, { codexVersion: "0.120.0" });
 
-    const written = fs._store["/home/test/.codex/config.toml"]!;
+    const written = fs._store[CONFIG]!;
     expect(written).toContain("other_flag = false");
     expect(written).toContain("codex_hooks = true");
   });
@@ -129,17 +133,17 @@ describe("Slice 3.5 — Codex feature flag (runtime.codex.hooks_enabled)", () =>
 
     adapter.ensureCodexFeatureFlag(false);
 
-    expect(fs._store["/home/test/.codex/config.toml"]).toBeUndefined();
+    expect(fs._store[CONFIG]).toBeUndefined();
   });
 
   it("HG-5.4 — ensureCodexFeatureFlag(false) does NOT touch existing ~/.codex/config.toml content (user owns it)", () => {
     const existing = `[features]\ncodex_hooks = false\nother = true\n`;
-    const fs = mockCodexFs({ "/home/test/.codex/config.toml": existing });
+    const fs = mockCodexFs({ [CONFIG]: existing });
     const adapter = new CodexRuntimeAdapter({ tmux: mockTmux(), fsOps: fs });
 
     adapter.ensureCodexFeatureFlag(false);
 
-    expect(fs._store["/home/test/.codex/config.toml"]).toBe(existing);
+    expect(fs._store[CONFIG]).toBe(existing);
   });
 
   // OPR.0.4.0.11 version-aware tests
@@ -149,7 +153,7 @@ describe("Slice 3.5 — Codex feature flag (runtime.codex.hooks_enabled)", () =>
 
     adapter.ensureCodexFeatureFlag(true, { codexVersion: undefined });
 
-    expect(fs._store["/home/test/.codex/config.toml"]).toBeUndefined();
+    expect(fs._store[CONFIG]).toBeUndefined();
   });
 
   it("0.4.0.11 — 0.139.0 does NOT write config (hooks default-enabled)", () => {
@@ -158,7 +162,7 @@ describe("Slice 3.5 — Codex feature flag (runtime.codex.hooks_enabled)", () =>
 
     adapter.ensureCodexFeatureFlag(true, { codexVersion: "0.139.0" });
 
-    expect(fs._store["/home/test/.codex/config.toml"]).toBeUndefined();
+    expect(fs._store[CONFIG]).toBeUndefined();
   });
 
   it("0.4.0.11 — 0.120.0 DOES write config (legacy toggle)", () => {
@@ -167,7 +171,7 @@ describe("Slice 3.5 — Codex feature flag (runtime.codex.hooks_enabled)", () =>
 
     adapter.ensureCodexFeatureFlag(true, { codexVersion: "0.120.0" });
 
-    const written = fs._store["/home/test/.codex/config.toml"];
+    const written = fs._store[CONFIG];
     expect(written).toBeDefined();
     expect(written).toContain("codex_hooks = true");
   });

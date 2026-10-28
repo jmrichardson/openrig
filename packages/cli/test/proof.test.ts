@@ -14,6 +14,7 @@ import {
   C1_ARTIFACT_TYPES,
   C1_VERDICTS,
 } from "../src/commands/proof.js";
+import { canCreateFileSymlinks } from "../../../test/symlink-capability.mjs";
 
 describe("validateC1Header (pure)", () => {
   const valid = {
@@ -499,7 +500,8 @@ describe("rig proof add --replace swaps the entry and never writes through links
   const stagingLeftovers = () => fs.readdirSync(proofDir).filter((f) => f.endsWith(".replace-tmp"));
   const png = (tag: string) => Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from(tag)]);
 
-  it("a symlinked artifact name is replaced; the linked file keeps its bytes", async () => {
+  // The subject is a file symlink, which Windows creates only with SeCreateSymbolicLinkPrivilege.
+  it.skipIf(!canCreateFileSymlinks)("a symlinked artifact name is replaced; the linked file keeps its bytes", async () => {
     const outside = path.join(workRoot, "outside");
     fs.mkdirSync(outside);
     const victim = path.join(outside, "victim.png");
@@ -580,7 +582,8 @@ describe("rig proof add --replace swaps the entry and never writes through links
     expect(stagingLeftovers()).toEqual([]);
   });
 
-  it("keeps an existing regular artifact's permission bits; a symlinked name gets default permissions", async () => {
+  // POSIX mode bits; Windows uses ACLs
+  it.skipIf(process.platform === "win32")("keeps an existing regular artifact's permission bits; a symlinked name gets default permissions", async () => {
     const priv = path.join(proofDir, "private.md");
     fs.writeFileSync(priv, "original\n");
     fs.chmodSync(priv, 0o600);
@@ -603,7 +606,8 @@ describe("rig proof add --replace swaps the entry and never writes through links
     expect(fs.readFileSync(linkedTarget)).toEqual(png("mode victim"));
   });
 
-  it("creates the staging file no wider than the artifact it replaces", async () => {
+  // POSIX mode bits; Windows uses ACLs
+  it.skipIf(process.platform === "win32")("creates the staging file no wider than the artifact it replaces", async () => {
     const priv = path.join(proofDir, "tight.md");
     fs.writeFileSync(priv, "original\n");
     fs.chmodSync(priv, 0o600);
@@ -627,6 +631,21 @@ describe("rig proof add --replace swaps the entry and never writes through links
     expect(process.exitCode).toBeUndefined();
     expect(fs.statSync(ro).mode & 0o777).toBe(0o444);
     expect(fs.readFileSync(ro, "utf8")).toContain("replacement body");
+  });
+
+  // Windows keeps the read-only attribute on the file, shared by every hard link; POSIX replaces the entry regardless.
+  it.runIf(process.platform === "win32")("refuses a read-only hard-linked artifact without making the other link writable", async () => {
+    const shot = path.join(proofDir, "shared.md");
+    fs.writeFileSync(shot, "original\n");
+    fs.chmodSync(shot, 0o444);
+    fs.linkSync(shot, path.join(proofDir, "frozen-link.md"));
+    await add("frozen-link.md", ["--replace"]);
+    expect(process.exitCode).toBe(1);
+    expect(errs.join("\n")).toContain("hard-linked");
+    expect(fs.statSync(shot).mode & 0o200).toBe(0);
+    expect(fs.statSync(shot).nlink).toBe(2);
+    expect(fs.readFileSync(path.join(proofDir, "frozen-link.md"), "utf8")).toBe("original\n");
+    expect(stagingLeftovers()).toEqual([]);
   });
 
   it("reports the write failure, not a later close failure, and keeps the target", async () => {

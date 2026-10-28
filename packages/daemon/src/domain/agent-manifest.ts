@@ -39,7 +39,8 @@ export function canonicalContinuityMechanic(value: unknown): string | null {
 const VALID_RESTORE_POLICIES = new Set(["resume_if_possible", "relaunch_fresh", "checkpoint_only"]);
 const VALID_IMPORT_PREFIXES = ["local:", "path:"];
 
-import { validateSafePath } from "./path-safety.js";
+import { isAbsolute } from "node:path";
+import { isRootedPath, validateSafePath } from "./path-safety.js";
 
 // -- Import validation --
 
@@ -50,12 +51,12 @@ function validateImportRef(ref: string, index: number): string | null {
   if (ref.startsWith("local:")) {
     const path = ref.slice("local:".length);
     if (!path) return `imports[${index}].ref: local: ref must have a path`;
-    if (path.startsWith("/")) return `imports[${index}].ref: local: ref must be a relative path (got "${ref}")`;
+    if (isRootedPath(path)) return `imports[${index}].ref: local: ref must be a relative path (got "${ref}")`;
   }
   if (ref.startsWith("path:")) {
     const path = ref.slice("path:".length);
     if (!path) return `imports[${index}].ref: path: ref must have a path`;
-    if (!path.startsWith("/")) return `imports[${index}].ref: path: ref must be an absolute path (got "${ref}")`;
+    if (!isAbsolute(path)) return `imports[${index}].ref: path: ref must be an absolute path (got "${ref}")`;
   }
   return null;
 }

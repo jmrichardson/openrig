@@ -36,6 +36,12 @@ install_setup_incomplete() {
 }
 
 install_main() {
+  if [ "${OS:-}" = 'Windows_NT' ]; then
+    printf '%s\n' 'Native Windows uses install.ps1, published beside this script (the same URL ending install.ps1).' \
+      'Save it, then preview from PowerShell: powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -DryRun' \
+      'Run it again without -DryRun to install. This POSIX installer is only for macOS and Linux.' >&2
+    return 2
+  fi
   case "$#:$1" in
     0:|1:--dry-run) ;;
     1:--help|1:-h)

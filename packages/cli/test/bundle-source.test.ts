@@ -7,6 +7,7 @@ import type { StatusDeps } from "../src/commands/status.js";
 import { DaemonClient } from "../src/client.js";
 import { PodBundleAssembler } from "../../daemon/src/domain/pod-bundle-assembler.js";
 import { parseGitHubBundleLink, selectGitHubBundleSource, prepareGitHubBundle, importGitHubBundle, bundleIdentityLines, bundleGit, authoredCompatibility } from "../src/lib/bundle-source.js";
+import { canCreateFileSymlinks } from "../../../test/symlink-capability.mjs";
 
 const state = vi.hoisted(() => ({ host: undefined as string | undefined, origin: "local-instance", remote: "local-instance" }));
 vi.mock("../src/local-origin.js", () => ({ readLocalOrigin: () => state.origin }));
@@ -100,7 +101,8 @@ describe("GitHub bundle source", () => {
     fs.writeFileSync(path.join(dir, "notes.txt"), `${name} repository fixture\n`);
   }
 
-  it("rejects an outside-folder agent symlink and removes the import", async () => {
+  // Repository symlinks: Git checks them out on Windows only with SeCreateSymbolicLinkPrivilege.
+  it.skipIf(!canCreateFileSymlinks)("rejects an outside-folder agent symlink and removes the import", async () => {
     const outside = path.join(root, "host-only.txt");
     fs.writeFileSync(outside, "synthetic host-only fixture\n");
     const imports = path.join(root, "imports");
@@ -170,7 +172,8 @@ describe("GitHub bundle source", () => {
     expect(fs.existsSync(assembledRigRoot)).toBe(false);
   });
 
-  it.each(["relative", "absolute", "dangling", "nested-directory"])("rejects unsafe repository symlinks: %s", async kind => {
+  // Repository symlinks: Git checks them out on Windows only with SeCreateSymbolicLinkPrivilege.
+  it.skipIf(!canCreateFileSymlinks).each(["relative", "absolute", "dangling", "nested-directory"])("rejects unsafe repository symlinks: %s", async kind => {
     const outside = path.join(root, "host-only.txt");
     fs.writeFileSync(outside, "synthetic host-only fixture\n");
     const imports = path.join(root, "imports");
@@ -191,7 +194,8 @@ describe("GitHub bundle source", () => {
     expect(fs.readFileSync(outside, "utf8")).toBe("synthetic host-only fixture\n");
   });
 
-  it("preserves contained file and directory symlinks, including directory cycles", async () => {
+  // Repository symlinks: Git checks them out on Windows only with SeCreateSymbolicLinkPrivilege.
+  it.skipIf(!canCreateFileSymlinks)("preserves contained file and directory symlinks, including directory cycles", async () => {
     const git = checkoutWith((checkout, folder) => {
       fs.mkdirSync(path.join(checkout, "shared"));
       fs.writeFileSync(path.join(checkout, "shared/notes.txt"), "repository fixture\n");

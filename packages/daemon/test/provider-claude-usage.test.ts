@@ -263,7 +263,9 @@ describe("claudeAuthStatusReader against a fake claude", () => {
     expect(performance.now() - started).toBeLessThan(5_000);
   });
 
-  it("nothing a read starts survives it (answer, logged out, hang), with processes that ignore HUP and TERM", async () => {
+  // Process groups and `ps` (in the test and the stubborn fake) are POSIX. Windows ends a still-running tree with
+  // taskkill /T, and does not reach a helper left behind by a `claude` that exited by itself.
+  it.skipIf(process.platform === "win32")("nothing a read starts survives it (answer, logged out, hang), with processes that ignore HUP and TERM", async () => {
     const fake = makeFakeClaude();
     // The reader reaps its own child before it returns; an orphaned stub child is reaped by init (launchd on macOS), so
     // every recorded pid and group must be gone within REAP_BOUND_MS; anything left is named with its ps state.

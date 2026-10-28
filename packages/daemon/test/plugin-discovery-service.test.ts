@@ -29,6 +29,9 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { PluginDiscoveryService } from "../src/domain/plugin-discovery-service.js";
 
+/** A native manifest path as a literal regex fragment (Windows paths carry "\"). */
+const pathPattern = (...segments: string[]) => join(...segments).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 interface TempDirs {
   root: string;
   openrigPluginsDir: string;
@@ -198,7 +201,7 @@ describe("PluginDiscoveryService", () => {
         claudeCacheDir: dirs.claudeCacheDir,
         codexCacheDir: dirs.codexCacheDir,
         specLibraryDir: dirs.specLibraryDir,
-      })).toThrow(new RegExp(`${core}/hooks/claude\\.json.*${rogue}/hooks/claude\\.json`));
+      })).toThrow(new RegExp(`${pathPattern(core, "hooks/claude.json")}.*${pathPattern(rogue, "hooks/claude.json")}`));
     });
 
     it("fails loud with both Codex manifest paths when unknown vendored plugins duplicate a hook identity", () => {
@@ -214,7 +217,7 @@ describe("PluginDiscoveryService", () => {
         claudeCacheDir: dirs.claudeCacheDir,
         codexCacheDir: dirs.codexCacheDir,
         specLibraryDir: dirs.specLibraryDir,
-      })).toThrow(new RegExp(`${core}/hooks/codex\\.json.*${rogue}/hooks/codex\\.json`));
+      })).toThrow(new RegExp(`${pathPattern(core, "hooks/codex.json")}.*${pathPattern(rogue, "hooks/codex.json")}`));
     });
 
     it("discovers a vendored OpenRig plugin (dual-manifest)", () => {

@@ -245,7 +245,7 @@ export function inspectSkillDirectory(root: string): { digest: string; files: Re
 function gitState(catalogRoot: string): { revision: string; dirtyDirs: Set<string>; committedName: (dir: string) => string | null } {
   let repoRoot: string;
   try {
-    repoRoot = execFileSync("git", ["-C", catalogRoot, "rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim();
+    repoRoot = execFileSync("git", ["-C", catalogRoot, "rev-parse", "--show-toplevel"], { encoding: "utf8", windowsHide: true }).trim();
   } catch {
     throw new Error(`managed skill catalog is not inside a readable Git repository: ${catalogRoot}`);
   }
@@ -253,7 +253,7 @@ function gitState(catalogRoot: string): { revision: string; dirtyDirs: Set<strin
   const status = execFileSync(
     "git",
     ["-C", repoRoot, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--", rel || "."],
-    { encoding: "utf8" },
+    { encoding: "utf8", windowsHide: true },
   );
   const dirtyDirs = new Set<string>();
   const fields = status.split("\0");
@@ -273,7 +273,7 @@ function gitState(catalogRoot: string): { revision: string; dirtyDirs: Set<strin
       dirtyDirs.add(inCatalog.slice(0, slash));
     }
   }
-  const revision = execFileSync("git", ["-C", repoRoot, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  const revision = execFileSync("git", ["-C", repoRoot, "rev-parse", "HEAD"], { encoding: "utf8", windowsHide: true }).trim();
   // The frontmatter name of `dir`'s SKILL.md at HEAD: null when HEAD has none there, "" when it doesn't parse.
   const committedName = (dir: string): string | null => {
     let text: string;
@@ -281,6 +281,7 @@ function gitState(catalogRoot: string): { revision: string; dirtyDirs: Set<strin
       text = execFileSync("git", ["-C", repoRoot, "show", `${revision}:${rel ? `${rel}/` : ""}${dir}/SKILL.md`], {
         encoding: "utf8",
         stdio: ["ignore", "pipe", "ignore"],
+        windowsHide: true,
       });
     } catch {
       return null;
@@ -694,7 +695,7 @@ function replaceGitIgnoreBlock(original: string, begin: string, end: string, pat
 
 function isGitIgnored(repoRoot: string, path: string): boolean {
   try {
-    execFileSync("git", ["-C", repoRoot, "check-ignore", "-q", "--no-index", "--", path], { stdio: "ignore" });
+    execFileSync("git", ["-C", repoRoot, "check-ignore", "-q", "--no-index", "--", path], { stdio: "ignore", windowsHide: true });
     return true;
   } catch (err) {
     if ((err as { status?: number | null }).status === 1) return false;
@@ -705,7 +706,7 @@ function isGitIgnored(repoRoot: string, path: string): boolean {
 function isGitTracked(repoRoot: string, path: string): boolean {
   const relative = nodePath.relative(repoRoot, path);
   try {
-    execFileSync("git", ["-C", repoRoot, "ls-files", "--error-unmatch", "--", relative], { stdio: "ignore" });
+    execFileSync("git", ["-C", repoRoot, "ls-files", "--error-unmatch", "--", relative], { stdio: "ignore", windowsHide: true });
     return true;
   } catch (err) {
     if ((err as { status?: number | null }).status === 1) return false;
@@ -757,6 +758,7 @@ function planGitIgnores(input: {
     repoRoot = execFileSync("git", ["-C", input.cwd, "rev-parse", "--show-toplevel"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
+      windowsHide: true,
     }).trim();
   } catch {
     return [];

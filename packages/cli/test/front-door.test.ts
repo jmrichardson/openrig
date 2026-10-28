@@ -8,7 +8,7 @@ import { describe, it, expect, vi } from "vitest";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { createServer } from "node:net";
 import { runFrontDoor, resolveTuiPath, probeFrontDoor, type FrontDoorIo } from "../src/front-door.js";
 import { diagnoseRuntimePosture, observeClaudePermission } from "../../daemon/src/domain/permission-drift.js";
@@ -426,8 +426,8 @@ describe("front-door probe routing", () => {
 describe("resolveTuiPath — monorepo-first, bundled fallback (the daemon resolver pattern)", () => {
   it("prefers the monorepo sibling dist, falls back to the bundled copy, null when neither", () => {
     const base = "/repo/packages/cli/dist";
-    const mono = join("/repo/packages/cli/dist", "../../tui/dist/main.js");
-    const bundled = join("/repo/packages/cli/dist", "../tui/dist/main.js");
+    const mono = resolve("/repo/packages/cli/dist", "../../tui/dist/main.js");
+    const bundled = resolve("/repo/packages/cli/dist", "../tui/dist/main.js");
     expect(resolveTuiPath(base, (p) => p === mono)).toBe(mono);
     expect(resolveTuiPath(base, (p) => p === bundled)).toBe(bundled);
     expect(resolveTuiPath(base, () => false)).toBeNull();
@@ -455,12 +455,17 @@ describe("PUBLIC bin ownership (guard finding 1 — the wrapper is the real fron
       childExit: existsSync(exitFile) ? readFileSync(exitFile, "utf8") : "still running or not started",
     });
     try {
-      const run = tmux(["new-session", "-d", "-s", session, "-x", "120", "-y", "30",
-        `OPENRIG_HOME=${quote(home)} OPENRIG_URL=http://127.0.0.1:9 ${quote(process.execPath)} ${quote(binWrapper)}; printf '%s' $? > ${quote(exitFile)}; sleep 15`]);
+      // psmux panes run PowerShell on Windows; POSIX tmux panes run sh.
+      const psQuote = (s: string) => "'" + s.replaceAll("'", "''") + "'";
+      const command = process.platform === "win32"
+        ? `$env:OPENRIG_HOME=${psQuote(home)}; $env:OPENRIG_URL='http://127.0.0.1:9'; & ${psQuote(process.execPath)} ${psQuote(binWrapper)}; Set-Content -NoNewline -LiteralPath ${psQuote(exitFile)} -Value $LASTEXITCODE; Start-Sleep 15`
+        : `OPENRIG_HOME=${quote(home)} OPENRIG_URL=http://127.0.0.1:9 ${quote(process.execPath)} ${quote(binWrapper)}; printf '%s' $? > ${quote(exitFile)}; sleep 15`;
+      const run = tmux(["new-session", "-d", "-s", session, "-x", "120", "-y", "30", command]);
       expect(run.status, diagnostic(run)).toBe(0);
       let text = "";
       for (let i = 0; i < 20 && !/EXPLORER|mission control could not start|Usage: rig/.test(text); i++) {
-        spawnSync("sleep", ["0.5"]);
+        if (process.platform === "win32") Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500); // no sleep binary
+        else spawnSync("sleep", ["0.5"]);
         const capture = tmux(["capture-pane", "-t", session, "-p"]);
         expect(capture.status, diagnostic(capture)).toBe(0);
         text = capture.stdout ?? "";

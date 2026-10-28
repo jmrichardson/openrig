@@ -9,9 +9,10 @@ import {
   DESTROY_CONFIRM_TOKEN,
   buildDestroyPlan,
   executeDestroy,
-  findListeningPidWithLsof,
+  findListeningPid,
   killTmuxSessionWithCli,
   listManagedTmuxSessionsFromDb,
+  terminateListenerPid,
   type DestroyDeps,
   type ListenerInspection,
   type DestroyRuntimeConfig,
@@ -107,10 +108,8 @@ function realDestroyDeps(): DestroyDeps {
         return { kind: "unreachable" };
       }
     },
-    findListeningPid: findListeningPidWithLsof,
-    killProcess: (pid: number) => {
-      process.kill(pid, "SIGTERM");
-    },
+    findListeningPid,
+    killProcess: (pid: number) => terminateListenerPid(pid),
     exists: existsSync,
     renamePath: (from: string, to: string) => renameSync(from, to),
     removePath: (targetPath: string) => rmSync(targetPath, { recursive: true, force: true }),

@@ -53,5 +53,7 @@ export async function verifyCodexProfileLoads(
 
 function shellQuote(s: string): string {
   if (/^[a-zA-Z0-9._\-/]+$/.test(s)) return s;
+  // Windows runs the probe from its literal words (parseLiteralLaunchWords), which take no backslash escape.
+  if (process.platform === "win32") return `'${s.replace(/'/g, "'\"'\"'")}'`;
   return `'${s.replace(/'/g, "'\\''")}'`;
 }

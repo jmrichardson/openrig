@@ -56,6 +56,22 @@ describe("resolveScopePathToAllowlist (pure)", () => {
     const roots = [{ name: "ws", path: "/Users/x/.openrig/shared-docs/internal-docs" }];
     expect(resolveScopePathToAllowlist(roots, "/somewhere/else")).toBeNull();
   });
+
+  it("resolves the native drive and UNC paths a Windows daemon reports", () => {
+    const roots = [
+      { name: "home", path: "C:\\Users\\x" },
+      { name: "workspace", path: "c:\\Users\\x\\.openrig\\workspace" },
+      { name: "work", path: "C:\\work" },
+      { name: "share", path: "\\\\server\\share" },
+    ];
+    expect(resolveScopePathToAllowlist(roots, "C:\\Users\\x\\.openrig\\workspace\\missions\\m1"))
+      .toEqual({ rootName: "workspace", relPath: "missions/m1" });
+    expect(resolveScopePathToAllowlist(roots, "C:\\Users\\x\\.openrig\\workspace"))
+      .toEqual({ rootName: "workspace", relPath: "" });
+    expect(resolveScopePathToAllowlist(roots, "C:\\workspace\\missions")).toBeNull();
+    expect(resolveScopePathToAllowlist(roots, "\\\\server\\share\\missions\\m1\\slices\\s1"))
+      .toEqual({ rootName: "share", relPath: "missions/m1/slices/s1" });
+  });
 });
 
 describe("useScopeMarkdown — production wire honors arbitrary filename", () => {

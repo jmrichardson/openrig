@@ -37,6 +37,11 @@ const MAX_TOKEN_LEN = 200;
 // always argv/shellQuote-passed, never a remote scp/rsync operand where
 // user@host parsing would matter (that ambiguity is why `rig file` excludes
 // it; this surface has no such parse).
+//
+// On Windows a drive-letter or UNC path is also absolute, with spaces and "\"
+// added to the set; device paths (\\?\, \\.\) are refused. A "/"-rooted token
+// is still accepted there under the POSIX set and ".." rule, and Windows
+// resolves it against the current drive's root.
 const SESSION_FILE_CHARSET_RE = /^[A-Za-z0-9._/@-]+$/;
 const MAX_SESSION_FILE_LEN = 1024;
 const SESSION_FILE_SUFFIX = ".jsonl";
@@ -71,7 +76,8 @@ function validateSessionFileToken(resumeType: "pi_session_file" | "omp_session_f
   }
   const windowsPath = platform === "win32" && (/^[A-Za-z]:[\\/]/.test(token) || /^\\\\[^\\]+\\[^\\]+\\/.test(token));
   if (!token.startsWith("/") && !windowsPath) {
-    return { ok: false, error: `${label} session-file token must be an absolute path (starting with '/').` };
+    const forms = platform === "win32" ? "starting with '/', a drive letter or a UNC share" : "starting with '/'";
+    return { ok: false, error: `${label} session-file token must be an absolute path (${forms}).` };
   }
   if (token.split(windowsPath ? /[\\/]/ : "/").includes("..")) {
     return { ok: false, error: `${label} session-file token must not contain a '..' path segment.` };
@@ -79,9 +85,10 @@ function validateSessionFileToken(resumeType: "pi_session_file" | "omp_session_f
   const safeWindowsPath = windowsPath && !/^\\\\[?.]\\/.test(token)
     && /^[\p{L}\p{N}\p{M} ._/@\\-]+$/u.test(token.replace(/^[A-Za-z]:/, ""));
   if (!(windowsPath ? safeWindowsPath : SESSION_FILE_CHARSET_RE.test(token))) {
+    const allowed = windowsPath ? "letters, digits, spaces, '.', '_', '/', '\\', '@', '-'" : "letters, digits, '.', '_', '/', '@', '-'";
     return {
       ok: false,
-      error: `${label} session-file token contains disallowed characters (allowed: letters, digits, '.', '_', '/', '@', '-').`,
+      error: `${label} session-file token contains disallowed characters (allowed: ${allowed}).`,
     };
   }
   if (!token.endsWith(SESSION_FILE_SUFFIX)) {

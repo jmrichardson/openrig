@@ -209,6 +209,22 @@ files: []
     expect(lib.list()[0]!.name).toBe("installed");
   });
 
+  // Windows path rules; elsewhere these are ordinary relative names (see path-safety.test.ts).
+  it.runIf(process.platform === "win32")("install rejects rooted image file paths", () => {
+    const lib = new AgentImageLibraryService({
+      roots: [{ path: userRoot, sourceType: "user_file" }],
+    });
+    const manifest: AgentImageManifest = {
+      name: "rooted", version: "1", runtime: "claude-code",
+      sourceSeat: "x", sourceSessionId: "s", sourceResumeToken: "t",
+      createdAt: "2026-01-01T00:00:00Z", files: [{ path: "supplement.md", role: "notes" }],
+    };
+    for (const path of ["C:notes.md", "C:\\notes.md", "\\notes.md", "\\\\server\\share\\notes.md"]) {
+      expect(() => lib.install(userRoot, manifest, new Map([[path, "outside"]]))).toThrow(/must be relative inside the image/);
+      expect(existsSync(join(userRoot, manifest.name))).toBe(false);
+    }
+  });
+
   it("install accepts a file name with literal dots but rejects a '..' segment", () => {
     const lib = new AgentImageLibraryService({
       roots: [{ path: userRoot, sourceType: "user_file" }],

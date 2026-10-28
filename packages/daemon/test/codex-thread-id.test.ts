@@ -66,6 +66,36 @@ describe("native conversation identity excludes same-process auxiliary threads",
     expect(await f.finish().resolve(60422, identity)).toBe("conversation");
   });
 
+  describe("with a Windows (CIM) start time", () => {
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    beforeEach(() => { Object.defineProperty(process, "platform", { ...platform, value: "win32" }); });
+    afterEach(() => { Object.defineProperty(process, "platform", platform); });
+
+    it("rejects an earlier Windows process's conversation when its PID is reused", async () => {
+      const f = fixture();
+      f.thread("retired"); f.log("retired", start - 1);
+      f.thread("current"); f.log("current", start + 1);
+      expect(await f.finish().resolve(60422, new Date(start * 1000).toISOString())).toBe("current");
+    });
+
+    it("does not assign a Windows start-second log to the new process", async () => {
+      const f = fixture();
+      f.thread("ambiguous"); f.log("ambiguous", start);
+      expect(await f.finish().resolve(60422, new Date(start * 1000 + 500).toISOString())).toBeUndefined();
+    });
+  });
+
+  it("reads only a ps start time off Windows", () => {
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    try {
+      Object.defineProperty(process, "platform", { ...platform, value: "linux" });
+      expect(lstartToMinTs(new Date(start * 1000).toISOString())).toBeUndefined();
+      expect(lstartToMinTs(identity)).toBe(start);
+      Object.defineProperty(process, "platform", { ...platform, value: "win32" });
+      expect(lstartToMinTs(new Date(start * 1000 + 999).toISOString())).toBe(start);
+    } finally { Object.defineProperty(process, "platform", platform); }
+  });
+
   it.each(["no conversation", "unrelated process", "retired pid", "ambiguous start second", "non-CLI thread", "two conversations"])("refuses %s instead of selecting a recent rollout", async kind => {
     const f = fixture();
     if (kind !== "no conversation") f.thread("conversation", kind === "non-CLI thread" ? "exec" : "cli");

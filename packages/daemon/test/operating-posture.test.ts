@@ -110,6 +110,18 @@ it("refuses missing, conflicting, ambiguous, unreadable and corrupt sources inst
   expect(t.service.resolve({ rigId: "demo" })).toMatchObject({ posture: "unknown", source: "unknown" });
 });
 
+it("refuses mission scope outside its project, whether by a missions root or by a linked mission folder", async () => {
+  const t = await setup();
+  const escaped = { posture: "unknown", source: "unknown", reason: expect.stringContaining("scope escapes its project") };
+  t.write("elsewhere/release/mission.yaml", "kind: mission\nmetadata: {name: release, status: active}\nrelease: {phase: planning}\n");
+  t.write("alpha/project.yaml", "metadata: {id: alpha}\nmissions: {root: ../elsewhere}\n");
+  expect(t.service.resolve({ projectId: "alpha", missionId: "release" })).toMatchObject(escaped);
+  t.write("alpha/project.yaml", "metadata: {id: alpha}\n");
+  rmSync(join(t.home, "alpha/missions/release"), { recursive: true });
+  symlinkSync(join(t.home, "elsewhere/release"), join(t.home, "alpha/missions/release"), process.platform === "win32" ? "junction" : "dir");
+  expect(t.service.resolve({ projectId: "alpha", missionId: "release" })).toMatchObject(escaped);
+});
+
 it("preserves legacy binding bytes through migration and never infers delegation from an ergonomic mode", async () => {
   const db = createDb(); cleanup.push(() => db.close()); migrate(db, ALL_MIGRATIONS.slice(0, -1));
   const store = new RigModeStore(db); store.setBinding("global_host", null, "focus", record("focus", "global_host"));
@@ -254,7 +266,7 @@ it("keeps the default catalog beside the real workspace when workspace.root is a
   const root = realpathSync(mkdtempSync(join(tmpdir(), "operating-posture-link-"))); cleanup.push(() => rmSync(root, { recursive: true, force: true }));
   const workspace = join(root, "physical", "workspace"), gamma = join(root, "physical", "gamma"), alias = join(root, "logical", "workspace");
   mkdirSync(workspace, { recursive: true }); mkdirSync(gamma); mkdirSync(join(root, "logical")); mkdirSync(join(root, "catalogs"));
-  symlinkSync(workspace, alias, "dir");
+  symlinkSync(workspace, alias, process.platform === "win32" ? "junction" : "dir");
   writeFileSync(join(workspace, "workspace.yaml"), "projects: [{id: gamma, root: ../gamma}]\n");
   writeFileSync(join(gamma, "project.yaml"), "metadata: {id: gamma}\n");
   const db = createDb(); migrate(db, ALL_MIGRATIONS); cleanup.push(() => db.close());

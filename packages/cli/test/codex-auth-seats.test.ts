@@ -24,11 +24,16 @@ afterEach(() => fs.rmSync(home, { recursive: true, force: true }));
 
 describe("auth seats registry (OPR.0.4.1.29)", () => {
   it("creates a 0600 registry with the product columns (NO resume_token) and upserts in place", () => {
-    expect(authSeatSet(paths, { seat: "dev1@rig", rig: "rig", runtime: "codex", cwd: "/x", authProfile: "work" }, NOW)).toMatchObject({ ok: true });
+    expect(authSeatSet(paths, { seat: "dev1@rig", rig: "rig", runtime: "codex", cwd: "/x", authProfile: "work" }, NOW)).toMatchObject({ ok: true, mode: process.platform === "win32" ? "unknown" : "600" });
     const content = fs.readFileSync(paths.registryPath, "utf8");
     expect(content.split("\n")[0]).toBe("seat\trig\truntime\tcwd\tauth_profile\tupdated_ts");
     expect(content).not.toContain("resume_token");
-    expect((fs.statSync(paths.registryPath).mode & 0o777).toString(8)).toBe("600");
+    if (process.platform === "win32") {
+      // POSIX mode bits; Windows uses ACLs, so the registry mode verdict is unknown there.
+      expect(authSeatsReport(paths).registryModeSafe).toBe("unknown");
+    } else {
+      expect((fs.statSync(paths.registryPath).mode & 0o777).toString(8)).toBe("600");
+    }
     authSeatSet(paths, { seat: "dev1@rig", rig: "rig", runtime: "codex", authProfile: "team" }, NOW);
     const rows = authSeatsList(paths).filter((r) => r.seat === "dev1@rig");
     expect(rows.length).toBe(1);

@@ -74,7 +74,9 @@ try {
     err += chunk;
     if (!signaled && (err.includes("probe-ok:") || err.includes("probe-error:"))) {
       signaled = true;
-      child.kill("SIGTERM");
+      // Windows has no catchable SIGTERM (kill terminates outright); stdin EOF ends serve cleanly.
+      if (process.platform === "win32") child.stdin.end();
+      else child.kill("SIGTERM");
     }
   });
   const code = await new Promise<number | null>((resolve, reject) => {

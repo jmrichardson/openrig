@@ -73,11 +73,11 @@ describe("cwd resolution: an existing literal path wins, otherwise the expansion
   });
 
   it("expands ~ when the literal is absent", () => {
-    expect(resolveAuthoredCwd("~/app", root, undefined, env(), target)).toBe(nodePath.join(target, "app"));
+    expect(resolveAuthoredCwd("~/app", root, undefined, env(), target)).toBe(`${target}/app`);
   });
 
   it("expands $VAR when the literal is absent", () => {
-    expect(resolveAuthoredCwd(`\${${VAR}}/app`, root, undefined, env(), "/h")).toBe(nodePath.join(target, "app"));
+    expect(resolveAuthoredCwd(`\${${VAR}}/app`, root, undefined, env(), "/h")).toBe(`${target}/app`);
   });
 
   it("keeps an existing absolute literal containing a set variable, even when the expansion exists", () => {
@@ -111,10 +111,10 @@ describe("cwd resolution: an existing literal path wins, otherwise the expansion
       process.env[VAR] = target;
       expect(resolveLaunchCwd(`$${VAR}/app`, specRoot)).toBe(nodePath.join(specRoot, `$${VAR}/app`));
       expect(resolveLaunchCwd("~/app", specRoot)).toBe(nodePath.join(specRoot, "~/app"));
-      expect(resolveLaunchCwd(`$${VAR}/app`, root)).toBe(nodePath.join(target, "app"));
-      expect(resolveLaunchCwd("~/openrig-cwd-absent", root)).toBe(nodePath.join(homedir(), "openrig-cwd-absent"));
-      expect(resolveLaunchCwd(`$${VAR}/app`, specRoot, "/override")).toBe("/override");
-      expect(resolveLaunchCwd("sub", "/spec/root")).toBe("/spec/root/sub");
+      expect(resolveLaunchCwd(`$${VAR}/app`, root)).toBe(`${target}/app`);
+      expect(resolveLaunchCwd("~/openrig-cwd-absent", root)).toBe(`${homedir()}/openrig-cwd-absent`);
+      expect(resolveLaunchCwd(`$${VAR}/app`, specRoot, "/override")).toBe(nodePath.resolve("/override"));
+      expect(resolveLaunchCwd("sub", "/spec/root")).toBe(nodePath.resolve("/spec/root", "sub"));
     });
 
     function profileCwd(cwd: string, specRoot?: string, cwdOverride?: string): string {
@@ -143,9 +143,9 @@ describe("cwd resolution: an existing literal path wins, otherwise the expansion
     it("profile: literal wins, absent literal expands, --cwd wins over both", () => {
       process.env[VAR] = target;
       expect(profileCwd(`$${VAR}/app`, specRoot)).toBe(nodePath.join(specRoot, `$${VAR}/app`));
-      expect(profileCwd(`$${VAR}/app`, root)).toBe(nodePath.join(target, "app"));
-      expect(profileCwd(`$${VAR}/app`)).toBe(nodePath.join(target, "app"));
-      expect(profileCwd(`$${VAR}/app`, specRoot, "/override")).toBe("/override");
+      expect(profileCwd(`$${VAR}/app`, root)).toBe(`${target}/app`);
+      expect(profileCwd(`$${VAR}/app`)).toBe(`${target}/app`);
+      expect(profileCwd(`$${VAR}/app`, specRoot, "/override")).toBe(nodePath.resolve("/override"));
     });
 
     async function preflightErrors(cwd: string): Promise<string[]> {

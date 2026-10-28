@@ -19,6 +19,7 @@
 
 import { Hono } from "hono";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import type { SkillLibraryDiscoveryService } from "../domain/skill-library-discovery.js";
 import {
@@ -205,7 +206,9 @@ export function skillsRoutes(): Hono {
     const { auditSkills, listBundledSkillSources } = await import("../domain/skill-audit.js");
     const { getDefaultOpenRigPath } = await import("../openrig-compat.js");
 
-    const homedir = c.get("homedir" as never) as string | undefined ?? process.env.HOME ?? "/tmp";
+    // A Windows shell seldom defines HOME; the user's profile is the home there.
+    const homedir = c.get("homedir" as never) as string | undefined
+      ?? (process.platform === "win32" ? process.env.HOME || process.env.USERPROFILE || os.homedir() : process.env.HOME ?? "/tmp");
     const cwd = c.get("cwd" as never) as string | undefined ?? process.cwd();
     // The installed plugins the daemon projects bundled skills from (startup's userPluginsDir).
     const pluginsDir = c.get("pluginsDir" as never) as string | undefined ?? getDefaultOpenRigPath("plugins");

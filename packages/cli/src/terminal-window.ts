@@ -1,15 +1,15 @@
 import { execFile, spawn } from "node:child_process";
-import { existsSync } from "node:fs";
-import { homedir, hostname, networkInterfaces } from "node:os";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { homedir, hostname, networkInterfaces, tmpdir } from "node:os";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import { terminalAuthHeaders, type DaemonClient } from "./client.js";
 import { shellQuote } from "./cross-host-executor.js";
-import { prepareHerdrLaunchConfig } from "./herdr-launch-config.js";
+import { prepareHerdrLaunchConfig, windowsHerdrCandidates, windowsHerdrSocketPath, windowsPathExecutables, windowsVariable } from "./herdr-launch-config.js";
 import { openRexView } from "./terminal-window-rex.js";
 import type { FollowControls, OpenViewResult } from "./commands/terminal.js";
-import { renderWindowsLaunch } from "@openrig/daemon/windows-launch";
+import { parseLiteralLaunchWords, renderWindowsLaunch, powershellQuote } from "@openrig/daemon/windows-launch";
 
 interface Pane { seat: string; label: string; paneCommand: string; recoveryCommand?: string }
 interface HerdrTab { workspace_id: string; tab_id: string; label: string }
@@ -24,11 +24,14 @@ export interface WindowDeps {
   platform: NodeJS.Platform;
   env: NodeJS.ProcessEnv;
   exists(file: string): boolean;
-  exec(file: string, args: string[], timeoutMs?: number): Promise<string>;
+  /** `env` replaces `WindowDeps.env` for this child (Windows herdr calls, which have no env(1)). */
+  exec(file: string, args: string[], timeoutMs?: number, env?: NodeJS.ProcessEnv): Promise<string>;
   launch(file: string, args: string[]): Promise<void>;
   sleep(ms: number): Promise<void>;
   id(): string;
   herdrConfig(socketPath: string, columns?: number): string;
+  /** Windows Terminal: store a pane launch script privately and return its path. */
+  windowsScript(content: string): string;
   /** Hosting terminal measurement also works for an agent shell tool with piped stdio. */
   columns?(): Promise<number | undefined>;
   notice?(message: string): void;
@@ -40,7 +43,7 @@ export function defaultWindowDeps(): WindowDeps {
   const run = promisify(execFile);
   return {
     platform: process.platform, env, exists: existsSync,
-    exec: async (file, args, timeoutMs = 10_000) => (await run(file, args, { env, encoding: "utf8", timeout: timeoutMs })).stdout,
+    exec: async (file, args, timeoutMs = 10_000, childEnv = env) => (await run(file, args, { env: childEnv, encoding: "utf8", timeout: timeoutMs })).stdout,
     launch: (file, args) => new Promise((resolve, reject) => {
       const child = spawn(file, args, { env, detached: true, stdio: "ignore" });
       child.once("error", reject);
@@ -50,6 +53,7 @@ export function defaultWindowDeps(): WindowDeps {
     id: () => randomUUID().slice(0, 12),
     notice: message => process.stderr.write(`${message}\n`),
     herdrConfig: (socketPath, columns) => prepareHerdrLaunchConfig(env, socketPath, columns),
+    windowsScript: content => prepareWindowsTerminalScript(path.join(tmpdir(), "openrig-windows-terminal"), content),
     columns: async () => {
       if (process.stdout.isTTY && process.stdout.columns > 0) return process.stdout.columns;
       if (process.platform === "win32") return undefined;
@@ -84,6 +88,44 @@ export function defaultWindowDeps(): WindowDeps {
   };
 }
 
+/** A pane reads its script once, as it starts; a week-old one belongs to no starting pane. */
+const WINDOWS_TERMINAL_SCRIPT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** Named by content: a pane still starting from an earlier, identical launch never sees its script replaced. */
+export function prepareWindowsTerminalScript(dir: string, content: string): string {
+  const name = `openrig-wt-${createHash("sha256").update(content).digest("hex").slice(0, 20)}.ps1`;
+  const target = path.join(dir, name);
+  const reuse = () => {
+    if (readFileSync(target, "utf8") !== content) return false;
+    // Keep a reused script out of another open's pruning.
+    try { const now = new Date(); utimesSync(target, now, now); } catch { /* Pruning is best effort. */ }
+    return true;
+  };
+  try { if (reuse()) return target; }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const temporary = `${target}.${randomUUID()}.tmp`;
+  writeFileSync(temporary, content, { flag: "wx", mode: 0o600 });
+  try { renameSync(temporary, target); }
+  catch (error) {
+    unlinkSync(temporary);
+    // A concurrent identical open may have stored it first, and Windows refuses to replace
+    // the file while one of its panes reads it.
+    try { if (reuse()) return target; } catch { /* Report the rename failure. */ }
+    throw error;
+  }
+  // Each script pins the caller's environment; drop those no pane can still be reading.
+  try {
+    for (const entry of readdirSync(dir)) {
+      if (entry === name || !/^openrig-wt-[0-9a-f]{20}\.ps1(?:\.[0-9a-f-]{36}\.tmp)?$/.test(entry)) continue;
+      const file = path.join(dir, entry);
+      try { if (Date.now() - statSync(file).mtimeMs > WINDOWS_TERMINAL_SCRIPT_MAX_AGE_MS) unlinkSync(file); }
+      catch { /* Another open removed it first. */ }
+    }
+  } catch { /* Pruning is best effort. */ }
+  return target;
+}
+
 function localDaemon(url: string): boolean {
   const host = new URL(url).hostname.replace(/^\[|\]$/g, "");
   return ["localhost", "::1", "::", "0.0.0.0", hostname()].includes(host)
@@ -103,6 +145,14 @@ export function inRex(env: NodeJS.ProcessEnv): boolean {
 }
 
 async function herdrBinary(deps: WindowDeps): Promise<string | null> {
+  if (deps.platform === "win32") {
+    // No `command -v` natively: look where Windows and herdr's installer put it, and run it directly.
+    for (const candidate of windowsHerdrCandidates(deps.env).filter(deps.exists)) {
+      try { if (/\d+\.\d+\.\d+/.test(await deps.exec(candidate, ["--version"]))) return candidate; }
+      catch { /* An older or broken copy; try the next. */ }
+    }
+    return null;
+  }
   const dir = deps.env["HERDR_INSTALL_DIR"] ?? path.join(deps.env["HOME"] ?? homedir(), ".local", "bin");
   for (const candidate of ["herdr", path.join(dir, "herdr")]) {
     try {
@@ -125,6 +175,8 @@ async function windowLauncher(deps: WindowDeps, notes: string[]): Promise<((comm
   if (deps.env["CI"] && !["0", "false"].includes(deps.env["CI"])) return "This is a CI run.";
   if (host === "herdr" || inHerdrPane(deps.env)) return { currentHerdr: true };
   if (deps.env["SSH_CONNECTION"] || deps.env["SSH_CLIENT"] || deps.env["SSH_TTY"]) return "This is an SSH session; no desktop window is opened over SSH.";
+  // A tmux started inside a Herdr pane sets TERM_PROGRAM=tmux but inherits Herdr's pane markers, so read those too.
+  if (deps.platform === "win32") return windowsTerminalLauncher(deps, notes);
   if (deps.platform === "darwin") {
     const inGhostty = host === "ghostty" || host === "com.mitchellh.ghostty";
     const inTerminal = host === "Apple_Terminal" || host === "com.apple.Terminal";
@@ -207,16 +259,61 @@ end run`;
   return `Unrecognised or unavailable hosting terminal: ${JSON.stringify(host ?? "unknown")}.`;
 }
 
+/** Why no Windows Terminal window can open here, or undefined when one can. */
+async function windowsTerminalRefusal(deps: WindowDeps): Promise<string | undefined> {
+  // A cold Windows PowerShell start can take several seconds; use the default exec timeout.
+  const desktop = (await deps.exec("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "[System.Diagnostics.Process]::GetCurrentProcess().SessionId"]).catch(() => "")).trim();
+  if (!/^\d+$/.test(desktop) || Number(desktop) === 0) return "No interactive Windows desktop session could be confirmed.";
+  // where.exe prints in the console code page, which mangles a non-ASCII profile path, so only
+  // presence is read from it; the launch resolves the bare name through PATH.
+  if (!(await deps.exec("where.exe", ["wt.exe"]).catch(() => "")).trim()) return "Windows Terminal is unavailable. Install Windows Terminal, then retry.";
+  return undefined;
+}
+
+/**
+ * The start of a Windows Terminal pane script. An existing Windows Terminal process may have an older
+ * environment than this CLI, so pin the requested instance/psmux namespace rather than attaching to its
+ * default server or launching a dashboard against another daemon. A tab started from a psmux pane must
+ * not carry its markers either: psmux refuses a nested attach while PSMUX_SESSION is set.
+ */
+function windowsTerminalPrologue(deps: WindowDeps, clearMarkers = true): string[] {
+  const environment: Record<string, string> = {};
+  for (const key of ["PATH", "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "PSMUX_DATA_DIR", "OPENRIG_HOME", "OPENRIG_URL", "OPENRIG_PORT", "OPENRIG_HOST"]) {
+    const value = windowsVariable(deps.env, key);
+    if (value !== undefined) environment[key] = value;
+  }
+  return [
+    ...Object.entries(environment).map(([key, value]) => `[Environment]::SetEnvironmentVariable('${key}', ${powershellQuote(value)}, 'Process')`),
+    ...(clearMarkers ? ["Remove-Item Env:TMUX, Env:PSMUX_SESSION, Env:PSMUX_TARGET_SESSION -ErrorAction SilentlyContinue"] : []),
+  ];
+}
+
+/** The argv stub that runs a stored pane script, read as a script block (as the daemon stages Windows launches) so no execution policy applies. */
+function windowsScriptStub(script: string, ...args: string[]): string {
+  return Buffer.from(`& ([scriptblock]::Create([IO.File]::ReadAllText(${powershellQuote(script)})))${args.map(arg => ` ${arg}`).join("")}`, "utf16le").toString("base64");
+}
+
+/** Herdr in a new Windows Terminal window. Its one tab runs the given PowerShell, stored as a script. */
+async function windowsTerminalLauncher(deps: WindowDeps, notes: string[]): Promise<((script: string) => Promise<{ app: string; surface: string }>) | string> {
+  const refusal = await windowsTerminalRefusal(deps);
+  if (refusal) return refusal;
+  return async script => {
+    // The herdr launch clears the psmux markers itself, with HERDR_SESSION.
+    const stored = deps.windowsScript([...windowsTerminalPrologue(deps, false), script, ""].join("\n"));
+    await deps.launch("wt.exe", ["--window", "new", "new-tab", "--title", "Herdr", "powershell.exe", "-NoLogo", "-NoProfile", "-EncodedCommand", windowsScriptStub(stored)]);
+    notes.push("Requested a new Windows Terminal window running Herdr; no existing window was changed.");
+    return { app: "Windows Terminal", surface: "window-requested" };
+  };
+}
+
 /** Windows Terminal renders the same composition directly; source sessions stay intact. */
 async function openWindowsTerminalView(client: DaemonClient, view: string, requestedProvider: string | undefined, deps: WindowDeps, expectedPlan?: string): Promise<OpenViewResult> {
-  if (requestedProvider === "herdr") return failure("herdr", "Herdr is unavailable on Windows; use --provider tmux --window.");
+  if (requestedProvider === "herdr") return failure("herdr", "Herdr is not installed. rig setup shows how to install it on Windows, or use --provider tmux --window.");
   const refused = (reason: string) => ({ ...failure("tmux", `No terminal window was opened. ${reason}`), windowAttempted: false });
   if (deps.env["CI"] && !["0", "false"].includes(deps.env["CI"])) return refused("This is a CI run.");
   if (deps.env["SSH_CONNECTION"] || deps.env["SSH_CLIENT"] || deps.env["SSH_TTY"]) return refused("This is an SSH session; run the window command on the daemon's desktop.");
-  const desktop = (await deps.exec("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "[System.Diagnostics.Process]::GetCurrentProcess().SessionId"], 1000).catch(() => "")).trim();
-  if (!/^\d+$/.test(desktop) || Number(desktop) === 0) return refused("No interactive Windows desktop session could be confirmed.");
-  const binary = (await deps.exec("where.exe", ["wt.exe"]).catch(() => "")).trim().split(/\r?\n/)[0];
-  if (!binary) return refused("Windows Terminal is unavailable. Install Windows Terminal, then retry.");
+  const refusal = await windowsTerminalRefusal(deps);
+  if (refusal) return refused(refusal);
   const width = await deps.columns?.().catch(() => undefined);
   const viewport = Number.isSafeInteger(width) && width! > 0 ? `&viewportColumns=${width}` : "";
   const preview = await client.get<Preview | OpenViewResult>(`/api/terminal/preview?view=${encodeURIComponent(view)}&provider=herdr${viewport}`);
@@ -226,12 +323,15 @@ async function openWindowsTerminalView(client: DaemonClient, view: string, reque
   if (!composed.opened.length) return { ...refused("No conversations are attachable."), absent: composed.absent, degraded: composed.degraded };
   const args = ["--window", "new"];
   let pages = 0;
+  // One shared script holds the environment and every pane's launch; each pane's argv only names
+  // its entry. Repeating them per pane overruns the 32,767-character Windows command line.
+  const launches: string[] = [];
   const surfaceArgs = (pane: Pane) => {
     const title = pane.label.replace(/[;\r\n\0]/g, " ");
-    const command = renderWindowsLaunch(pane.paneCommand);
-    const script = `Remove-Item Env:TMUX -ErrorAction SilentlyContinue; ${command}`;
-    return ["--title", title, "--suppressApplicationTitle", "powershell.exe", "-NoLogo", "-NoProfile", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")];
+    launches.push(renderWindowsLaunch(pane.paneCommand));
+    return ["--title", title, "--suppressApplicationTitle", "powershell.exe", "-NoLogo", "-NoProfile", "-EncodedCommand"];
   };
+  const entries: number[] = [];
   type Tile = { pane: Pane } | { first: Tile; second: Tile; direction: string; fraction: number };
   const rowTile = (row: Pane[]): Tile => {
     if (row.length === 1) return { pane: row[0]! };
@@ -245,33 +345,48 @@ async function openWindowsTerminalView(client: DaemonClient, view: string, reque
   };
   const firstPane = (tile: Tile): Pane => "pane" in tile ? tile.pane : firstPane(tile.first);
   const append = (...command: string[]) => { if (args.length > 2) args.push(";"); args.push(...command); };
+  const appendSurface = (...command: string[]) => { append(...command); entries.push(args.push("") - 1); };
   for (const page of composed.pages) {
     if (!page.length) continue;
     const columns = Number.isSafeInteger(composed.columns) && composed.columns! > 0 ? composed.columns! : Math.ceil(Math.sqrt(page.length));
     const rows: Pane[][] = [];
     for (let i = 0; i < page.length; i += columns) rows.push(page.slice(i, i + columns));
     const tile = gridTile(rows);
-    append("new-tab", ...surfaceArgs(firstPane(tile)));
-    let nextId = 1;
+    appendSurface("new-tab", ...surfaceArgs(firstPane(tile)));
+    // `id` is a pane's position in the tab's pane tree, the order move-focus nextInOrder walks.
     const focus = (id: number) => {
       append("move-focus", "first");
       for (let index = 0; index < id; index++) append("move-focus", "nextInOrder");
     };
+    // The new pane sits directly after `id`. Splitting the second subtree first adds panes only
+    // after it, so the first subtree's pane keeps position `id`.
     const split = (current: Tile, id: number) => {
       if ("pane" in current) return;
       focus(id);
-      const secondId = nextId++;
-      append("split-pane", current.direction, "--size", String(current.fraction), ...surfaceArgs(firstPane(current.second)));
+      appendSurface("split-pane", current.direction, "--size", String(current.fraction), ...surfaceArgs(firstPane(current.second)));
+      split(current.second, id + 1);
       split(current.first, id);
-      split(current.second, secondId);
     };
     split(tile, 0);
     pages++;
   }
   if (!pages) return refused("The daemon returned an empty view layout.");
   args.push(";", "focus-tab", "--target", "0");
+  const script = deps.windowsScript([
+    "param([int]$openrigPane)",
+    ...windowsTerminalPrologue(deps),
+    "switch ($openrigPane) {",
+    ...launches.map((launch, index) => `${index} {\n${launch}\n}`),
+    "}",
+    "",
+  ].join("\n"));
+  for (const [index, slot] of entries.entries()) args[slot] = windowsScriptStub(script, String(index));
+  // CreateProcess bound, counting the worst-case quoting of each argument.
+  if (args.reduce((length, arg) => length + arg.length + 3 + (arg.match(/["\\]/g)?.length ?? 0), "wt.exe".length) >= 32_767) {
+    return refused("The view is too large for one Windows Terminal command line. Open a smaller view, such as a single rig.");
+  }
   try {
-    await deps.launch(binary, args);
+    await deps.launch("wt.exe", args);
   } catch (error) {
     return { ...failure("tmux", `Terminal window status is unknown. ${(error as Error).message} Inspect the desktop before retrying.`), windowAttempted: true };
   }
@@ -287,11 +402,13 @@ function failure(provider: string, error: string): OpenViewResult {
 }
 
 /** Saved Herdr labels survive reboot; only current clients prove a local attachment. */
-async function hasLiveAttachments(existing: HerdrTab, tabs: HerdrTab[], pages: Pane[][], pageLabel: (index: number) => string, herdrArgs: string[], deps: WindowDeps): Promise<boolean> {
+async function hasLiveAttachments(existing: HerdrTab, tabs: HerdrTab[], pages: Pane[][], pageLabel: (index: number) => string, herdrCli: (args: string[]) => Promise<string>, deps: WindowDeps): Promise<boolean> {
   try {
-    const tmux = (await deps.exec("/bin/sh", ["-c", "command -v tmux"])).trim();
-    if (!path.isAbsolute(tmux)) return false;
-    const listed = JSON.parse(await deps.exec("/usr/bin/env", [...herdrArgs, "pane", "list", "--workspace", existing.workspace_id]));
+    // Windows: the tmux.exe the daemon's own PATH lookup finds, which its local pane commands name.
+    const tmux = deps.platform === "win32" ? windowsPathExecutables(deps.env, "tmux").find(deps.exists) ?? ""
+      : (await deps.exec("/bin/sh", ["-c", "command -v tmux"])).trim();
+    if (!(deps.platform === "win32" ? path.win32 : path).isAbsolute(tmux)) return false;
+    const listed = JSON.parse(await herdrCli(["pane", "list", "--workspace", existing.workspace_id]));
     const panes = listed?.result?.panes as Array<{ workspace_id: string; tab_id: string; pane_id: string }> | undefined;
     if (!Array.isArray(panes) || !panes.every(pane => pane && pane.workspace_id === existing.workspace_id && typeof pane.tab_id === "string" && typeof pane.pane_id === "string" && pane.pane_id)) return false;
     const clients = new Map<string, string[]>();
@@ -314,7 +431,7 @@ async function hasLiveAttachments(existing: HerdrTab, tabs: HerdrTab[], pages: P
       const remaining = page.map(pane => pane.recoveryCommand ?? pane.paneCommand);
       for (const pane of panes.filter(pane => pane.tab_id === matches[0]!.tab_id)) {
         if (remaining.length === 0) break;
-        const result = JSON.parse(await deps.exec("/usr/bin/env", [...herdrArgs, "pane", "process-info", "--pane", pane.pane_id]));
+        const result = JSON.parse(await herdrCli(["pane", "process-info", "--pane", pane.pane_id]));
         const info = result?.result?.process_info;
         if (info?.pane_id !== pane.pane_id || (info.foreground_processes !== undefined && !Array.isArray(info.foreground_processes))) return false;
         for (const process of info.foreground_processes ?? []) {
@@ -363,11 +480,12 @@ export async function openTerminalWindow(client: DaemonClient, view: string, req
     if (following && selectedProvider !== "herdr") throw new Error("Following requires the qualified Herdr provider.");
     if (session !== undefined && selectedProvider !== "herdr") throw new Error("--session selects a Herdr session; use --provider herdr.");
     if (selectedProvider && !["herdr", "tmux"].includes(selectedProvider)) throw new Error("--window supports herdr, rex or tmux. Use cmux without --window.");
-    if (deps.platform === "win32") return await openWindowsTerminalView(client, view, selectedProvider, deps, expectedPlan);
+    const windowsHerdr = deps.platform === "win32" && selectedProvider !== "tmux" ? await herdrBinary(deps) : null;
+    if (deps.platform === "win32" && !windowsHerdr) return await openWindowsTerminalView(client, view, selectedProvider, deps, expectedPlan);
     const launchWindow = await windowLauncher(deps, windowNotes);
     const measured = typeof launchWindow !== "string" ? await deps.columns?.().catch(() => undefined) : undefined;
     let viewportColumns = Number.isSafeInteger(measured) && measured! > 0 ? measured : undefined;
-    const herdr = selectedProvider === "tmux" ? null : await herdrBinary(deps);
+    const herdr = deps.platform === "win32" ? windowsHerdr : selectedProvider === "tmux" ? null : await herdrBinary(deps);
     if (!herdr && selectedProvider === "herdr") throw new Error(session === undefined
       ? "Herdr is not installed. Run rig setup, or use --provider tmux --window."
       : "Herdr is not installed, so the requested session cannot be opened. Install Herdr with rig setup.");
@@ -408,9 +526,9 @@ export async function openTerminalWindow(client: DaemonClient, view: string, req
       provider = "herdr";
       if (selectedProvider === "tmux") return failed("The current Herdr view requires provider herdr; no extra window was opened.");
       const base = path.join(deps.env["HOME"] ?? homedir(), ".config", "herdr");
-      const callerSocket = deps.env["HERDR_SOCKET_PATH"] ?? (deps.env["HERDR_SESSION"]
+      const callerSocket = deps.platform === "win32" ? windowsHerdrSocketPath(deps.env) : deps.env["HERDR_SOCKET_PATH"] ?? (deps.env["HERDR_SESSION"]
         ? path.join(base, "sessions", deps.env["HERDR_SESSION"], "herdr.sock") : path.join(base, "herdr.sock"));
-      if (!socket || path.resolve(socket) !== path.resolve(callerSocket)) {
+      if (!socket || (deps.platform === "win32" ? path.win32.resolve(socket).toLowerCase() !== path.win32.resolve(callerSocket).toLowerCase() : path.resolve(socket) !== path.resolve(callerSocket))) {
         const socketParts = path.relative(base, path.resolve(callerSocket)).split(path.sep);
         const callerSession = socketParts.length === 1 && socketParts[0] === "herdr.sock" ? "default"
           : socketParts.length === 3 && socketParts[0] === "sessions" && socketParts[2] === "herdr.sock" ? socketParts[1] : undefined;
@@ -425,18 +543,32 @@ export async function openTerminalWindow(client: DaemonClient, view: string, req
     }
     let configEnv = "";
     let configPrefix = "";
+    let windowsConfig = "";
     if (herdr && socket && !currentHerdr) {
       try {
         const narrow = deps.herdrConfig(socket);
         const wide = typeof launchWindow === "function" ? deps.herdrConfig(socket, 160) : narrow;
-        if (narrow === wide) configEnv = ` HERDR_CONFIG_PATH=${shellQuote(narrow)}`;
+        if (deps.platform === "win32") {
+          windowsConfig = narrow === wide ? `$env:HERDR_CONFIG_PATH = ${powershellQuote(narrow)}`
+            : `$env:HERDR_CONFIG_PATH = if ($Host.UI.RawUI.WindowSize.Width -ge 160) { ${powershellQuote(wide)} } else { ${powershellQuote(narrow)} }`;
+        } else if (narrow === wide) configEnv = ` HERDR_CONFIG_PATH=${shellQuote(narrow)}`;
         else configPrefix = `set -- $(stty size 2>/dev/null); if [ "${'${2:-0}'}" -ge 160 ]; then export HERDR_CONFIG_PATH=${shellQuote(wide)}; else export HERDR_CONFIG_PATH=${shellQuote(narrow)}; fi; exec `;
         windowNotes.push("Your Herdr config is kept when present; otherwise the sidebar starts open at 160 columns and collapsed below.");
       } catch (error) {
         windowNotes.push(`Could not prepare OpenRig's private Herdr settings (${error instanceof Error ? error.message : String(error)}); Herdr starts with its usual sidebar.`);
       }
     }
-    const directCommand = herdr && socket
+    // PowerShell has no env(1): the same clearing, endpoint and config as statements.
+    const windowsLaunch = deps.platform !== "win32" ? [] : herdr && socket ? [
+      "Remove-Item Env:TMUX, Env:PSMUX_SESSION, Env:PSMUX_TARGET_SESSION, Env:HERDR_SESSION -ErrorAction SilentlyContinue",
+      `$env:HERDR_SOCKET_PATH = ${powershellQuote(socket)}`,
+      ...(windowsConfig ? [windowsConfig] : []),
+      `& ${powershellQuote(herdr)}`,
+    ] : [
+      "Remove-Item Env:TMUX, Env:PSMUX_SESSION, Env:PSMUX_TARGET_SESSION -ErrorAction SilentlyContinue",
+      `& ${parseLiteralLaunchWords(composed.opened[0]!.paneCommand.replace(/^ssh /, "ssh -t ")).map(powershellQuote).join(" ")}`,
+    ];
+    const directCommand = deps.platform === "win32" ? windowsLaunch.join("; ") : herdr && socket
       ? `${configPrefix}env -u TMUX -u HERDR_SESSION -u HERDR_SOCKET_PATH HERDR_SOCKET_PATH=${shellQuote(socket)}${configEnv} ${shellQuote(herdr)}`
       : `env -u TMUX ${composed.opened[0]!.paneCommand.replace(/^ssh /, "ssh -t ")}`;
     manualCommand = herdr && socket ? directCommand
@@ -456,7 +588,7 @@ export async function openTerminalWindow(client: DaemonClient, view: string, req
       // A CLI session would override the daemon's resolved socket in Herdr.
       if (typeof launchWindow === "function") {
         windowAttempted = true;
-        window = await launchWindow(configPrefix ? `/bin/sh -c ${shellQuote(directCommand)}` : directCommand);
+        window = await launchWindow(deps.platform === "win32" ? windowsLaunch.join("\n") : configPrefix ? `/bin/sh -c ${shellQuote(manualCommand)}` : manualCommand);
       }
       await measureWindow();
       let alive = false;
@@ -472,6 +604,10 @@ export async function openTerminalWindow(client: DaemonClient, view: string, req
       // Inventory is read-only: a failed read must not prevent the first open.
       // Scope each tab list to its workspace, on the daemon's exact endpoint.
       const herdrArgs = ["-u", "TMUX", "-u", "HERDR_SESSION", "-u", "HERDR_SOCKET_PATH", `HERDR_SOCKET_PATH=${endpoint.socketPath}`, herdr];
+      const herdrEnv: NodeJS.ProcessEnv = Object.fromEntries(Object.entries(deps.env)
+        .filter(([name]) => !["TMUX", "HERDR_SESSION", "HERDR_SOCKET_PATH"].includes(name.toUpperCase())));
+      herdrEnv["HERDR_SOCKET_PATH"] = endpoint.socketPath;
+      const herdrCli = (args: string[]) => deps.platform === "win32" ? deps.exec(herdr, args, undefined, herdrEnv) : deps.exec("/usr/bin/env", [...herdrArgs, ...args]);
       if (following) {
         // Follow has a stable journaled workspace. A changed membership plan
         // must never enter the one-shot plan-label/new-workspace path below.
@@ -479,18 +615,15 @@ export async function openTerminalWindow(client: DaemonClient, view: string, req
           ...(session !== undefined ? { session } : {}), ...(expectedPlan !== undefined ? { expectedPlan } : {}) },
           { timeoutMs: 45_000, headers: terminalAuthHeaders() });
         if (!answer.data.ok || !answer.data.workspaceId) return { ...answer.data, window, notes: [...(answer.data.notes ?? []), ...windowNotes] };
-        const selectedSession = session ?? endpoint.session;
-        const selectedArgs = ["-u", "TMUX", "-u", "HERDR_SESSION", "-u", "HERDR_SOCKET_PATH", herdr,
-          ...(selectedSession && selectedSession !== "default" ? ["--session", selectedSession] : [])];
-        const selectedStatus = JSON.parse(await deps.exec("/usr/bin/env", [...selectedArgs, "status", "server", "--json"]));
+        const selectedStatus = JSON.parse(await herdrCli(["status", "server", "--json"]));
         const selectedBody = selectedStatus?.result ?? selectedStatus;
         if (selectedStatus.error || selectedBody?.running !== true || selectedBody.socket !== endpoint.socketPath) {
           throw new Error("The Herdr CLI did not confirm the daemon's exact following endpoint; no tab lookup or focus was requested.");
         }
-        const listed = JSON.parse(await deps.exec("/usr/bin/env", [...selectedArgs, "tab", "list", "--workspace", answer.data.workspaceId]));
+        const listed = JSON.parse(await herdrCli(["tab", "list", "--workspace", answer.data.workspaceId]));
         const tab = (listed?.result?.tabs as HerdrTab[] | undefined)?.find(t => t.workspace_id === answer.data.workspaceId);
         if (!tab) throw new Error("The stable following workspace has no confirmed tab. Inspect it before retrying.");
-        const focused = JSON.parse(await deps.exec("/usr/bin/env", [...selectedArgs, "tab", "focus", tab.tab_id]));
+        const focused = JSON.parse(await herdrCli(["tab", "focus", tab.tab_id]));
         if (focused?.result?.tab?.tab_id !== tab.tab_id || focused.result.tab.workspace_id !== tab.workspace_id) throw new Error("Following tab selection was not confirmed.");
         return { ...answer.data, window, notes: [...(answer.data.notes ?? []), ...windowNotes] };
       }
@@ -498,14 +631,14 @@ export async function openTerminalWindow(client: DaemonClient, view: string, req
       let tabs: HerdrTab[] = [];
       const spaceLabels = new Map<string, string>();
       try {
-        const listed = JSON.parse(await deps.exec("/usr/bin/env", [...herdrArgs, "workspace", "list"]));
+        const listed = JSON.parse(await herdrCli(["workspace", "list"]));
         const workspaces = listed?.result?.workspaces as Array<{ workspace_id: string; label?: string }> | undefined;
         if (!Array.isArray(workspaces) || !workspaces.every(ws => ws && typeof ws.workspace_id === "string" && ws.workspace_id)) {
           throw new Error("Herdr returned no usable workspace inventory.");
         }
         for (const workspace of workspaces) {
           if (typeof workspace.label === "string") spaceLabels.set(workspace.workspace_id, workspace.label);
-          const listedTabs = JSON.parse(await deps.exec("/usr/bin/env", [...herdrArgs, "tab", "list", "--workspace", workspace.workspace_id]));
+          const listedTabs = JSON.parse(await herdrCli(["tab", "list", "--workspace", workspace.workspace_id]));
           const scoped = listedTabs?.result?.tabs as typeof tabs | undefined;
           if (!Array.isArray(scoped) || !scoped.every(tab => tab && typeof tab.label === "string" && typeof tab.tab_id === "string" && tab.tab_id && tab.workspace_id === workspace.workspace_id)) {
             throw new Error(`Herdr returned no usable tab inventory for workspace ${workspace.workspace_id}.`);
@@ -519,7 +652,7 @@ export async function openTerminalWindow(client: DaemonClient, view: string, req
       // In the person's own Herdr, its focused space is what they are looking at.
       const shownNote = async (workspaceId?: string) => {
         if (currentHerdr) try {
-          const listed = JSON.parse(await deps.exec("/usr/bin/env", [...herdrArgs, "workspace", "list"]));
+          const listed = JSON.parse(await herdrCli(["workspace", "list"]));
           const focused = (listed?.result?.workspaces as Array<{ workspace_id?: string; label?: string; focused?: boolean }> | undefined)?.find(ws => ws?.focused);
           if (focused && (workspaceId ? focused.workspace_id === workspaceId : !!composed.spaceLabel && focused.label === composed.spaceLabel)) {
             return `Herdr shows the ${focused.label ?? "view's"} space in the person's current session.`;
@@ -547,11 +680,11 @@ export async function openTerminalWindow(client: DaemonClient, view: string, req
       }
       let existing: HerdrTab | undefined;
       for (const candidate of candidates) {
-        if (await hasLiveAttachments(candidate, tabs, composed.pages, pageLabel(candidate), herdrArgs, deps)) { existing = candidate; break; }
+        if (await hasLiveAttachments(candidate, tabs, composed.pages, pageLabel(candidate), herdrCli, deps)) { existing = candidate; break; }
         windowNotes.push(`Could not confirm live attachments in workspace ${candidate.workspace_id}. Its contents were kept. After inspecting it, close it if no longer needed: ${closeCommand(candidate.workspace_id)}`);
       }
       if (existing) {
-        const focused = JSON.parse(await deps.exec("/usr/bin/env", [...herdrArgs, "tab", "focus", existing.tab_id])) as {
+        const focused = JSON.parse(await herdrCli(["tab", "focus", existing.tab_id])) as {
           result?: { tab?: { tab_id?: string; workspace_id?: string } };
         };
         if (focused?.result?.tab?.tab_id !== existing.tab_id || focused.result.tab.workspace_id !== existing.workspace_id) {

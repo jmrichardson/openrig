@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { createFullTestDb } from "./helpers/test-app.js";
+import { fixtureFs, nativePath } from "./helpers/fixture-path.js";
 import { RigRepository } from "../src/domain/rig-repository.js";
 import { SessionRegistry } from "../src/domain/session-registry.js";
 import { EventBus } from "../src/domain/event-bus.js";
@@ -51,10 +52,7 @@ function mockAdapter(fsCheck?: AgentResolverFsOps): RuntimeAdapter {
 }
 
 function mockFs(files: Record<string, string>): AgentResolverFsOps {
-  return {
-    readFile: (p: string) => { if (p in files) return files[p]!; throw new Error(`Not found: ${p}`); },
-    exists: (p: string) => p in files,
-  };
+  return fixtureFs(files);
 }
 
 describe("AgentSpec startup integration", () => {
@@ -187,7 +185,7 @@ describe("AgentSpec startup integration", () => {
     const stored = db.prepare("SELECT startup_actions_json FROM node_startup_context WHERE node_id=?").get(node.id) as { startup_actions_json: string };
     expect(JSON.parse(stored.startup_actions_json)).toEqual(configResult.config.startup.actions);
     const storedFiles = db.prepare("SELECT resolved_files_json FROM node_startup_context WHERE node_id=?").get(node.id) as { resolved_files_json: string };
-    expect(JSON.parse(storedFiles.resolved_files_json).filter((file: ResolvedStartupFile) => file.orientation === "role")).toMatchObject([{ path: "startup/base.md", ownerRoot: `${rigRoot}/agents/impl`, orientation: "role" }]);
+    expect(JSON.parse(storedFiles.resolved_files_json).filter((file: ResolvedStartupFile) => file.orientation === "role")).toMatchObject([{ path: "startup/base.md", ownerRoot: nativePath(`${rigRoot}/agents/impl`), orientation: "role" }]);
     const sent = vi.mocked(tmux.sendText).mock.calls.map(call => call[1]);
     expect(sent).toContain("/rename impl");
     expect(sent.filter(text => text.includes("startup-proof submit"))).toHaveLength(selection === "authenticated" ? 1 : 0);
@@ -273,7 +271,7 @@ profiles: {}
     expect(projectedSkill).toBeDefined();
     expect(projectedSkill!.effectiveId).toBe("openrig-user");
     expect(projectedSkill!.sourceSpec).toBe("shared");
-    expect(projectedSkill!.sourcePath).toBe(`${rigRoot}/agents/shared`);
-    expect(projectedSkill!.absolutePath).toBe(`${rigRoot}/agents/shared/skills/openrig-user`);
+    expect(projectedSkill!.sourcePath).toBe(nativePath(`${rigRoot}/agents/shared`));
+    expect(projectedSkill!.absolutePath).toBe(nativePath(`${rigRoot}/agents/shared/skills/openrig-user`));
   });
 });

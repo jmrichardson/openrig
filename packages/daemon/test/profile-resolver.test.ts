@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { resolveNodeConfig, type ResolutionContext } from "../src/domain/profile-resolver.js";
 import { parseAgentSpec, normalizeAgentSpec } from "../src/domain/agent-manifest.js";
 import type { AgentSpec, RigSpec, RigSpecPod, RigSpecPodMember, StartupBlock } from "../src/domain/types.js";
@@ -294,7 +294,7 @@ describe("Profile resolver + precedence engine", () => {
 
     const result = resolveNodeConfig(ctx);
     expect(result.ok).toBe(true);
-    if (result.ok) expect(result.config.cwd).toBe("/workspace/spec-root");
+    if (result.ok) expect(result.config.cwd).toBe(resolve("/workspace/spec-root"));
   });
 
   it("explicit cwdOverride overrides even authored absolute cwd", () => {
@@ -306,7 +306,7 @@ describe("Profile resolver + precedence engine", () => {
 
     const result = resolveNodeConfig(ctx);
     expect(result.ok).toBe(true);
-    if (result.ok) expect(result.config.cwd).toBe("/override/project");
+    if (result.ok) expect(result.config.cwd).toBe(resolve("/override/project"));
   });
 
   // T7: resume_if_possible -> relaunch_fresh narrowing allowed
@@ -858,7 +858,12 @@ describe("managed catalog selection composition", () => {
 
 
 describe("selected bundle identity boundaries", () => {
-  it.each(["imported", "qualified", "same-bytes", "malformed", "wrong-name", "outside", "ambient", "bundle-discovered", "qualified-sibling", "unselected", "ambiguous"])("preserves %s semantics", (kind) => {
+  it.each([
+    "imported",
+    // The catalog copy of "lib:shared" is a directory of that name; ':' is not allowed in Windows file names.
+    ...(process.platform === "win32" ? [] : ["qualified"]),
+    "same-bytes", "malformed", "wrong-name", "outside", "ambient", "bundle-discovered", "qualified-sibling", "unselected", "ambiguous",
+  ])("preserves %s semantics", (kind) => {
     const root = mkdtempSync(join(tmpdir(), "bundle-skill-identity-"));
     try {
       const catalog = join(root, "catalog");

@@ -452,7 +452,7 @@ describe("Bundle CLI", () => {
     const body = capturedInstallBodies.at(-1)!;
     expect(body["plan"]).toBe(true);
     expect(body["targetRoot"]).toBeUndefined();
-    expect(body["bundlePath"]).toBe("/tmp/test.rigbundle");
+    expect(body["bundlePath"]).toBe(nodePath.resolve("/tmp/test.rigbundle"));
   });
 
   // T6: bundle create --rig-root passes rigRoot in request body
@@ -467,7 +467,7 @@ describe("Bundle CLI", () => {
     });
     const createBody = capturedCreateBodies[capturedCreateBodies.length - 1];
     expect(createBody).toBeTruthy();
-    expect(createBody!["rigRoot"]).toMatch(/\/my\/project/);
+    expect(createBody!["rigRoot"]).toBe(nodePath.resolve("/my/project"));
   });
 
   // Item 1 / slice-05: --notes flag is captured into provenance in the request body

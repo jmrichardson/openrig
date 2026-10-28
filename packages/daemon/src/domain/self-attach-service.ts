@@ -4,7 +4,7 @@ import type { PodRepository } from "./pod-repository.js";
 import { SessionAddressConflict, type SessionRegistry } from "./session-registry.js";
 import type { EventBus } from "./event-bus.js";
 import type { PersistedEvent } from "./types.js";
-import type { TmuxAdapter } from "../adapters/tmux.js";
+import { psmuxPaneRef, type TmuxAdapter } from "../adapters/tmux.js";
 import type { TranscriptStore } from "./transcript-store.js";
 import { startTmuxTranscriptCapture } from "./transcript-capture.js";
 
@@ -319,6 +319,11 @@ export class SelfAttachService {
     context?: SelfAttachContext,
   ): SelfAttachContext {
     if (context?.attachmentType === "tmux") {
+      // A psmux pane's own TMUX_PANE (`%N`) is unique only on its session's server: bind the scoped ref
+      // the adapter lists and targets, as a launched seat's binding holds.
+      if (this.tmuxAdapter?.terminalKind === "psmux" && context.tmuxPane) {
+        return { ...context, tmuxPane: psmuxPaneRef(context.tmuxSession, context.tmuxPane) };
+      }
       return context;
     }
     const explicit = context?.attachmentType === "external_cli" ? context.sessionName?.trim() : displayName?.trim();

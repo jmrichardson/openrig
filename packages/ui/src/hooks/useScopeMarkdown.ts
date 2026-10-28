@@ -23,6 +23,7 @@
 // existing callsites (TimelineTab) keep working without modification.
 
 import { useFilesRead, useFilesRoots, FilesReadError, type AllowlistRoot } from "./useFiles.js";
+import { isPathPrefix, relativeUnder } from "../lib/native-path.js";
 
 export type ScopeMarkdownState =
   | "idle"
@@ -69,25 +70,6 @@ export interface UseScopeMarkdownResult {
    *  as a benign placeholder) — consumers MUST gate on `isLoading` before
    *  branching on `state`. */
   state: ScopeMarkdownState;
-}
-
-/** Returns true when `parent` is a path-prefix of `child`, treating
- *  both as absolute filesystem paths. Segment-boundary aware so
- *  `/work` is NOT a prefix of `/workspace`. */
-function isPathPrefix(parent: string, child: string): boolean {
-  const p = parent.replace(/\/+$/, "");
-  const c = child.replace(/\/+$/, "");
-  if (c === p) return true;
-  return c.startsWith(p + "/");
-}
-
-/** Compute the path under a root: `<root>/<rel>` → `<rel>`. */
-function relativeUnder(rootPath: string, absChild: string): string {
-  const p = rootPath.replace(/\/+$/, "");
-  const c = absChild.replace(/\/+$/, "");
-  if (c === p) return "";
-  if (c.startsWith(p + "/")) return c.slice(p.length + 1);
-  return c;
 }
 
 /** Pick the deepest-matching allowlist root that contains the

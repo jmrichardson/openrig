@@ -480,6 +480,40 @@ describe("Daemon Lifecycle", () => {
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
 
+  // A `rig` reading daemon.json on Windows makes the replace fail with EPERM until it closes the file.
+  it.each(["win32", "linux"] as const)("publishes daemon.json by rename, waiting out a reader's lock only on Windows (%s)", (value) => {
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    const deps = realDeps();
+    const rename = fs.renameSync;
+    let refusals = 0;
+    const renameSync = vi.spyOn(fs, "renameSync").mockImplementation((from, to) => {
+      if (to === STATE_FILE && refusals < 2) {
+        refusals++;
+        throw Object.assign(new Error("EPERM: operation not permitted, rename"), { code: "EPERM" });
+      }
+      rename(from, to);
+    });
+    fs.mkdirSync(OPENRIG_DIR, { recursive: true });
+    fs.rmSync(STATE_FILE, { force: true });
+    Object.defineProperty(process, "platform", { ...platform, value });
+    try {
+      if (value === "win32") {
+        deps.writeFile(STATE_FILE, "{\"pid\":1}");
+        expect(fs.readFileSync(STATE_FILE, "utf-8")).toBe("{\"pid\":1}");
+        expect(renameSync).toHaveBeenCalledTimes(3);
+      } else {
+        expect(() => deps.writeFile(STATE_FILE, "{\"pid\":2}")).toThrow("EPERM");
+        expect(renameSync).toHaveBeenCalledTimes(1);
+        expect(fs.existsSync(STATE_FILE)).toBe(false);
+      }
+      expect(fs.readdirSync(OPENRIG_DIR).filter((name) => name.startsWith("daemon.json.") && name.endsWith(".tmp"))).toEqual([]);
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+      renameSync.mockRestore();
+      fs.rmSync(STATE_FILE, { force: true });
+    }
+  });
+
   // Test 5: stop reads pid from daemon.json, sends SIGTERM, removes daemon.json
   it("stop: reads pid, sends SIGTERM, removes daemon.json", async () => {
     const state: DaemonState = { pid: 555, port: 7433, db: "openrig.sqlite", startedAt: "2026-01-01T00:00:00Z" };
@@ -937,7 +971,7 @@ describe("Daemon Lifecycle", () => {
       spawn: spawnFn,
     });
 
-    tailLogs(deps, { follow: true });
+    tailLogs(deps, { follow: true }, "linux");
 
     // The installed Node runtime follows logs without a Unix tail dependency.
     expect(spawnFn).toHaveBeenCalledOnce();
@@ -945,6 +979,25 @@ describe("Daemon Lifecycle", () => {
     expect(cmd).toBe(process.execPath);
     expect(args).toContain("--follow");
     expect(args).toContain(LOG_FILE);
+  });
+
+  it("tailLogs on POSIX runs tail without -f and lets this command exit", () => {
+    const child = { pid: 1, unref: vi.fn(), on: vi.fn() };
+    const spawnFn = vi.fn(() => child as unknown as ChildProcess);
+    tailLogs(mockDeps({ exists: vi.fn((p: string) => p === LOG_FILE), spawn: spawnFn }), { follow: false }, "darwin");
+    expect(spawnFn.mock.calls[0]!.slice(0, 2)).toEqual(["tail", [LOG_FILE]]);
+    expect(child.unref).toHaveBeenCalledOnce();
+  });
+
+  it.each([true, false])("tailLogs on Windows follows with the installed Node, in the foreground (follow=%s)", (follow) => {
+    const child = { pid: 1, unref: vi.fn(), on: vi.fn() };
+    const spawnFn = vi.fn(() => child as unknown as ChildProcess);
+    tailLogs(mockDeps({ exists: vi.fn((p: string) => p === LOG_FILE), spawn: spawnFn }), { follow }, "win32");
+    const [cmd, args] = spawnFn.mock.calls[0]!;
+    expect(cmd).toBe(process.execPath);
+    expect(args[0]).toMatch(/log-tail.js$/);
+    expect(args.slice(1)).toEqual(follow ? [LOG_FILE, "--follow"] : [LOG_FILE]);
+    expect(child.unref).not.toHaveBeenCalled();
   });
 
   // Test 17: pid alive + healthz failure -> running with healthy=false, daemon.json preserved

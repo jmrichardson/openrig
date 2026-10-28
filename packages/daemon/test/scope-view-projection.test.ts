@@ -2,6 +2,7 @@
 // counts derive from LOCKS + C1 DROPS only; PROGRESS.md is never read; paired means
 // exactly ≥1-drop-cites-item; the lock states come from the frontmatter stamps.
 import { describe, it, expect } from "vitest";
+import path from "node:path";
 import { projectSliceScope, projectMissionScopes, type ScopeFsDeps } from "../src/domain/scope/scope-view-projection.js";
 
 const README = `---
@@ -60,13 +61,15 @@ evidences:
 body`;
 
 function fsFixture(files: Record<string, string>, dirs: string[]): ScopeFsDeps {
+  // The fixture tree is keyed by POSIX paths; the projection joins with the platform separator.
+  const posix = (p: string) => p.split(path.sep).join("/");
   return {
-    exists: (p) => p in files || dirs.includes(p),
-    readFile: (p) => files[p] ?? null,
-    listDir: (p) => Object.keys(files).filter((f) => f.startsWith(p + "/")).map((f) => f.slice(p.length + 1).split("/")[0]!)
-      .concat(dirs.filter((d) => d.startsWith(p + "/")).map((d) => d.slice(p.length + 1).split("/")[0]!))
+    exists: (p) => posix(p) in files || dirs.includes(posix(p)),
+    readFile: (p) => files[posix(p)] ?? null,
+    listDir: (p) => Object.keys(files).filter((f) => f.startsWith(posix(p) + "/")).map((f) => f.slice(posix(p).length + 1).split("/")[0]!)
+      .concat(dirs.filter((d) => d.startsWith(posix(p) + "/")).map((d) => d.slice(posix(p).length + 1).split("/")[0]!))
       .filter((v, i, a) => a.indexOf(v) === i),
-    isDirectory: (p) => dirs.includes(p),
+    isDirectory: (p) => dirs.includes(posix(p)),
   };
 }
 
@@ -160,7 +163,7 @@ body`;
     const a = projectSliceScope(fsFixture(baseFiles, baseDirs), S)!;
     const b = projectSliceScope(fsFixture(withoutProgress, baseDirs), S)!;
     expect(a.proof).toEqual(b.proof); // counts identical with/without the narrative file
-    expect(a.progressPath).toBe(`${S}/PROGRESS.md`); // surfaced ONLY as the n-display path
+    expect(a.progressPath).toBe(path.join(S, "PROGRESS.md")); // surfaced ONLY as the n-display path
     expect(b.progressPath).toBeNull();
   });
 

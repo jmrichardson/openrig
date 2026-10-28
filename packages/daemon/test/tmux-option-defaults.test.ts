@@ -95,6 +95,21 @@ describe("TmuxOptionDefaultsApplier", () => {
     expect(setServerOption).toHaveBeenCalledWith("set-clipboard", "on");
   });
 
+  it("win32 sets the clipboard on each psmux session's own server, every launch, with no copy-command", async () => {
+    const { adapter, setServerOption } = mockAdapter();
+    const applier = new TmuxOptionDefaultsApplier({ tmuxAdapter: adapter, platform: "win32", hasCommand: () => true });
+    expect(await applier.applyToFreshSession("sess-a")).toEqual([]);
+    await applier.applyToFreshSession("sess-b");
+    // psmux runs one server per session: no daemon-lifetime memo, no server-wide copy-command.
+    expect(setServerOption.mock.calls).toEqual([["set-clipboard", "on", "sess-a"], ["set-clipboard", "on", "sess-b"]]);
+  });
+
+  it("win32 reports a native clipboard option it could not set", async () => {
+    const { adapter } = mockAdapter({ setServerOption: async () => ({ ok: false, code: "unknown", message: "no server" }) });
+    const warnings = await new TmuxOptionDefaultsApplier({ tmuxAdapter: adapter, platform: "win32" }).applyToFreshSession("sess-x");
+    expect(warnings).toEqual(["Native clipboard option not set for sess-x: no server"]);
+  });
+
   it("collects non-fatal warnings when an option-set fails and never throws", async () => {
     const { adapter } = mockAdapter({
       setSessionOption: async (_s, k) =>

@@ -8,6 +8,7 @@ import { pack, unpack, verifyArchiveDigest, unsafeArchiveEntryReason, collectUns
 // TODO: AS-T12 — migrate to pod-aware bundle types
 import { serializeLegacyBundleManifest as serializeBundleManifest, type LegacyBundleManifest as BundleManifest } from "../src/domain/bundle-types.js";
 import { computeIntegrity, writeIntegrity, type IntegrityFsOps } from "../src/domain/bundle-integrity.js";
+import { canCreateFileSymlinks } from "../../../test/symlink-capability.mjs";
 
 function sha256(content: string): string {
   return createHash("sha256").update(content).digest("hex");
@@ -195,7 +196,8 @@ describe("Bundle archive", () => {
   });
 
   // T4b: Symlink entry rejection
-  it("symlink in archive rejected during extraction", async () => {
+  // Creates a file symlink, which Windows allows only with SeCreateSymbolicLinkPrivilege.
+  it.skipIf(!canCreateFileSymlinks)("symlink in archive rejected during extraction", async () => {
     // Create an archive that includes a symlink entry
     const symlinkDir = path.join(tmpDir, "sym-staging");
     fs.mkdirSync(symlinkDir, { recursive: true });

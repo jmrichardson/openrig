@@ -1,8 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { OmpRuntimeAdapter } from "../src/adapters/omp-runtime-adapter.js";
 import { OmpResumeAdapter } from "../src/adapters/omp-resume.js";
 import { piSeatPaths } from "../src/adapters/pi-runner-protocol.js";
 import type { TmuxAdapter } from "../src/adapters/tmux.js";
+import type { SeatLaunchEnvironment } from "../src/domain/seat-launch-environment.js";
 
 const stateRoot = "/openrig/state/omp";
 const seat = "omp-worker@rig";
@@ -31,6 +32,40 @@ function fakeSeat(files: Record<string, string>) {
 }
 
 describe("OMP runtime adapter exact session tokens", () => {
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  afterEach(() => { Object.defineProperty(process, "platform", platform); });
+
+  it("routes fresh and restored OMP seats through the shared launch environment on native Windows", async () => {
+    Object.defineProperty(process, "platform", { ...platform, value: "win32" });
+    const { fs, tmux } = fakeSeat({ [currentFile]: "session" });
+    const command = vi.fn(async (_session: string, text: string) => `native-wrapper ${text}`);
+    const seatLaunchEnvironment = { command } as unknown as SeatLaunchEnvironment;
+    const adapter = new OmpRuntimeAdapter({ fsOps: fs, tmux, stateRoot, runnerEntryPath: "/daemon/pi-runner.js", seatLaunchEnvironment, sleep: async () => {} });
+    const result = await adapter.launchHarness({ nodeId: "node-1", launchGeneration: "generation-2", tmuxSession: seat, cwd: "/work" } as never, { name: seat });
+    expect(result.ok).toBe(true);
+    expect(command).toHaveBeenCalledWith(seat, expect.stringContaining("--runtime omp"), { nodeId: "node-1", generation: "generation-2", runtime: "omp" });
+    const resume = new OmpResumeAdapter(tmux, fs, { stateRoot, runnerEntryPath: "/daemon/pi-runner.js" }, { seatLaunchEnvironment, pollMs: 1, maxWaitMs: 1, sleep: async () => {} });
+    expect((await resume.resume(seat, "omp_session_file", currentFile, "/work")).ok).toBe(true);
+    expect(command).toHaveBeenLastCalledWith(seat, expect.stringContaining(`--session '${currentFile}'`), { runtime: "omp" });
+    expect(vi.mocked(tmux.sendShellCommand).mock.calls.every((call) => call[1].startsWith("native-wrapper "))).toBe(true);
+  });
+
+  it.each(["linux", "darwin"] as const)("types the bare OMP runner command on %s, never the shared launch environment", async (host) => {
+    Object.defineProperty(process, "platform", { ...platform, value: host });
+    const { fs, tmux } = fakeSeat({ [currentFile]: "session" });
+    const command = vi.fn(async (_session: string, text: string) => `native-wrapper ${text}`);
+    const seatLaunchEnvironment = { command } as unknown as SeatLaunchEnvironment;
+    const adapter = new OmpRuntimeAdapter({ fsOps: fs, tmux, stateRoot, runnerEntryPath: "/daemon/pi-runner.js", seatLaunchEnvironment, sleep: async () => {} });
+    expect((await adapter.launchHarness({ nodeId: "node-1", launchGeneration: "generation-2", tmuxSession: seat, cwd: "/work" } as never, { name: seat })).ok).toBe(true);
+    const resume = new OmpResumeAdapter(tmux, fs, { stateRoot, runnerEntryPath: "/daemon/pi-runner.js" }, { seatLaunchEnvironment, pollMs: 1, maxWaitMs: 1, sleep: async () => {} });
+    expect((await resume.resume(seat, "omp_session_file", currentFile, "/work")).ok).toBe(true);
+    expect(command).not.toHaveBeenCalled();
+    const sent = vi.mocked(tmux.sendShellCommand).mock.calls.map((call) => call[1]);
+    expect(sent).toHaveLength(2);
+    expect(sent.every((text) => text.startsWith("node ") && text.includes("--runtime omp"))).toBe(true);
+    expect(sent[1]).toContain(`--session '${currentFile}'`);
+  });
+
   it("resumes only the OMP token, and returns the same validated session file", async () => {
     const { fs, tmux } = fakeSeat({ [currentFile]: "session" });
     const adapter = new OmpRuntimeAdapter({ fsOps: fs, tmux, stateRoot, runnerEntryPath: "/daemon/pi-runner.js", sleep: async () => {} });

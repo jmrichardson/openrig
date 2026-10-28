@@ -14,6 +14,7 @@ import {
   getLastCaptureAt,
   getLastCheckedAt,
   getTranscriptRotationOptionsFromEnv,
+  getTranscriptCaptureStats,
   clearAllTranscriptRotationsForTest,
   DEFAULT_TRANSCRIPT_LINES,
   DEFAULT_TRANSCRIPT_POLL_INTERVAL_MS,
@@ -420,6 +421,28 @@ describe("startTranscriptRotation — bounded polling", () => {
     await vi.advanceTimersByTimeAsync(100);
     expect(getLastCaptureAt("s@rig")).toBe(Date.now());
     expect(fs.statSync(outputPath).ino).toBe(inode);
+  });
+
+  // Windows refuses to rename over a file another handle holds open; POSIX renames over it.
+  it.skipIf(process.platform !== "win32")("keeps the transcript current on Windows while a reader holds it open", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    const adapter = makeFakeAdapter("first");
+    const outputPath = path.join(tmpDir, "s.log");
+    startTranscriptRotation(adapter as unknown as TmuxAdapter, "s@rig", outputPath, { lines: 1000, pollIntervalMs: 100 });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(fs.readFileSync(outputPath, "utf8")).toBe("first");
+    const reader = fs.openSync(outputPath, "r");
+    try {
+      const failures = getTranscriptCaptureStats().failures;
+      adapter.capturePaneContent.mockResolvedValue("second");
+      await vi.advanceTimersByTimeAsync(100);
+      expect(fs.readFileSync(outputPath, "utf8")).toBe("second");
+      expect(getLastCaptureAt("s@rig")).toBe(Date.now());
+      expect(getTranscriptCaptureStats().failures).toBe(failures);
+      expect(fs.readdirSync(tmpDir).filter((e) => e.includes(".tmp."))).toEqual([]);
+    } finally {
+      fs.closeSync(reader);
+    }
   });
 });
 

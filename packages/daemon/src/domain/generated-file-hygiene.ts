@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { projectionResourceDirectory } from "./projection-resource-path.js";
 
 const within = (root: string, file: string): boolean => {
   const rel = path.relative(root, file);
@@ -10,7 +11,7 @@ const patternFor = (relative: string) => `/${relative.split(path.sep).join("/").
 // Git's ignore-case comparison folds ASCII bytes, not Unicode filenames.
 const foldCase = (value: string) => value.replace(/[A-Z]/g, c => c.toLowerCase());
 // The bundled plugin is imported as shared:openrig-core; keep the unqualified projection too.
-const corePluginDirectories = [".codex/plugins/openrig-core", ".codex/plugins/shared:openrig-core"];
+const corePluginDirectories = ["openrig-core", "shared:openrig-core"].map(id => `.codex/plugins/${projectionResourceDirectory(id)}`);
 
 /** Only pass files this projection created. Existing names/bytes are not ownership. */
 export function excludeNewGeneratedFiles(cwd: string, createdFiles: string[]): string[] {
@@ -30,7 +31,7 @@ export function excludeNewGeneratedFiles(cwd: string, createdFiles: string[]): s
     try {
       return execFileSync("git", ["-C", dir, ...args], {
         encoding: "utf8", timeout: remaining(), killSignal: "SIGKILL", maxBuffer: 2 * 1024 * 1024,
-        input, stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+        input, stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"], windowsHide: true,
       });
     } catch (error) {
       if (allowAbsent && (error as { status?: number }).status === 1) return "";
@@ -65,7 +66,7 @@ export function excludeNewGeneratedFiles(cwd: string, createdFiles: string[]): s
       remaining();
       const canonical = fs.realpathSync(file);
       if (!within(root, canonical) || !fs.lstatSync(file).isFile()) { warn(file, "not a regular file inside this worktree"); continue; }
-      const relative = path.relative(root, canonical);
+      const relative = path.relative(root, canonical).split(path.sep).join("/");
       if (/[\r\n]/.test(relative)) { warn(file, "Git exclude cannot represent this filename on one line"); continue; }
       if (own.some(item => item.tracked && item.name === relative) || ignored.has(file)) continue;
       const fromCwd = path.relative(fs.realpathSync(cwd), canonical).split(path.sep).join("/");

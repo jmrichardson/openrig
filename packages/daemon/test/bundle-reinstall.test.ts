@@ -8,6 +8,7 @@ import { computeIntegrity } from "../src/domain/bundle-integrity.js";
 import { stringify } from "yaml";
 import { materializePodBundle } from "../src/domain/bundle-source-resolver.js";
 import type { BootstrapResult, BootstrapStageResult } from "../src/domain/bootstrap-orchestrator.js";
+import { canCreateFileSymlinks } from "../../../test/symlink-capability.mjs";
 
 describe("bundle reinstall through both public routes", () => {
   let root: string;
@@ -144,7 +145,7 @@ describe("bundle reinstall through both public routes", () => {
 
   it.each(["/api/bundles/install", "/api/up"])("install-root: %s keeps canonical aliases usable and records each generation", async route => {
     const target = path.join(root, "installed"), alias = path.join(root, "alias"), project = path.join(root, "project");
-    fs.mkdirSync(target); fs.mkdirSync(project); fs.symlinkSync(target, alias, "dir");
+    fs.mkdirSync(target); fs.mkdirSync(project); fs.symlinkSync(target, alias, process.platform === "win32" ? "junction" : "dir");
     const first = await install(route, await bundle("workshop"), alias, false, project);
     expect(first.status).toBe(201);
     expect(setup.rigRepo.getRigInstallRoot(first.body.rigId)).toBe(fs.realpathSync(target));
@@ -364,14 +365,15 @@ describe("bundle reinstall through both public routes", () => {
     }
     const copy = fs.cpSync;
     vi.spyOn(fs, "cpSync").mockImplementation((from, to, options) => {
-      if (String(from).endsWith("/b")) throw new Error("fixture backup unavailable");
+      if (String(from).endsWith(`${path.sep}b`)) throw new Error("fixture backup unavailable");
       return copy(from, to, options);
     });
     expect(() => materializePodBundle(source, target, true)).toThrow(/Originals were kept; partial backup/);
     for (const name of ["a", "b"]) expect(fs.readFileSync(path.join(target, name), "utf8")).toBe("local");
   });
 
-  it("keeps linked originals and external contents while replacing a stopped team's file", () => {
+  // Creates a file symlink, which Windows allows only with SeCreateSymbolicLinkPrivilege.
+  it.skipIf(!canCreateFileSymlinks)("keeps linked originals and external contents while replacing a stopped team's file", () => {
     const source = path.join(root, "source"), target = path.join(root, "target"), external = path.join(root, "external");
     fs.mkdirSync(source); fs.mkdirSync(target);
     fs.writeFileSync(external, "external edits");

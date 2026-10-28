@@ -6,8 +6,9 @@ import { createServer, type Server } from "node:http";
 import Database from "better-sqlite3";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, relative } from "node:path";
+import { delimiter, isAbsolute, join, relative, sep } from "node:path";
 import { createFullTestDb } from "./helpers/test-app.js";
+import { fixtureFs } from "./helpers/fixture-path.js";
 import { RigRepository } from "../src/domain/rig-repository.js";
 import { PodRepository } from "../src/domain/pod-repository.js";
 import { SessionRegistry } from "../src/domain/session-registry.js";
@@ -53,8 +54,12 @@ import type { TmuxAdapter as TmuxAdapterType } from "../src/adapters/tmux.js";
 // settings.local.json carries OpenRig's copy of the relay for that event, so each event is reported once either way.
 
 const require = createRequire(import.meta.url);
+// Windows: a directory link is a junction, which needs no symlink privilege. Other platforms ignore the type.
+const DIR_LINK = process.platform === "win32" ? "junction" : undefined;
 const PLUGIN_ENV = "CLAUDE_CODE_PLUGIN_DIRS";
-const OWN_LIST = "/own/plugins:/more/plugins";
+/** A plugin list as Claude reads it: entries joined by the platform's path delimiter (":", or ";" on Windows). */
+const list = (...entries: string[]) => entries.join(delimiter);
+const OWN_LIST = list("/own/plugins", "/more/plugins");
 
 /** A scratch plugins folder with the openrig-core manifest in it, as the daemon's vendoring leaves it. */
 function vendoredPlugins(root: string): { pluginsDir: string; vendored: string } {
@@ -91,7 +96,8 @@ describe("which Claude seats load the vendored plugin", () => {
     try {
       // The plugin is vendored for a seat that selects it to find, and no runtime-wide entry names it.
       expect(vendoredCorePluginDir()).toBe(join(root, "openrig", "plugins", "openrig-core"));
-      expect(vendoredCorePluginDir()).not.toContain(":");
+      // Claude splits the list on the platform's path delimiter (":", or ";" on Windows, whose drive letter has a colon).
+      expect(vendoredCorePluginDir()).not.toContain(delimiter);
       expect(deps.runtimeSessionEnv?.["claude-code"]).toBeUndefined();
       expect(deps.runtimeSessionEnv?.codex).toBeUndefined();
     } finally {
@@ -110,8 +116,8 @@ describe("which Claude seats load the vendored plugin", () => {
   it("adds the plugin after a list the seat declared, once, and leaves a seat that didn't select it alone", () => {
     expect(withCorePlugin({}, "/v")).toEqual({ [PLUGIN_ENV]: "/v" });
     expect(withCorePlugin({ A: "1" }, "/v")).toEqual({ A: "1", [PLUGIN_ENV]: "/v" });
-    expect(withCorePlugin({ [PLUGIN_ENV]: OWN_LIST }, "/v")).toEqual({ [PLUGIN_ENV]: `${OWN_LIST}:/v` });
-    expect(withCorePlugin({ [PLUGIN_ENV]: "/a:/v" }, "/v")).toEqual({ [PLUGIN_ENV]: "/a:/v" });
+    expect(withCorePlugin({ [PLUGIN_ENV]: OWN_LIST }, "/v")).toEqual({ [PLUGIN_ENV]: list(OWN_LIST, "/v") });
+    expect(withCorePlugin({ [PLUGIN_ENV]: list("/a", "/v") }, "/v")).toEqual({ [PLUGIN_ENV]: list("/a", "/v") });
     const untouched = { [PLUGIN_ENV]: OWN_LIST };
     expect(withCorePlugin(untouched, undefined)).toBe(untouched);
   });
@@ -119,19 +125,31 @@ describe("which Claude seats load the vendored plugin", () => {
   it("counts a declared entry as the plugin when it names the same folder another way (trailing slash, symlink)", () => {
     const { vendored } = vendoredPlugins(root);
     const link = join(root, "core-link");
-    symlinkSync(vendored, link);
-    expect(withCorePlugin({ [PLUGIN_ENV]: `/a:${vendored}/` }, vendored)).toEqual({ [PLUGIN_ENV]: `/a:${vendored}/` });
-    expect(withCorePlugin({ [PLUGIN_ENV]: `${link}:/a` }, vendored)).toEqual({ [PLUGIN_ENV]: `${link}:/a` });
-    expect(withCorePlugin({ [PLUGIN_ENV]: "/a::/b" }, vendored)).toEqual({ [PLUGIN_ENV]: `/a::/b:${vendored}` });
+    symlinkSync(vendored, link, DIR_LINK);
+    expect(withCorePlugin({ [PLUGIN_ENV]: list("/a", `${vendored}/`) }, vendored)).toEqual({ [PLUGIN_ENV]: list("/a", `${vendored}/`) });
+    expect(withCorePlugin({ [PLUGIN_ENV]: list(link, "/a") }, vendored)).toEqual({ [PLUGIN_ENV]: list(link, "/a") });
+    expect(withCorePlugin({ [PLUGIN_ENV]: list("/a", "", "/b") }, vendored)).toEqual({ [PLUGIN_ENV]: list("/a", "", "/b", vendored) });
+  });
+
+  it("splits the list on the platform's delimiter, so a Windows drive letter's colon stays inside its entry", () => {
+    // On Windows these are absolute entries on two drives, which Claude splits on ";"; elsewhere they are relative entries
+    // that Claude skips. Either way the seat's entries stay as written, first, and the vendored plugin is added once after them.
+    const { vendored } = vendoredPlugins(root);
+    const own = list(String.raw`C:\team\plugins`, String.raw`D:\more\plugins`);
+    expect(withCorePlugin({ [PLUGIN_ENV]: own }, vendored)).toEqual({ [PLUGIN_ENV]: list(own, vendored) });
+    expect(withCorePlugin({ [PLUGIN_ENV]: list(own, vendored) }, vendored)).toEqual({ [PLUGIN_ENV]: list(own, vendored) });
+    // The vendored folder written with forward slashes, as a Windows list may spell it, is the same folder.
+    const forward = vendored.split(sep).join("/");
+    expect(withCorePlugin({ [PLUGIN_ENV]: list(forward, own) }, vendored)).toEqual({ [PLUGIN_ENV]: list(forward, own) });
   });
 
   it("does not count a relative entry as the plugin, since Claude skips relative entries: it stays as written and the absolute path is added", () => {
     const { vendored } = vendoredPlugins(root);
     const rel = relative(process.cwd(), vendored); // resolves to the vendored folder from here, but Claude would skip it
     expect(isAbsolute(rel)).toBe(false);
-    expect(withCorePlugin({ [PLUGIN_ENV]: rel }, vendored)).toEqual({ [PLUGIN_ENV]: `${rel}:${vendored}` });
-    expect(withCorePlugin({ [PLUGIN_ENV]: `./x:${rel}:/a` }, vendored)).toEqual({ [PLUGIN_ENV]: `./x:${rel}:/a:${vendored}` });
-    expect(withCorePlugin({ [PLUGIN_ENV]: `${rel}:${vendored}` }, vendored)).toEqual({ [PLUGIN_ENV]: `${rel}:${vendored}` });
+    expect(withCorePlugin({ [PLUGIN_ENV]: rel }, vendored)).toEqual({ [PLUGIN_ENV]: list(rel, vendored) });
+    expect(withCorePlugin({ [PLUGIN_ENV]: list("./x", rel, "/a") }, vendored)).toEqual({ [PLUGIN_ENV]: list("./x", rel, "/a", vendored) });
+    expect(withCorePlugin({ [PLUGIN_ENV]: list(rel, vendored) }, vendored)).toEqual({ [PLUGIN_ENV]: list(rel, vendored) });
   });
 
   it("picks the seat's plugin by where its selection resolved, whichever way it was spelled", () => {
@@ -142,7 +160,7 @@ describe("which Claude seats load the vendored plugin", () => {
       expect(seatCorePluginDir(claude, db, [vendored], pluginsDir)).toBe(vendored);
       // A path that spells the same folder differently, and a symlink to it, are the same plugin.
       expect(seatCorePluginDir(claude, db, [`${pluginsDir}/./openrig-core/`], pluginsDir)).toBe(vendored);
-      symlinkSync(vendored, join(root, "alias"));
+      symlinkSync(vendored, join(root, "alias"), DIR_LINK);
       expect(seatCorePluginDir(claude, db, [join(root, "alias")], pluginsDir)).toBe(vendored);
       // Another plugin, even one called openrig-core somewhere else, is not the shipped one.
       expect(seatCorePluginDir(claude, db, [join(root, "other", "openrig-core")], pluginsDir)).toBeUndefined();
@@ -200,11 +218,9 @@ profiles:
       skills: []
       plugins: ${plugins}`;
 
+  // The fixture is keyed by POSIX paths; on Windows the resolver asks for drive-qualified ones (fixture-path.ts).
   function mockFs(files: Record<string, string>): AgentResolverFsOps {
-    return {
-      readFile: (p: string) => { if (p in files) return files[p]!; throw new Error(`Not found: ${p}`); },
-      exists: (p: string) => p in files,
-    };
+    return fixtureFs(files);
   }
   const mockAdapter = (runtime: string): RuntimeAdapter => ({
     runtime, listInstalled: vi.fn(async () => []), project: vi.fn(async () => ({ projected: [], skipped: [], failed: [] })),
@@ -355,7 +371,7 @@ describe("a Claude seat's launch env, on the launch paths that don't re-resolve 
     const rigRepo = new RigRepository(db);
     const rig = rigRepo.createRig("plugin-env-own");
     rigRepo.addNode(rig.id, "own", { runtime: "claude-code", env: { [PLUGIN_ENV]: OWN_LIST } });
-    rigRepo.addNode(rig.id, "has-it", { runtime: "claude-code", env: { [PLUGIN_ENV]: `/own/plugins:${vendored}` } });
+    rigRepo.addNode(rig.id, "has-it", { runtime: "claude-code", env: { [PLUGIN_ENV]: list("/own/plugins", vendored) } });
     rigRepo.addNode(rig.id, "oneoff", { runtime: "claude-code" });
     rigRepo.addNode(rig.id, "own-not-selected", { runtime: "claude-code", env: { [PLUGIN_ENV]: OWN_LIST } });
     const created: Array<{ name: string; env: Record<string, string> | undefined }> = [];
@@ -363,12 +379,12 @@ describe("a Claude seat's launch env, on the launch paths that don't re-resolve 
     const launcher = new NodeLauncher({ db, rigRepo, sessionRegistry: new SessionRegistry(db), eventBus: new EventBus(db),
       tmuxAdapter: fakeTmux(created, sessionEnvCalls), sessionEnv: { OPENRIG_HOME: "/state" }, pluginsDir });
     for (const id of ["own", "has-it"]) expect((await launcher.launchNode(rig.id, id, { pluginPaths: [vendored] })).ok).toBe(true);
-    expect(created[0]!.env![PLUGIN_ENV]).toBe(`${OWN_LIST}:${vendored}`);
-    expect(created[1]!.env![PLUGIN_ENV]).toBe(`/own/plugins:${vendored}`);
+    expect(created[0]!.env![PLUGIN_ENV]).toBe(list(OWN_LIST, vendored));
+    expect(created[1]!.env![PLUGIN_ENV]).toBe(list("/own/plugins", vendored));
     // A one-off `rig up --env` list is composed too, and once the first pane has it the session goes back to the vendored plugin.
     const oneOff = await launcher.launchNode(rig.id, "oneoff", { pluginPaths: [vendored], env: { [PLUGIN_ENV]: "/one/off" } });
     expect(oneOff.ok, JSON.stringify(oneOff)).toBe(true);
-    expect(created[2]!.env![PLUGIN_ENV]).toBe(`/one/off:${vendored}`);
+    expect(created[2]!.env![PLUGIN_ENV]).toBe(list("/one/off", vendored));
     expect(sessionEnvCalls).toContain(`set ${PLUGIN_ENV}=${vendored}`);
     // A seat that declared its own list but didn't select the plugin keeps exactly its own list.
     expect((await launcher.launchNode(rig.id, "own-not-selected", { pluginPaths: [] })).ok).toBe(true);
@@ -446,7 +462,7 @@ describe("a Claude seat's launch env, on the launch paths that don't re-resolve 
     expect(plain.created[0]).toMatchObject({ [PLUGIN_ENV]: vendored });
     const own = restoreHarness([{ category: "plugin", absolutePath: vendored }], { [PLUGIN_ENV]: OWN_LIST });
     await own.run();
-    expect(own.created[0]).toMatchObject({ [PLUGIN_ENV]: `${OWN_LIST}:${vendored}` });
+    expect(own.created[0]).toMatchObject({ [PLUGIN_ENV]: list(OWN_LIST, vendored) });
   });
 
   it("restore (native resume): a seat with kept skills gets its seat plugin, from storage keyed by its rig and logical seat", async () => {
@@ -696,8 +712,8 @@ printf '{"PLUGIN_DIRS":"%s","LEAKED":"%s","PROJECT":"%s","NODE":"%s"}' "\${CLAUD
 
   it("gives a seat that declared its own list the composed list, once", async () => {
     const f = fixture({ memberEnv: { [PLUGIN_ENV]: OWN_LIST }, sessionKeys: PLUGIN_ENV });
-    const seen = await f.run(await launch(f), { [PLUGIN_ENV]: `${OWN_LIST}:/v/openrig-core` });
-    expect(seen.PLUGIN_DIRS).toBe(`${OWN_LIST}:/v/openrig-core`);
+    const seen = await f.run(await launch(f), { [PLUGIN_ENV]: list(OWN_LIST, "/v/openrig-core") });
+    expect(seen.PLUGIN_DIRS).toBe(list(OWN_LIST, "/v/openrig-core"));
   });
 
   it("forwards a seat's own skill plugin from its pane, even when its session's name list predates the variable", async () => {
@@ -900,7 +916,7 @@ describe("the plugin's seat effects stay inside the seat's project", () => {
     roots.push(root);
     const seat = join(root, "seat"), nested = join(root, "nested"), sub = join(seat, "sub");
     for (const d of [seat, nested, sub]) mkdirSync(d, { recursive: true });
-    symlinkSync(seat, join(root, "seat-link"));
+    symlinkSync(seat, join(root, "seat-link"), DIR_LINK);
     // The CLAUDE_PROJECT_DIR / OPENRIG_SEAT_PROJECT_DIR pairs, and whether the seat's effects should run.
     const cases: Array<{ label: string; claude: string | undefined; launch: string | undefined; acts: boolean }> = [
       { label: "the same folder", claude: seat, launch: seat, acts: true },
@@ -934,7 +950,8 @@ describe("the plugin's seat effects stay inside the seat's project", () => {
         mkdirSync(tmp);
         const out = await new Promise<void>((done, fail) => {
           const child = spawn(process.execPath, [join(scripts, "hooks/scripts/activity-relay.cjs")], {
-            env: envFor(c, { TMPDIR: tmp, OPENRIG_SESSION_NAME: "dev-claude@rig", OPENRIG_NODE_ID: "n1", OPENRIG_RUNTIME: "claude-code",
+            // Windows names the temp folder by TEMP and TMP, not TMPDIR.
+            env: envFor(c, { TMPDIR: tmp, ...(process.platform === "win32" ? { TEMP: tmp, TMP: tmp } : {}), OPENRIG_SESSION_NAME: "dev-claude@rig", OPENRIG_NODE_ID: "n1", OPENRIG_RUNTIME: "claude-code",
               OPENRIG_OCCUPANT_GENERATION: "gen-1", OPENRIG_RESUME_LAUNCH: "resume-1",
               OPENRIG_URL: `http://127.0.0.1:${port}`, OPENRIG_ACTIVITY_HOOK_TOKEN: "tok" }),
             stdio: ["pipe", "ignore", "ignore"],

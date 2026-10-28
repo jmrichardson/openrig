@@ -1,6 +1,7 @@
 import { DeliveryGuardError, type SeatDeliveryGuard } from "../domain/seat-delivery-guard.js";
 import { writeFile as fsWriteFile, unlink as fsUnlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { rmdirSync } from "node:fs";
 import { join as pathJoin } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ComposerSnapshot } from "../domain/composer-prompts.js";
@@ -9,6 +10,7 @@ import { parentSessionEnvKeys, removeParentSessionEnv } from "../domain/parent-s
 import { addSeatRuntimeDir } from "../domain/seat-runtime-dir.js";
 import type { TmuxControlExec } from "./tmux-control.js";
 import { powershellQuote, hasOnlyWindowsTerminalResponseDraft } from "./windows-launch.js";
+import { windowsArguments } from "./windows-argv.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
@@ -43,6 +45,8 @@ export interface TmuxFileOps {
   unlink(path: string): Promise<void>;
   /** Unique temp-file path per call - parallel `rig up` stands up many seats. */
   tmpName(): string;
+  /** Environment staging on Windows needs a protected DACL rather than POSIX modes. */
+  environmentName?(): Promise<string>;
   /** Unique tmux buffer name per call - a fixed name would collide under concurrency. */
   bufferName(): string;
 }
@@ -58,13 +62,69 @@ const SEND_SCRIPT_NAME = new RegExp(
 /** Whether `path` names a launch script sendShellCommand staged (an absolute path with the name
  *  defaultTmuxFileOps gives it). The script removes itself first, so this is a name check only. */
 export function isStagedSendScriptPath(path: string): boolean {
-  return path.startsWith("/") && SEND_SCRIPT_NAME.test(path.split("/").pop() ?? "");
+  if (path.startsWith("/")) return SEND_SCRIPT_NAME.test(path.split("/").pop() ?? "");
+  return process.platform === "win32" && (/^[a-z]:[\\/]/i.test(path) || /^\\\\[^?.\\][^\\]*\\[^\\]+\\/.test(path))
+    && SEND_SCRIPT_NAME.test(path.split(/[\\/]/).pop() ?? "");
+}
+
+/** psmux runs one server per session, so its local `%N` pane id is unique only with its session. The adapter's
+ *  pane ref carries both, and run() selects that session's server for it. Any other id is returned unchanged. */
+export function psmuxPaneRef(session: string, pane: string): string {
+  return /^%\d+$/.test(pane) ? `psmux:${Buffer.from(session).toString("base64url")}:${pane}` : pane;
+}
+
+/** The shell every native psmux pane starts, whatever psmux's own default-shell names (Git Bash, cmd, or a path
+ *  PowerShell cannot run): launches are staged as PowerShell. */
+function nativeShellArgv(): string[] {
+  return [pathJoin(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe"), "-NoLogo", "-NoProfile"];
+}
+
+/** Run OpenRig's console-input writer (assets/windows-console-input.ps1) against a native pane's process. */
+function runWindowsConsoleInput(pid: number, args: string[]): Promise<unknown> {
+  return execFileAsync(nativeShellArgv()[0]!, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
+    pathJoin(import.meta.dirname, "../../assets/windows-console-input.ps1"), "-TargetPid", String(pid), ...args], { windowsHide: true, timeout: 15000 });
+}
+
+/** A forced taskkill, of the process tree when `tree` is set: native Windows' only KILL for a console process. */
+function forceTaskkill(pid: number, tree: boolean): Promise<unknown> {
+  return execFileAsync(pathJoin(process.env.SystemRoot ?? "C:\\Windows", "System32", "taskkill.exe"),
+    ["/PID", String(pid), ...(tree ? ["/T"] : []), "/F"], { windowsHide: true, timeout: 5000 });
+}
+
+/** A pane's foreground command as the native routing compares it: lower case, without `.exe`. */
+function nativeCommandName(command: string | null): string {
+  return (command ?? "").toLowerCase().replace(/\.exe$/, "");
+}
+
+/** Foregrounds that read OpenRig's console-input delivery: native TUIs and the node runners, which parse the
+ *  bracketed-paste delimiters ConPTY would strip from a paste. Any other program gets psmux's own paste. */
+const CONSOLE_INPUT_COMMANDS: ReadonlySet<string> = new Set(["claude", "codex", "codex-code-mode-host", "node"]);
+
+/** Native Windows has no graceful signal for a console process: a non-forced taskkill only asks a process's
+ *  windows to close, and a pane's console programs have none (it can even report success and end nothing). */
+const NATIVE_TERM_UNSUPPORTED: TmuxResult = {
+  ok: false,
+  code: "graceful_unsupported",
+  message: "Native Windows console processes have no graceful termination signal; nothing was signalled.",
+};
+
+let nativeEnvironmentDirectory: Promise<string> | undefined;
+async function nativeEnvironmentName(): Promise<string> {
+  nativeEnvironmentDirectory ??= (async () => {
+    const dir = pathJoin(tmpdir(), "openrig-env-" + process.pid + "-" + randomUUID());
+    await execFileAsync(nativeShellArgv()[0]!, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
+      pathJoin(import.meta.dirname, "../../assets/windows-private-directory.ps1"), "-Path", dir], { windowsHide: true, timeout: 10_000 });
+    process.once("exit", () => { try { rmdirSync(dir); } catch { /* Retain a file an uncertain client may still be reading. */ } });
+    return dir;
+  })();
+  return pathJoin(await nativeEnvironmentDirectory, randomUUID() + ".conf");
 }
 
 export function defaultTmuxFileOps(): TmuxFileOps {
   return {
     writeFile: (p, content, options) => fsWriteFile(p, content, { encoding: "utf8", ...options }),
     unlink: (p) => fsUnlink(p),
+    ...(process.platform === "win32" ? { environmentName: nativeEnvironmentName } : {}),
     tmpName: () => pathJoin(tmpdir(), `${SEND_SCRIPT_PREFIX}${process.pid}-${randomUUID()}${SEND_SCRIPT_SUFFIX}`),
     bufferName: () => `openrig_${process.pid}_${randomUUID().replace(/-/g, "")}`,
   };
@@ -387,8 +447,7 @@ export class TmuxAdapter {
     if (!this.launchEnvironment || !seatEnv.OPENRIG_NODE_ID) return null;
     try {
       const policy = this.launchEnvironment();
-      if (policy.inheritTmuxEnvironment) return null;
-      if (process.platform === "win32") throw new Error("POSIX launch boundary unavailable");
+      if (policy.inheritTmuxEnvironment || this.terminalKind === "psmux") return null;
       let shell = await this.getDefaultShell();
       // tmux reads these options from a running server. The first seat on a new server starts the empty server here,
       // as a first start does, so it gets the same scoped environment as every later seat (#2041).
@@ -449,7 +508,11 @@ export class TmuxAdapter {
     // uses. An id alone is unique only for one server's lifetime.
     let created: { id: string; at: string } | null;
     try {
-      const out = await this.exec(`tmux new-session -d -P -F ${shellQuote("#{session_id} #{session_created}")} -s ${shellQuote(name)}${cwd != null ? ` -c ${shellQuote(cwd)}` : ""}`);
+      // Native psmux gets argv: cmd.exe does not parse POSIX quotes. Its pane is the PowerShell a launch gets.
+      const out = this.terminalKind === "psmux"
+        ? await this.run(["tmux", "new-session", "-d", "-P", "-F", "#{session_id} #{session_created}", "-s", name,
+          ...(cwd != null ? ["-c", cwd] : []), windowsArguments(nativeShellArgv())])
+        : await this.exec(`tmux new-session -d -P -F ${shellQuote("#{session_id} #{session_created}")} -s ${shellQuote(name)}${cwd != null ? ` -c ${shellQuote(cwd)}` : ""}`);
       const match = /^(\$\d+) (\d+)$/.exec(out.trim());
       created = match ? { id: match[1]!, at: match[2]! } : null;
     } catch (err) {
@@ -482,6 +545,14 @@ export class TmuxAdapter {
   private async removeCreatedSession(name: string, created: { id: string; at: string }): Promise<TmuxResult> {
     const same = `#{&&:#{==:#{session_name},${name}},#{==:#{session_created},${created.at}}}`;
     try {
+      if (this.terminalKind === "psmux") {
+        // psmux accepts no `$N` target: the name selects the session's own server, which checks the name and
+        // creation time and kills the session that answered, in one command. Absence then proves the kill.
+        const out = await this.run(["tmux", "if-shell", "-F", same, "kill-session", "display-message -p kept"], undefined, name);
+        if (out.includes("kept")) return { ok: false, code: "guard_target_changed", message: `its name no longer names the session created at ${created.at} (it may already be gone); nothing was killed.` };
+        if ((await this.probeSession(name)).state !== "absent") return { ok: false, code: "kill_unverified", message: "its disappearance could not be verified." };
+        return { ok: true };
+      }
       const out = await this.exec(`tmux if-shell -F -t ${shellQuote(created.id)} ${shellQuote(same)} ${shellQuote(`kill-session -t '${created.id}'`)} ${shellQuote("display-message -p kept")}`);
       if (out.includes("kept")) return { ok: false, code: "guard_target_changed", message: `its id ${created.id} no longer names it (it may already be gone); nothing was killed.` };
       return { ok: true };
@@ -561,7 +632,7 @@ export class TmuxAdapter {
     private exec: ExecFn,
     private fileOps: TmuxFileOps = defaultTmuxFileOps(),
     private argvExec?: ArgvExecFn,
-    private terminalKind: "tmux" | "psmux" = "tmux",
+    readonly terminalKind: "tmux" | "psmux" = "tmux",
   ) {}
 
   /**
@@ -591,11 +662,51 @@ export class TmuxAdapter {
    * A failed/uncertain call retains its private file: it may not have been consumed yet.
    */
   private async runEnvironmentCommand(argv: string[], legacy?: string, startServer = false): Promise<string> {
-    // psmux 3.4 has one server per session; `start-server ; source-file` does
-    // not execute new-session from the file. Retain its literal argv transport.
-    // Native environment values therefore retain the experiment's argv visibility.
-    if (this.terminalKind === "psmux") return this.run(argv, legacy);
-    const file = this.fileOps.tmpName();
+    if (this.terminalKind === "psmux") {
+      const creating = argv[1] === "new-session";
+      const target = argv[argv.indexOf(creating ? "-s" : "-t") + 1]!;
+      const ref = /^psmux:([A-Za-z0-9_-]+):([%$@]\d+)$/.exec(target);
+      const session = creating ? "=" + target : ref ? "=" + Buffer.from(ref[1]!, "base64url").toString("utf8") : target;
+      const direct: string[] = [], entries: string[] = [];
+      const selected: Record<string, string | undefined> = {};
+      const policy = creating ? this.launchEnvironment?.() : undefined;
+      if (policy && !policy.inheritTmuxEnvironment) {
+        Object.assign(selected, policy.env);
+        for (const [key, value] of Object.entries(process.env)) if (["SYSTEMROOT", "WINDIR", "COMSPEC", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP", "PROGRAMFILES", "PROGRAMFILES(X86)", "PROGRAMDATA"].includes(key.toUpperCase())) selected[key] = value;
+        removeParentSessionEnv(selected);
+      }
+      for (let i = 0; i < argv.length; i++) {
+        if (argv[i] !== "-e") { direct.push(argv[i]!); continue; }
+        const assignment = argv[++i]!;
+        const equals = assignment.indexOf("=");
+        if (equals <= 0) throw new Error("Invalid native session environment assignment");
+        selected[assignment.slice(0, equals)] = assignment.slice(equals + 1);
+      }
+      // source-file cannot bootstrap a psmux server. Only the shell starts before its environment is applied.
+      const created = creating ? await this.run(direct) : "";
+      if (creating && !/^%\d+$/.test(created.trim())) throw new Error("Native session creation returned no pane identity");
+      if (policy && !policy.inheritTmuxEnvironment) {
+        const inherited = await this.run(["tmux", "-t", session, "show-environment", "-t", session]);
+        for (const line of inherited.split(/\r?\n/)) {
+          const key = /^([A-Za-z_][A-Za-z0-9_]*(?:\(X86\))?)=/.exec(line)?.[1];
+          if (key && selected[key] === undefined) entries.push("set-environment -r " + ["-t", session, key].map(tmuxConfigQuote).join(" "));
+        }
+      }
+      for (const [key, value] of Object.entries(selected)) if (value !== undefined) entries.push("set-environment " + ["-t", session, key, value].map(tmuxConfigQuote).join(" "));
+      const command = entries.length ? entries.join("\n") : argv.slice(1).map((word, i) => i === 0 ? word : tmuxConfigQuote(ref && word === target ? ref[2]! : word)).join(" ");
+      const file = this.fileOps.environmentName ? await this.fileOps.environmentName() : this.fileOps.tmpName();
+      await this.fileOps.writeFile(file, command + "\n", { mode: 0o600, flag: "wx" });
+      const output = await this.run(["tmux", "-t", session, "source-file", file]);
+      await this.fileOps.unlink(file).catch(() => {});
+      if (creating) {
+        await this.run(["tmux", "-t", session, "respawn-pane", "-k", "-t", session + ":0.0", "--", windowsArguments(nativeShellArgv())]);
+        return created;
+      }
+      // psmux's config parser does not preserve a respawn command's Windows quoting.
+      // After applying the environment, respawn through native argv without the -e values.
+      return entries.length ? this.run(direct) : output;
+    }
+    const file = this.fileOps.environmentName ? await this.fileOps.environmentName() : this.fileOps.tmpName();
     await this.fileOps.writeFile(file, (legacy ?? posixJoinArgv(argv)).slice("tmux ".length) + "\n", { mode: 0o600, flag: "wx" });
     const output = await this.run(["tmux", ...(startServer ? ["start-server", ";"] : []), "source-file", file]);
     await this.fileOps.unlink(file).catch(() => {});
@@ -609,6 +720,11 @@ export class TmuxAdapter {
 
   /** Start an empty native terminal server, without inventing a seat/session. */
   async startServer(): Promise<TmuxResult> {
+    if (this.terminalKind === "psmux") {
+      // psmux starts a distinct server with each new-session; there is no empty server to bootstrap.
+      try { await this.run(["tmux", "-V"]); return { ok: true }; }
+      catch { return { ok: false, code: "tmux_unavailable", message: "Native terminal executable is unavailable." }; }
+    }
     const probeName = `openrig-startup-${randomUUID()}`;
     try {
       if ((await this.probeSession(probeName)).state !== "transport_unavailable") return { ok: true };
@@ -656,7 +772,7 @@ export class TmuxAdapter {
     // A bare leading '=' belongs to the literal session name. Only qualified
     // targets already carry tmux's encoded exact-match syntax.
     const namedTarget = target.includes(":") && target.startsWith("=") ? target : `=${target}`;
-    const exactTarget = target.startsWith("psmux:") ? target : /^[%$@]\d+$/.test(target) ? target
+    const exactTarget = (this.terminalKind === "psmux" && target.startsWith("psmux:")) || /^[%$@]\d+$/.test(target) ? target
       : namedTarget.includes(":") ? namedTarget : `${namedTarget}:`;
     try {
       const format = this.terminalKind === "psmux" ? `#{session_name}|${PANE_FORMAT}` : PANE_FORMAT;
@@ -671,7 +787,7 @@ export class TmuxAdapter {
           if (!pane || !/^%\d+$/.test(pane.id)) return null;
           // psmux has one server per session: %1 is NOT globally unique.
           // Persist its scope with the immutable pane id, never its mutable index.
-          return { ...pane, id: `psmux:${Buffer.from(session).toString("base64url")}:${pane.id}` };
+          return { ...pane, id: psmuxPaneRef(session, pane.id) };
         });
       }
       return parseLines(output, parsePaneLine);
@@ -838,6 +954,7 @@ export class TmuxAdapter {
     for (const [k, v] of Object.entries(seatEnv)) argv.push("-e", `${k}=${v}`);
     // The pane new-session itself made: an after-new-session hook may select another window.
     argv.push("-P", "-F", "#{pane_id}");
+    if (this.terminalKind === "psmux") argv.push(windowsArguments(nativeShellArgv()));
     const legacyParts = ["tmux", "new-session", "-d", "-s", tmuxConfigQuote(name)];
     if (cwd != null) legacyParts.push("-c", tmuxConfigQuote(cwd));
     for (const [k, v] of Object.entries(seatEnv)) legacyParts.push("-e", tmuxConfigQuote(`${k}=${v}`));
@@ -865,7 +982,8 @@ export class TmuxAdapter {
     try {
       if (await this.excludeParentSessionEnv(exactTarget(name, "session"), Object.keys(seatEnv)) && !scopedCommand) {
         if (!/^%\d+$/.test(created)) throw new Error(`new-session reported no pane id ("${created}"), so no pane was restarted`);
-        const respawn = ["tmux", "respawn-pane", "-k", "-t", created];
+        const pane = this.terminalKind === "psmux" ? psmuxPaneRef(name, created) : created;
+        const respawn = ["tmux", "respawn-pane", "-k", "-t", pane];
         if (cwd != null) respawn.push("-c", cwd);
         await this.run(respawn, posixJoinArgv(respawn));
       }
@@ -902,7 +1020,7 @@ export class TmuxAdapter {
    * environment can't be read: the caller can't tell whether the seat inherits
    * an identity, so it reports a warning (the launch still goes ahead). */
   private async excludeParentSessionEnv(sessionTarget: string, keep: readonly string[] = []): Promise<boolean> {
-    const inherited = await this.globalEnvironment();
+    const inherited = await this.globalEnvironment(sessionTarget);
     const keys = parentSessionEnvKeys(inherited).filter((key) => !keep.includes(key));
     for (const key of keys) {
       const argv = ["tmux", "set-environment", "-t", sessionTarget, "-r", key];
@@ -975,19 +1093,16 @@ export class TmuxAdapter {
       await this.fileOps.writeFile(path, text, { mode: 0o600, flag: "wx" });
       created = true;
       const windowsCommand = this.terminalKind === "psmux" && process.platform === "win32"
-        ? (await this.getPaneCommand(target) ?? "").replace(/\.exe$/, "").toLowerCase() : null;
-      if (windowsCommand && bracketed && !["pwsh", "powershell"].includes(windowsCommand)) {
+        ? nativeCommandName(await this.getPaneCommand(target)) : null;
+      if (windowsCommand && bracketed && CONSOLE_INPUT_COMMANDS.has(windowsCommand)) {
         const pid = await this.getPanePid(target);
         if (!pid) throw new Error("Windows pane process unavailable; no payload submitted");
         if (policy) await policy.beforePaste();
         beforeWrite();
         // ConPTY removes bracketed-paste delimiters on its pipe. Console input
         // records preserve the delimiters and raw LF for the receiving editor.
-        const helper = pathJoin(import.meta.dirname, "../../assets/windows-console-input.ps1");
-        const powershell = pathJoin(process.env.SystemRoot ?? "C:\\Windows", "System32/WindowsPowerShell/v1.0/powershell.exe");
         try {
-          await execFileAsync(powershell, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", helper,
-            "-TargetPid", String(pid), "-PayloadFile", path, "-Mode", ["codex", "codex-code-mode-host"].includes(windowsCommand) ? "codex" : "bracketed"], { windowsHide: true, timeout: 15000 });
+          await runWindowsConsoleInput(pid, ["-PayloadFile", path, "-Mode", ["codex", "codex-code-mode-host"].includes(windowsCommand) ? "codex" : "bracketed"]);
         } catch (error) {
           const phase = /failed at (read|compile|attach|open|write);/.exec(String((error as { stderr?: string }).stderr ?? ""))?.[1];
           throw new Error(`Windows console delivery failed${phase ? ` at ${phase}` : ""}; payload consumption unverified`);
@@ -1103,7 +1218,7 @@ export class TmuxAdapter {
   }
 
   private async sendWindowsShellCommand(target: string, command: string, beforeInput?: () => void): Promise<TmuxResult> {
-    const paneShell = (await this.getPaneCommand(target) ?? "").toLowerCase().replace(/\.exe$/, "");
+    const paneShell = nativeCommandName(await this.getPaneCommand(target));
     if (!["pwsh", "powershell"].includes(paneShell)) {
       return { ok: false, code: "unsupported_windows_pane", message: "Experimental Windows launch requires a PowerShell pane; no command was typed." };
     }
@@ -1124,7 +1239,12 @@ export class TmuxAdapter {
       const enter = beforeInput
         ? await this.guardedInput(target, pane => { beforeInput(); return this.sendKeysUnchecked(pane, ["Enter"]); })
         : await this.sendKeys(target, ["Enter"]);
-      if (enter.ok) created = false;
+      if (!enter.ok) {
+        // As on POSIX: clear the typed invocation, so a later launch is not appended to a stale line.
+        await this.sendKeys(target, ["C-c"]);
+        return enter;
+      }
+      created = false;
       return enter;
     } catch (error) {
       return classifyWriteError(error);
@@ -1148,12 +1268,11 @@ export class TmuxAdapter {
   private async sendKeysUnchecked(target: string, keys: string[]): Promise<TmuxResult> {
     try {
       if (this.terminalKind === "psmux" && process.platform === "win32" && keys.length === 1 && keys[0] === "C-u"
-        && ["codex", "codex-code-mode-host"].includes((await this.getPaneCommand(target) ?? "").replace(/\.exe$/, "").toLowerCase())) {
+        && ["codex", "codex-code-mode-host"].includes(nativeCommandName(await this.getPaneCommand(target)))) {
         const pid = await this.getPanePid(target);
         if (!pid) return { ok: false, code: "guard_target_unknown", message: "Native console process unavailable; no key sent." };
         try {
-          await execFileAsync(pathJoin(process.env.SystemRoot ?? "C:\\Windows", "System32/WindowsPowerShell/v1.0/powershell.exe"),
-            ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", pathJoin(import.meta.dirname, "../../assets/windows-console-input.ps1"), "-TargetPid", String(pid), "-Mode", "codex-clear"], { windowsHide: true, timeout: 15000 });
+          await runWindowsConsoleInput(pid, ["-Mode", "codex-clear"]);
         } catch { return { ok: false, code: "native_key_unverified", message: "Native console key delivery unverified." }; }
         return { ok: true };
       }
@@ -1348,6 +1467,15 @@ export class TmuxAdapter {
 
   private async respawnPaneUnchecked(paneTarget: string, command?: string, opts?: { cwd?: string; env?: Record<string, string> }): Promise<TmuxResult> {
     const exact = exactTarget(paneTarget, "pane");
+    if (this.terminalKind === "psmux" && command) {
+      // psmux respawn treats the command as a native process command line,
+      // not a PowerShell script. Keep generated shell syntax out of that parser.
+      // The blank shell (getDefaultShell) starts exactly as createSession starts
+      // it: a nested shell would put a wrapper between the pane and its runtime.
+      const shell = nativeShellArgv();
+      command = windowsArguments(command === shell[0]
+        ? shell : [...shell, "-EncodedCommand", Buffer.from(command, "utf16le").toString("base64")]);
+    }
     const argv = ["tmux", "respawn-pane", "-t", exact];
     if (opts?.cwd != null) argv.push("-c", opts.cwd);
     if (opts?.env) for (const [k, v] of Object.entries(opts.env)) argv.push("-e", `${k}=${v}`);
@@ -1355,7 +1483,7 @@ export class TmuxAdapter {
     const scopedCommand = await this.scopedLaunchCommand(opts?.env ?? {}, command, warnings);
     // Legacy commands remain one argument; the scoped wrapper executes directly before the user shell.
     if (scopedCommand) argv.push(...scopedCommand);
-    else if (command != null && command.length > 0) argv.push(command);
+    else if (command != null && command.length > 0) { if (this.terminalKind === "psmux") argv.push("--"); argv.push(command); }
     const quote = opts?.env && Object.keys(opts.env).length ? tmuxConfigQuote : shellQuote;
     const legacyRespawn = ["tmux", "respawn-pane", "-t", quote(exact)];
     if (opts?.cwd != null) legacyRespawn.push("-c", quote(opts.cwd));
@@ -1469,13 +1597,17 @@ export class TmuxAdapter {
   }
 
   /** Signal one process by pid. signalPaneProcess signals the pane's root, which in a shell-backed pane is
-   *  the shell, not the runtime running under it. Uses the native host's termination command. */
+   *  the shell, not the runtime running under it. Unix `kill`, like signalPaneProcess.
+   *  On psmux, TERM returns `graceful_unsupported` and signals nothing, and KILL is a forced taskkill. */
   async signalPid(pid: number, signal: "TERM" | "KILL"): Promise<TmuxResult> {
     if (!Number.isInteger(pid) || pid <= 1) return { ok: false, code: "invalid_pid", message: `Refusing to signal pid ${pid}.` };
     try {
-      await this.exec(this.terminalKind === "psmux" && process.platform === "win32"
-        ? `taskkill /PID ${pid} /T${signal === "KILL" ? " /F" : ""}`
-        : `kill -${signal} ${pid}`);
+      if (this.terminalKind === "psmux") {
+        if (signal === "TERM") return NATIVE_TERM_UNSUPPORTED;
+        await forceTaskkill(pid, false);
+      } else {
+        await this.exec(`kill -${signal} ${pid}`);
+      }
       return { ok: true };
     } catch (err) {
       return classifyWriteError(err);
@@ -1498,19 +1630,27 @@ export class TmuxAdapter {
   /** Seat-handover cutover: signal the pane's foreground process (the retiree) — `TERM` for the graceful
    *  exit-in-place, `KILL` for the bounded-timeout force fallback. Resolves the pane pid then `kill`s it;
    *  an unresolvable pid is a structured, non-throwing failure.
-   *  Termination is host-native and remains scoped to the resolved pane process. */
+   *  Stays on the shell-string path deliberately: this is a Unix `kill`, not a multiplexer command.
+   *  On psmux, TERM returns `graceful_unsupported` and signals nothing, and KILL is a forced taskkill of the
+   *  pane's process tree. */
   async signalPaneProcess(paneId: string, signal: "TERM" | "KILL"): Promise<TmuxResult> {
     return this.guardedInput(paneId, (pane, beforeWrite) => this.signalPaneProcessUnchecked(pane, signal, beforeWrite));
   }
 
   private async signalPaneProcessUnchecked(paneId: string, signal: "TERM" | "KILL", beforeWrite: () => void): Promise<TmuxResult> {
+    if (this.terminalKind === "psmux" && signal === "TERM") return NATIVE_TERM_UNSUPPORTED;
     const pid = await this.getPanePid(paneId);
     if (pid == null) {
       return { ok: false, code: "pane_pid_unavailable", message: `Could not resolve the pane pid for "${paneId}".` };
     }
     try {
       beforeWrite();
-      return await this.signalPid(pid, signal);
+      if (this.terminalKind === "psmux") {
+        await forceTaskkill(pid, true);
+      } else {
+        await this.exec(`kill -${signal} ${pid}`);
+      }
+      return { ok: true };
     } catch (err) {
       return classifyWriteError(err);
     }
@@ -1532,8 +1672,11 @@ export class TmuxAdapter {
 
   /** KI-14: the server's `default-shell` option — what a createSession pane runs when no command is
    *  given. Used to make a respawn EXPLICIT about the blank shell instead of inheriting whatever
-   *  command the pane was created with. Returns null if unavailable (caller falls back). */
+   *  command the pane was created with. Returns null if unavailable (caller falls back).
+   *  Native psmux panes start Windows PowerShell whatever psmux's default-shell names, so that is the
+   *  answer there, and respawnPane starts it as createSession does. */
   async getDefaultShell(): Promise<string | null> {
+    if (this.terminalKind === "psmux") return nativeShellArgv()[0]!;
     try {
       const output = await this.run(["tmux", "show-options", "-gv", "default-shell"]);
       const trimmed = output.trim();
@@ -1584,8 +1727,8 @@ export class TmuxAdapter {
       const output = await this.run(["tmux", "show-environment", "-t", target, key],
         `tmux show-environment -t ${shellQuote(target)} ${shellQuote(key)}`);
       if (this.terminalKind === "psmux") {
-        // psmux 3.3.8 ignores the optional variable selector and returns the
-        // whole environment. Select the exact key without logging that body.
+        // psmux may answer a show-environment selector with the whole
+        // environment. Select the exact key without logging that body.
         const values = output.split(/\r?\n/).filter(line => line.startsWith(`${key}=`));
         if (values.length > 1) throw new Error("Ambiguous session environment response");
         return values[0]?.slice(key.length + 1);
@@ -1614,14 +1757,15 @@ export class TmuxAdapter {
   async unsetSessionEnv(session: string, key: string): Promise<void> {
     if (!/^[A-Z_][A-Z0-9_]*$/.test(key)) throw new Error("Invalid session environment key.");
     const target = exactTarget(session, "session");
-    const parentIdentity = parentSessionEnvKeys(await this.globalEnvironment()).includes(key);
+    const parentIdentity = parentSessionEnvKeys(await this.globalEnvironment(target)).includes(key);
     const flag = parentIdentity ? "-r" : "-u";
     await this.run(["tmux", "set-environment", "-t", target, flag, key],
       `tmux set-environment -t ${shellQuote(target)} ${flag} ${shellQuote(key)}`);
   }
 
-  private async globalEnvironment(): Promise<Record<string, string>> {
-    const global = await this.run(["tmux", "show-environment", "-g"], "tmux show-environment -g");
+  private async globalEnvironment(target?: string): Promise<Record<string, string>> {
+    const scope = this.terminalKind === "psmux" ? target?.replace(/^=/, "").replace(/:$/, "") : undefined;
+    const global = await this.run(["tmux", "show-environment", "-g"], "tmux show-environment -g", scope);
     const inherited: Record<string, string> = {};
     for (const line of global.split(/\r?\n/)) {
       const eq = line.indexOf("=");
@@ -1888,11 +2032,13 @@ export class TmuxAdapter {
    * server (NOT a live-flip of anyone's session). NEVER targets a session
    * (`-t`): server scope and session scope are distinct and never crossed.
    * Used for `set-clipboard` / `copy-command`.
+   * On psmux, `nativeSession` selects that session's own server (psmux runs one
+   * per session); the option stays server-scoped.
    */
-  async setServerOption(option: string, value: string): Promise<TmuxResult> {
+  async setServerOption(option: string, value: string, nativeSession?: string): Promise<TmuxResult> {
     try {
       await this.run(["tmux", "set-option", "-s", option, value],
-        `tmux set-option -s ${shellQuote(option)} ${shellQuote(value)}`);
+        `tmux set-option -s ${shellQuote(option)} ${shellQuote(value)}`, this.terminalKind === "psmux" ? nativeSession : undefined);
       return { ok: true };
     } catch (err) {
       return classifyWriteError(err);

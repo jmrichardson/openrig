@@ -124,7 +124,7 @@ export class ClaudeResumeAdapter {
         return assertSelected ? this.tmux.sendText(tmuxSessionName, cmd, assertSelected) : this.tmux.sendText(tmuxSessionName, cmd);
       }
       const staged = await this.options.seatLaunchEnvironment.command(tmuxSessionName, cmd, { runtime: "claude-code", nodeId,
-        ...(seatToken ? { claudeTokenStep: seatToken.step } : {}) });
+        ...(seatToken ? { claudeTokenStep: seatToken.step, claudeTokenRef: seatToken.ref } : {}) });
       if (seatToken && !staged.includes(seatToken.step)) {
         tokenWarnings.push(this.options.claudeManagedLaunch?.tokenNotApplied?.(nodeId!, seatToken.ref, "the seat's pane shell can't run the token step") ?? claudeSeatTokenFallbackNotice(seatToken.ref, "the seat's pane shell can't run the token step"));
       }

@@ -276,8 +276,7 @@ describe("Bootstrap CLI", () => {
       await makeCmd().parseAsync(["node", "rig", "bootstrap", "/tmp/rig.yaml", "--yes", "--cwd", "relative/project"]);
     });
     const body = JSON.parse(lastReq.body);
-    expect(body.cwdOverride).toMatch(/^\//);
-    expect((body.cwdOverride as string).endsWith("relative/project")).toBe(true);
+    expect(body.cwdOverride).toBe(nodePath.resolve("relative/project"));
   });
 
   it("bootstrap apply uses a long-running daemon timeout budget", async () => {

@@ -3,6 +3,7 @@ import path from "node:path";
 import { boundedProbeExec, ProbeTimeoutError } from "./bounded-probe-exec.js";
 import type { ExecFn } from "./tmux.js";
 import { execCommand } from "./tmux-exec.js";
+import { execWindowsCodexCommand } from "./windows-codex-command.js";
 
 /** Preserve healthy relative PATH lookup; use the executable's filesystem root
  * only when the daemon's inherited cwd is unavailable. Profile/config probes
@@ -23,6 +24,7 @@ const versionProbe = boundedProbeExec(undefined, undefined, { cwd: runtimeVersio
 
 /** Production preflight only; callers still prefer an explicitly injected exec. */
 export const execPreflightCommand: ExecFn = async (cmd) => {
+  if (process.platform === "win32" && /^codex -p /.test(cmd)) return execWindowsCodexCommand(cmd);
   if (runtimeVersionProbeCwd(cmd) === undefined) return execCommand(cmd);
   return versionProbe(cmd);
 };

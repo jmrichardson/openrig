@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import nodePath from "node:path";
 import { createFullTestDb } from "./helpers/test-app.js";
+import { fixtureFs, nativePath } from "./helpers/fixture-path.js";
 import { RigRepository } from "../src/domain/rig-repository.js";
 import { PodRepository } from "../src/domain/pod-repository.js";
 import { SessionRegistry } from "../src/domain/session-registry.js";
@@ -51,10 +52,7 @@ function mockAdapter(runtime = "claude-code"): RuntimeAdapter {
 }
 
 function mockFs(files: Record<string, string>): AgentResolverFsOps {
-  return {
-    readFile: (p: string) => { if (p in files) return files[p]!; throw new Error(`Not found: ${p}`); },
-    exists: (p: string) => p in files,
-  };
+  return fixtureFs(files);
 }
 
 const RIG_ROOT = "/project/rigs/my-rig";
@@ -244,11 +242,11 @@ describe("PodRigInstantiator", () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       const rig = rigRepo.getRig(result.result.rigId)!;
-      expect(rig.nodes[0]!.cwd).toBe("/workspace/project");
+      expect(rig.nodes[0]!.cwd).toBe(nativePath("/workspace/project"));
       const sessions = sessionRegistry.getSessionsForRig(result.result.rigId);
       expect(sessions[0]!.startupStatus).toBe("ready");
       const planArg = (adapter.project as ReturnType<typeof vi.fn>).mock.calls[0]?.[0];
-      expect(planArg.cwd).toBe("/workspace/project");
+      expect(planArg.cwd).toBe(nativePath("/workspace/project"));
     }
     db.close();
   });
@@ -406,7 +404,7 @@ profiles:
       expect(vi.mocked(seatAdapter.project).mock.calls[0]![1].seatSkillsRoot).toBe(landed);
       const adapter = runtime === "codex" ? fixture.codexAdapter : fixture.adapter;
       const plan = vi.mocked(adapter.project).mock.calls[0]![0];
-      expect(plan.entries.find(e => e.effectiveId === "shared")?.absolutePath).toContain("installed/agents/impl/skills/shared");
+      expect(plan.entries.find(e => e.effectiveId === "shared")?.absolutePath).toContain(nodePath.join("installed/agents/impl/skills/shared"));
     } finally { db?.close(); fs.rmSync(root, { recursive: true, force: true }); }
   });
 

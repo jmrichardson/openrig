@@ -211,6 +211,48 @@ describe("live visual regressions", () => {
     expect(yaml).not.toContain("format pod-aware");
   });
 
+  function renderNativeSpecSource(platform: NodeJS.Platform): string {
+    const base = demoSnapshot();
+    const snap: FleetSnapshot = {
+      ...base,
+      specs: [{
+        name: "adversarial-review",
+        kind: "rig",
+        sourceState: "library_item",
+        sourceType: "builtin",
+        sourcePath: "C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\@openrig\\cli\\daemon\\specs\\rigs\\focused\\adversarial-review\\rig.yaml",
+        relativePath: "rigs/focused/adversarial-review/rig.yaml",
+        format: "pod_aware",
+        pods: [],
+        edges: [],
+        raw: "name: adversarial-review",
+      }],
+    };
+    const view = createViewState({ instanceId: "t", getSnapshot: () => snap });
+    view.dispatch({ type: "drill", resource: "spec", name: "adversarial-review" });
+    view.dispatch({ type: "tab", tab: "configuration" });
+
+    const original = process.platform;
+    Object.defineProperty(process, "platform", { value: platform, configurable: true });
+    try {
+      return renderScreen(view.get(), snap, { cols: 140, rows: 34 }).lines.join("\n");
+    } finally {
+      Object.defineProperty(process, "platform", { value: original, configurable: true });
+    }
+  }
+
+  it("shortens a Windows daemon's native spec source path on its own separator on win32", () => {
+    const output = renderNativeSpecSource("win32");
+    expect(output).toContain("source:      …\\daemon\\specs\\rigs\\focused\\adversarial-review\\rig.yaml · built-in library");
+    expect(output).not.toMatch(/…\/ ·/);
+  });
+
+  it.each(["linux", "darwin"] as const)("shortens a drive-letter spec source path on / only on %s", (platform) => {
+    const output = renderNativeSpecSource(platform);
+    expect(output).toContain("source:      …/ · built-in library");
+    expect(output).not.toContain("…\\");
+  });
+
   it("scrolls long content independently of the Explorer selection", () => {
     const base = demoSnapshot();
     const snap: FleetSnapshot = {

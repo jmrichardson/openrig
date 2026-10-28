@@ -486,10 +486,9 @@ seat, plugin, and release lifecycle actions remain agent-owned.
 - Node.js 22 or 24 (the supported versions in this release). Node 20 is no
   longer supported. Node 26 and other versions are untested. On a Mac with Apple
   silicon, use Node.js 22: see the [compatibility history](docs/releases/v0.5.15.md#known-compatibility-limitation).
-- tmux
-- macOS or Linux. On Windows, use WSL2, the Windows route OpenRig supports; native
-  Windows isn't supported. OpenRig's automated tests don't run on WSL2 yet; one user's
-  working setup is in the [getting-started guide](docs/reference/getting-started.md#wsl2-a-reported-working-setup)
+- macOS or Linux with tmux, or native Windows with psmux 3.4.0 or newer (as `tmux.exe`).
+- This fork includes native Windows changes that are not in the upstream npm release. Follow the
+  [native Windows guide](docs/reference/windows-support-experiment.md) to build and install this checkout.
 
 Optional:
 - herdr or cmux for terminal workspaces showing the agents together

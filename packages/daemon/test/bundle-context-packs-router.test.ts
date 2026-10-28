@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import nodePath from "node:path";
 import { routeContextPacks, type ContextPacksRouterFsOps, type RouteContextPacksInput } from "../src/domain/bundle-context-packs-router.js";
 
 // Item 6 / slice-05 Checkpoint 7.3f step 2: bundle-context-packs-router
@@ -31,7 +32,7 @@ function mockFs(initial: { dirs?: string[]; files?: string[]; contents?: Record<
     copyDir: (src: string, dest: string) => { copyCalls.push({ src, dest }); dirs.add(dest); },
     readFile: (p: string) => initial.contents?.[p] ?? "",
     listFiles: (p: string) => [...files]
-      .filter((file) => file.startsWith(`${p}/`))
+      .filter((file) => file.startsWith(`${p}${nodePath.sep}`))
       .map((file) => file.slice(p.length + 1))
       .sort(),
   };
@@ -39,11 +40,11 @@ function mockFs(initial: { dirs?: string[]; files?: string[]; contents?: Record<
 
 /** Convenience: build a complete pack fixture (parent dir + manifest.yaml file). */
 function packFixture(packParentDir: string): { dirs: string[]; files: string[] } {
-  return { dirs: [packParentDir], files: [`${packParentDir}/manifest.yaml`] };
+  return { dirs: [packParentDir], files: [nodePath.join(packParentDir, "manifest.yaml")] };
 }
 
-const BUNDLE_ROOT = "/bundle/root";
-const TARGET = "/operator/.openrig/context";
+const BUNDLE_ROOT = nodePath.resolve("/bundle/root");
+const TARGET = nodePath.resolve("/operator/.openrig/context");
 
 function makeInput(overrides?: Partial<RouteContextPacksInput>): RouteContextPacksInput {
   return {
@@ -67,24 +68,24 @@ describe("routeContextPacks", () => {
 
   // C2: routes one pack: copyDir from sourceParentDir to target/<dirname>
   it("routes one context_pack: parent dir copied to target/<dirname>", () => {
-    const fs = mockFs(packFixture(`${BUNDLE_ROOT}/context-packs/intent`));
+    const fs = mockFs(packFixture(nodePath.join(BUNDLE_ROOT, "context-packs/intent")));
     const result = routeContextPacks(
       makeInput({ declaredContextPacks: ["context-packs/intent/manifest.yaml"] }),
       fs,
     );
     expect(result.routedCount).toBe(1);
     expect(result.records[0]!.status).toBe("routed");
-    expect(result.records[0]!.installedAt).toBe(`${TARGET}/intent`);
+    expect(result.records[0]!.installedAt).toBe(nodePath.join(TARGET, "intent"));
     expect(fs._copyCalls).toHaveLength(1);
     expect(fs._copyCalls[0]).toEqual({
-      src: `${BUNDLE_ROOT}/context-packs/intent`,
-      dest: `${TARGET}/intent`,
+      src: nodePath.join(BUNDLE_ROOT, "context-packs/intent"),
+      dest: nodePath.join(TARGET, "intent"),
     });
   });
 
   it("refuses a lore-classed pack before copy and teaches the public re-home", () => {
-    const parent = `${BUNDLE_ROOT}/context-packs/lore`;
-    const manifest = `${parent}/manifest.yaml`;
+    const parent = nodePath.join(BUNDLE_ROOT, "context-packs/lore");
+    const manifest = nodePath.join(parent, "manifest.yaml");
     const fs = mockFs({
       ...packFixture(parent),
       contents: {
@@ -110,9 +111,9 @@ describe("routeContextPacks", () => {
   });
 
   it("refuses internal substance anywhere in a pack before install-side copy", () => {
-    const parent = `${BUNDLE_ROOT}/context-packs/private`;
-    const manifest = `${parent}/manifest.yaml`;
-    const notes = `${parent}/notes.md`;
+    const parent = nodePath.join(BUNDLE_ROOT, "context-packs/private");
+    const manifest = nodePath.join(parent, "manifest.yaml");
+    const notes = nodePath.join(parent, "notes.md");
     const fs = mockFs({
       dirs: [parent],
       files: [manifest, notes],
@@ -136,8 +137,8 @@ describe("routeContextPacks", () => {
   // C3: multiple distinct packs route correctly
   it("routes multiple distinct context_packs each to target/<dirname>", () => {
     const fs = mockFs({
-      dirs: [`${BUNDLE_ROOT}/context-packs/intent`, `${BUNDLE_ROOT}/context-packs/persona`],
-      files: [`${BUNDLE_ROOT}/context-packs/intent/manifest.yaml`, `${BUNDLE_ROOT}/context-packs/persona/manifest.yaml`],
+      dirs: [nodePath.join(BUNDLE_ROOT, "context-packs/intent"), nodePath.join(BUNDLE_ROOT, "context-packs/persona")],
+      files: [nodePath.join(BUNDLE_ROOT, "context-packs/intent/manifest.yaml"), nodePath.join(BUNDLE_ROOT, "context-packs/persona/manifest.yaml")],
     });
     const result = routeContextPacks(
       makeInput({
@@ -182,8 +183,8 @@ describe("routeContextPacks", () => {
   // class. Per banked PRE-handoff degenerate-input dogfood discipline.
   it("declared path with non-manifest.yaml basename → status=not_manifest", () => {
     const fs = mockFs({
-      dirs: [`${BUNDLE_ROOT}/context-packs/oddpack`],
-      files: [`${BUNDLE_ROOT}/context-packs/oddpack/pack.yaml`, `${BUNDLE_ROOT}/context-packs/oddpack/manifest.txt`],
+      dirs: [nodePath.join(BUNDLE_ROOT, "context-packs/oddpack")],
+      files: [nodePath.join(BUNDLE_ROOT, "context-packs/oddpack/pack.yaml"), nodePath.join(BUNDLE_ROOT, "context-packs/oddpack/manifest.txt")],
     });
     const result = routeContextPacks(
       makeInput({
@@ -206,8 +207,8 @@ describe("routeContextPacks", () => {
   // second flagged conflict. Banked workflow_specs B1 lesson applied.
   it("two declared packs sharing parent-dir basename → first routed, second conflict", () => {
     const fs = mockFs({
-      dirs: [`${BUNDLE_ROOT}/a/intent`, `${BUNDLE_ROOT}/b/intent`],
-      files: [`${BUNDLE_ROOT}/a/intent/manifest.yaml`, `${BUNDLE_ROOT}/b/intent/manifest.yaml`],
+      dirs: [nodePath.join(BUNDLE_ROOT, "a/intent"), nodePath.join(BUNDLE_ROOT, "b/intent")],
+      files: [nodePath.join(BUNDLE_ROOT, "a/intent/manifest.yaml"), nodePath.join(BUNDLE_ROOT, "b/intent/manifest.yaml")],
     });
     const result = routeContextPacks(
       makeInput({
@@ -222,13 +223,13 @@ describe("routeContextPacks", () => {
     expect(result.routedCount).toBe(1);
     expect(result.rejectedCount).toBe(1);
     expect(result.records[0]!.status).toBe("routed");
-    expect(result.records[0]!.installedAt).toBe(`${TARGET}/intent`);
+    expect(result.records[0]!.installedAt).toBe(nodePath.join(TARGET, "intent"));
     expect(result.records[1]!.status).toBe("conflict");
     expect(result.records[1]!.detail).toContain("intent");
     expect(result.records[1]!.detail).toContain("collides");
     // Only the first copyDir fires.
     expect(fs._copyCalls).toHaveLength(1);
-    expect(fs._copyCalls[0]!.src).toBe(`${BUNDLE_ROOT}/a/intent`);
+    expect(fs._copyCalls[0]!.src).toBe(nodePath.join(BUNDLE_ROOT, "a/intent"));
   });
 
   // C8: pack source path exists but is a file not a directory — edge case
@@ -236,7 +237,7 @@ describe("routeContextPacks", () => {
   it("source parent exists but is a file (not directory) → status=not_directory", () => {
     // Make manifest file exist (so the file-existence check passes) but the
     // parent is registered as a FILE not a directory.
-    const fs = mockFs({ files: [`${BUNDLE_ROOT}/oddpath`, `${BUNDLE_ROOT}/oddpath/manifest.yaml`] });
+    const fs = mockFs({ files: [nodePath.join(BUNDLE_ROOT, "oddpath"), nodePath.join(BUNDLE_ROOT, "oddpath/manifest.yaml")] });
     const result = routeContextPacks(
       makeInput({ declaredContextPacks: ["oddpath/manifest.yaml"] }),
       fs,
@@ -250,14 +251,14 @@ describe("routeContextPacks", () => {
   it("mixed declared list aggregates correctly across all rejection classes", () => {
     const fs = mockFs({
       dirs: [
-        `${BUNDLE_ROOT}/context-packs/ok`,
-        `${BUNDLE_ROOT}/context-packs/dup`,
-        `${BUNDLE_ROOT}/elsewhere/dup`,
+        nodePath.join(BUNDLE_ROOT, "context-packs/ok"),
+        nodePath.join(BUNDLE_ROOT, "context-packs/dup"),
+        nodePath.join(BUNDLE_ROOT, "elsewhere/dup"),
       ],
       files: [
-        `${BUNDLE_ROOT}/context-packs/ok/manifest.yaml`,
-        `${BUNDLE_ROOT}/context-packs/dup/manifest.yaml`,
-        `${BUNDLE_ROOT}/elsewhere/dup/manifest.yaml`,
+        nodePath.join(BUNDLE_ROOT, "context-packs/ok/manifest.yaml"),
+        nodePath.join(BUNDLE_ROOT, "context-packs/dup/manifest.yaml"),
+        nodePath.join(BUNDLE_ROOT, "elsewhere/dup/manifest.yaml"),
       ],
     });
     const result = routeContextPacks(
@@ -296,8 +297,8 @@ describe("routeContextPacks", () => {
       // (not a file). The bare exists check would pass; isDirectory check
       // catches this.
       dirs: [
-        `${BUNDLE_ROOT}/context-packs/dirpack`,
-        `${BUNDLE_ROOT}/context-packs/dirpack/manifest.yaml`,
+        nodePath.join(BUNDLE_ROOT, "context-packs/dirpack"),
+        nodePath.join(BUNDLE_ROOT, "context-packs/dirpack/manifest.yaml"),
       ],
     });
     const result = routeContextPacks(
@@ -323,7 +324,7 @@ describe("routeContextPacks", () => {
     const fs = mockFs({
       // Parent dir is present + isDirectory, BUT manifest.yaml is NOT in
       // files (consumer requires the file itself).
-      dirs: [`${BUNDLE_ROOT}/context-packs/halfpack`],
+      dirs: [nodePath.join(BUNDLE_ROOT, "context-packs/halfpack")],
     });
     const result = routeContextPacks(
       makeInput({ declaredContextPacks: ["context-packs/halfpack/manifest.yaml"] }),
@@ -339,14 +340,14 @@ describe("routeContextPacks", () => {
   });
 
   it("an identical pack already installed under the same name is reused, not rewritten", () => {
-    const src = `${BUNDLE_ROOT}/context-packs/world`;
-    const installed = `${TARGET}/world`;
+    const src = nodePath.join(BUNDLE_ROOT, "context-packs/world");
+    const installed = nodePath.join(TARGET, "world");
     const fs = mockFs({
       dirs: [src, installed],
-      files: [`${src}/manifest.yaml`, `${src}/intro.md`, `${installed}/manifest.yaml`, `${installed}/intro.md`],
+      files: [nodePath.join(src, "manifest.yaml"), nodePath.join(src, "intro.md"), nodePath.join(installed, "manifest.yaml"), nodePath.join(installed, "intro.md")],
       contents: {
-        [`${src}/manifest.yaml`]: "name: world", [`${installed}/manifest.yaml`]: "name: world",
-        [`${src}/intro.md`]: "# World", [`${installed}/intro.md`]: "# World",
+        [nodePath.join(src, "manifest.yaml")]: "name: world", [nodePath.join(installed, "manifest.yaml")]: "name: world",
+        [nodePath.join(src, "intro.md")]: "# World", [nodePath.join(installed, "intro.md")]: "# World",
       },
     });
     const result = routeContextPacks(makeInput({ declaredContextPacks: ["context-packs/world/manifest.yaml"] }), fs);
@@ -355,12 +356,12 @@ describe("routeContextPacks", () => {
   });
 
   it("a different pack already installed under the same name (a --git install) is kept untouched", () => {
-    const src = `${BUNDLE_ROOT}/context-packs/world`;
-    const installed = `${TARGET}/world`;
+    const src = nodePath.join(BUNDLE_ROOT, "context-packs/world");
+    const installed = nodePath.join(TARGET, "world");
     const fs = mockFs({
       dirs: [src, installed],
-      files: [`${src}/manifest.yaml`, `${installed}/manifest.yaml`, `${installed}/.openrig-git-source.json`],
-      contents: { [`${src}/manifest.yaml`]: "name: world\nversion: 0.2.0", [`${installed}/manifest.yaml`]: "name: world\nversion: 0.1.0" },
+      files: [nodePath.join(src, "manifest.yaml"), nodePath.join(installed, "manifest.yaml"), nodePath.join(installed, ".openrig-git-source.json")],
+      contents: { [nodePath.join(src, "manifest.yaml")]: "name: world\nversion: 0.2.0", [nodePath.join(installed, "manifest.yaml")]: "name: world\nversion: 0.1.0" },
     });
     const result = routeContextPacks(makeInput({ declaredContextPacks: ["context-packs/world/manifest.yaml"] }), fs);
     expect(result.records[0]?.status).toBe("kept_existing");

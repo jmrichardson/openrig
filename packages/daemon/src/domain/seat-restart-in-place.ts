@@ -20,6 +20,8 @@ import { rebindAndVerifyPaneIdentity } from "./seat-attention-reconciler.js";
 import type { RunningCodexLaunch } from "../adapters/codex-runtime-adapter.js";
 import { emittedEffortFromArgv } from "./seat-effort.js";
 import { CODEX_NETWORK_DEFAULT_OVERRIDE } from "./codex-network-default.js";
+import { CODEX_WINDOWS_EXECUTION_POLICY_OVERRIDE, CODEX_WINDOWS_SANDBOX_OVERRIDE } from "./codex-windows-sandbox.js";
+import { readWindowsProcessFacts } from "./windows-process-facts.js";
 
 /**
  * OPR.0.7.0.5 — restart ONE Codex seat in place so it reads its Codex home's current account: the same
@@ -55,10 +57,11 @@ export interface InPlaceCodexLauncher {
 export interface ProcessFacts {
   cwd: string | null;
   exe: string | null;
-  env: { CODEX_HOME?: string; HOME?: string };
+  env: { CODEX_HOME?: string; USERPROFILE?: string; HOME?: string };
   /** The process's exact argv, null or absent when it couldn't be read. `ps` joins argv with spaces, so a value
    *  holding one (a cwd's `.git` add-dir) is split there; this one keeps every boundary. */
   argv?: string[] | null;
+  apiKeyEnvNames?: string[];
 }
 
 export interface InPlaceRestartIo {
@@ -407,12 +410,13 @@ export class CodexInPlaceRestart {
     const { process, panePid, rows } = codex;
     const startedAt = process.startedAt ?? null;
     const facts = await this.io.readProcess(process.pid);
-    if (!facts) return { ok: false, code: "settings_unverified", message: "The running Codex's working directory and Codex home could not be read (this observer reads /proc on Linux). Nothing was stopped." };
-    const codexHome = facts.env.CODEX_HOME ?? (facts.env.HOME ? nodePath.join(facts.env.HOME, ".codex") : null);
+    if (!facts) return { ok: false, code: "settings_unverified", message: `The running Codex's working directory and Codex home could not be read${process.platform === "win32" ? "" : " (this observer reads /proc on Linux)"}. Nothing was stopped.` };
+    const home = facts.env.HOME ?? facts.env.USERPROFILE;
+    const codexHome = facts.env.CODEX_HOME ?? (home ? nodePath.join(home, ".codex") : null);
     if (!codexHome) return { ok: false, code: "settings_unverified", message: "The running Codex's home could not be determined (no CODEX_HOME or HOME). Nothing was stopped." };
 
     // The conversation the PROCESS is on: argv for a resumed Codex, its own native logs for a fresh one.
-    const argvToken = codexCommandResumeToken(process.command);
+    const argvToken = codexCommandResumeToken(process.command, process.platform);
     let conversationProof: "argv" | "native_logs";
     if (argvToken === token) conversationProof = "argv";
     else if (argvToken === undefined && startedAt && (await this.io.readThreadId(process.pid, startedAt, codexHome)) === token) conversationProof = "native_logs";
@@ -451,7 +455,7 @@ export class CodexInPlaceRestart {
     const between = rows.find((row) => row.pid === top.ppid);
     const viaLaunchScript = !!between && between.ppid === panePid && isStagedLaunchScript(between);
     if (top.pid === panePid) paneShape = "direct_native";
-    else if (root && (top.ppid === panePid || viaLaunchScript) && isShellForeground(executableBase(root))) paneShape = "shell_backed";
+    else if (root && (top.ppid === panePid || viaLaunchScript) && isShellForeground(executableBase(root), null, root.platform)) paneShape = "shell_backed";
     else return { ok: false, code: "pane_shape_unknown", message: "The pane is neither a shell running Codex (directly or through OpenRig's own launch script) nor Codex itself; nothing was stopped." };
 
     // Where the relaunched Codex would run, and with which home.
@@ -469,13 +473,13 @@ export class CodexInPlaceRestart {
     // The probed and prepared launch choices come from the running Codex, so the relaunch keeps them and no
     // Codex process is started to decide them again.
     // The exact argv when /proc gives it: a --add-dir with a space (a cwd's .git) must not be cut at the space.
-    const runningArgv = facts.argv?.length ? facts.argv : processArgv(process.command);
+    const runningArgv = facts.argv?.length ? facts.argv : processArgv(process.command, process.platform);
     const running = runningLaunch(runningArgv);
     const relaunch = await this.deps.codex.buildResumeCommand(relaunchBinding, { name: sessionName, resumeToken: token, running });
     if (!relaunch.ok) return { ok: false, code: "relaunch_unavailable", message: `The resume command could not be built: ${relaunch.error}. Nothing was stopped.` };
     const relaunchHome = envAssignment(relaunch.command, "CODEX_HOME")
       ?? (paneShape === "shell_backed"
-        ? shellFacts!.env.CODEX_HOME ?? (shellFacts!.env.HOME ? nodePath.join(shellFacts!.env.HOME, ".codex") : null)
+        ? shellFacts!.env.CODEX_HOME ?? ((shellFacts!.env.HOME ?? shellFacts!.env.USERPROFILE) ? nodePath.join((shellFacts!.env.HOME ?? shellFacts!.env.USERPROFILE)!, ".codex") : null)
         : (await this.deps.tmux.getSessionEnv(sessionName, "CODEX_HOME")) ?? null);
 
     const effective = parseEffectiveSettings(runningArgv);
@@ -567,7 +571,9 @@ export class CodexInPlaceRestart {
     const rows = await this.listProcesses();
     const panePid = await this.deps.tmux.getPanePid(pane);
     if (!panePid) return null;
-    const observation = await verifyCodexPaneProcess({ target: pane, tmux: { getPanePid: async () => panePid },
+    // Native Windows occupancy also requires the pane's foreground command to be Codex.
+    const observation = await verifyCodexPaneProcess({ target: pane,
+      tmux: { getPanePid: async () => panePid, getPaneCommand: (target) => this.deps.tmux.getPaneCommand(target) },
       listProcesses: () => rows, ...(token ? { expectedToken: token } : {}) });
     return observation && observation.panePid === panePid ? { process: observation.process, panePid, rows } : null;
   }
@@ -593,8 +599,9 @@ export class CodexInPlaceRestart {
       }
       return last;
     };
-    await this.deps.tmux.signalPid(pid, "TERM");
-    if (await wait()) return "stopped";
+    const term = await this.deps.tmux.signalPid(pid, "TERM");
+    // Native Windows has no graceful signal for a console process: nothing to wait for.
+    if ((term.ok || term.code !== "graceful_unsupported") && await wait()) return "stopped";
     await this.deps.tmux.signalPid(pid, "KILL");
     const last = await wait();
     return last ? "stopped" : last === null ? "unknown" : "running";
@@ -754,7 +761,8 @@ export class CodexInPlaceRestart {
       if (row.tmux_pane && row.tmux_session) {
         const observed = await this.observeCodex(row.tmux_pane, null).catch(() => null);
         const facts = observed ? await this.io.readProcess(observed.process.pid) : null;
-        const peerHome = facts?.env.CODEX_HOME ?? (facts?.env.HOME ? nodePath.join(facts.env.HOME, ".codex") : null);
+        const peerUserHome = facts?.env.HOME ?? facts?.env.USERPROFILE;
+        const peerHome = facts?.env.CODEX_HOME ?? (peerUserHome ? nodePath.join(peerUserHome, ".codex") : null);
         if (peerHome) home = peerHome === codexHome ? "same" : "different";
       }
       reports.push({ logicalId: row.logical_id, sessionName: row.tmux_session, home,
@@ -835,7 +843,8 @@ function readResumeToken(db: BetterSqlite3.Database, sessionId: string): string 
 }
 
 function executableBase(row: NativeProcessRow): string {
-  const name = row.executableName ?? processArgv(row.command)[0] ?? "";
+  const name = row.executableName ?? processArgv(row.command, row.platform)[0] ?? "";
+  if (row.platform === "win32") return nodePath.win32.basename(name).replace(/^-/, "").replace(/\.exe$/i, "").toLowerCase();
   return (name.split("/").pop() ?? name).replace(/^-/, "");
 }
 
@@ -845,7 +854,7 @@ const SH_RUNS_AS = new Set(["sh", "bash", "dash", "zsh"]);
 
 /** `/bin/sh <path>` running a launch script that OpenRig's tmux adapter staged, and nothing else. */
 function isStagedLaunchScript(row: NativeProcessRow): boolean {
-  const argv = processArgv(row.command);
+  const argv = processArgv(row.command, row.platform);
   return SH_RUNS_AS.has(executableBase(row)) && argv.length === 2 && /^(?:\/bin\/)?sh$/.test(argv[0]!) && isStagedSendScriptPath(argv[1]!);
 }
 
@@ -859,7 +868,7 @@ function codexChain(rows: NativeProcessRow[], deepest: NativeProcessRow, panePid
     if (!parent) break;
     const name = executableBase(parent);
     // A Codex launcher above the native binary: codex itself, or node running Codex's launcher script.
-    const launcher = /^codex/i.test(name) || (name === "node" && processArgv(parent.command).some((arg) => /codex/i.test(arg)));
+    const launcher = /^codex/i.test(name) || (name === "node" && processArgv(parent.command, parent.platform).some((arg) => /codex/i.test(arg)));
     if (!launcher) break;
     chain.push(parent);
     current = parent;
@@ -951,7 +960,10 @@ function runningLaunch(argv: string[]): RunningCodexLaunch {
     else if ((arg === "-c" || arg === "--config") && argv[index + 1] !== undefined) configs.push(argv[++index]!);
     else if (arg.startsWith("--config=")) configs.push(arg.slice("--config=".length));
   }
-  return { networkOverride: configs.includes(CODEX_NETWORK_DEFAULT_OVERRIDE), daemonOptOut: argv.includes("--no-daemon"), addDirs };
+  return { networkOverride: configs.includes(CODEX_NETWORK_DEFAULT_OVERRIDE), daemonOptOut: argv.includes("--no-daemon"), addDirs,
+    // OpenRig adds the Windows sandbox and execution policy overrides only on native Windows, so only there are they carried.
+    ...(process.platform === "win32" && configs.includes(CODEX_WINDOWS_SANDBOX_OVERRIDE) ? { windowsSandboxOverride: true } : {}),
+    ...(process.platform === "win32" && configs.includes(CODEX_WINDOWS_EXECUTION_POLICY_OVERRIDE) ? { windowsExecutionPolicyOverride: true } : {}) };
 }
 
 /** The settings a Codex command line runs with. cwd, add-dirs, images and the resume target are not settings. */
@@ -1027,6 +1039,11 @@ export function shellWords(command: string): string[] {
 
 /** A NAME=value assignment in a launch wrapper (`env NAME=…` or `/usr/bin/env 'NAME=…'`), before the command. */
 function envAssignment(command: string, name: string): string | null {
+  // The native launcher writes only canonical PowerShell single-quoted values, in which
+  // powershellQuote doubles each of ' and U+2018-U+201B (PowerShell ends a literal at any of them).
+  const native = process.platform === "win32"
+    ? new RegExp(`^\\$openrigStart\\.EnvironmentVariables\\['${name}'\\]='((?:[^'‘’‚‛]|(['‘’‚‛])\\2)*)'\\r?$`, "m").exec(command) : null;
+  if (native) return native[1]!.replace(/(['‘’‚‛])\1/g, "$1");
   for (const word of shellWords(command)) {
     if (word.startsWith(`${name}=`)) return word.slice(name.length + 1);
     if (/^codex$|\/codex$/.test(word)) break;
@@ -1112,6 +1129,7 @@ export function procCmdlineArgv(raw: Buffer | string): string[] | null {
 export function defaultInPlaceRestartIo(): InPlaceRestartIo {
   return {
     async readProcess(pid) {
+      if (process.platform === "win32") return readWindowsProcessFacts(pid);
       try {
         const environ = fs.readFileSync(`/proc/${pid}/environ`);
         const env: ProcessFacts["env"] = {};

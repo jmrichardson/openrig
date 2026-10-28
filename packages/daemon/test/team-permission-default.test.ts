@@ -10,7 +10,7 @@ import { ClaudeCodeAdapter } from "../src/adapters/claude-code-adapter.js";
 import { CodexRuntimeAdapter } from "../src/adapters/codex-runtime-adapter.js";
 import { ClaudeResumeAdapter } from "../src/adapters/claude-resume.js";
 import { CodexResumeAdapter } from "../src/adapters/codex-resume.js";
-import { operationalLaunchArgs } from "../src/adapters/kernel-authority.js";
+import { TEAM_CLAUDE_ASK, operationalLaunchArgs } from "../src/adapters/kernel-authority.js";
 import { shellQuote } from "../src/adapters/shell-quote.js";
 import { codexCommandResumeToken } from "../src/domain/native-process-lineage.js";
 import type { NodeBinding, RuntimeAdapter } from "../src/domain/runtime-adapter.js";
@@ -47,10 +47,15 @@ function assertDefault(cmd: string, runtime: string) {
     expect(settings.permissions.allow).toContain("Bash(npm test:*)");
     expect(settings.permissions.allow).not.toContain("Bash(tmux:*)");
     expect(settings.permissions.allow).not.toContain("Bash(node:*)");
-    expect(settings.permissions.ask).toBeUndefined();
-    expect(settings.hooks.PreToolUse).toHaveLength(1);
-    expect(settings.hooks.PreToolUse[0].matcher).toBe("Bash");
+    // Native Windows: Claude's PowerShell tool gets the same command families and native PowerShell lifecycle asks, and
+    // the hook asks for both tools. Elsewhere every lifecycle ask stays in the hook.
+    const win32 = process.platform === "win32";
+    expect(settings.permissions.ask).toEqual(win32 ? TEAM_CLAUDE_ASK.map(rule => `PowerShell${rule.slice("Bash".length)}`) : undefined);
+    expect(settings.hooks.PreToolUse).toHaveLength(win32 ? 2 : 1);
+    expect(settings.permissions.allow.includes("PowerShell(rig:*)")).toBe(win32);
+    expect(settings.hooks.PreToolUse.map((entry: { matcher: string }) => entry.matcher)).toEqual(win32 ? ["Bash", "PowerShell"] : ["Bash"]);
     expect(settings.hooks.PreToolUse[0].hooks[0].command).toContain("claude-team-permissions.cjs");
+    if (win32) expect(settings.hooks.PreToolUse[1].hooks[0].args[0]).toContain("claude-team-permissions.cjs");
     expect(settings.permissions.deny).toBeUndefined();
     expect(cmd).toContain("--permission-mode acceptEdits");
   } else {
@@ -141,5 +146,13 @@ describe("team launch permission defaults", () => {
     expect(operationalLaunchArgs("claude-code", { teamPermissionDefault: true, permissionMode: "plan" } as any)).toEqual([]);
     const choice = { teamPermissionDefault: true, launchPosture: "full_bypass", nonInterruptive: true } as any;
     expect(operationalLaunchArgs("claude-code", choice)).toEqual(["--settings", '{"skipDangerousModePermissionPrompt":true}']);
+  });
+  it("native PowerShell lifecycle asks come only with native Windows", () => {
+    for (const platform of ["linux", "darwin", "win32"] as const) {
+      const choice = { teamPermissionDefault: true, launchPosture: "floor", managedCompaction: false } as const;
+      const { permissions } = JSON.parse(operationalLaunchArgs("claude-code", choice, platform)[1]);
+      expect(permissions.ask, platform).toEqual(platform === "win32" ? TEAM_CLAUDE_ASK.map(rule => `PowerShell${rule.slice("Bash".length)}`) : undefined);
+      expect(permissions.allow.includes("PowerShell(rig:*)"), platform).toBe(platform === "win32");
+    }
   });
 });

@@ -520,8 +520,9 @@ describe("createDaemon startup composition", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openrig-gap7-default-"));
     const daemonHome = path.join(root, "daemon-home");
     fs.mkdirSync(daemonHome, { recursive: true });
-    const saved = saveEnv("HOME", "CODEX_HOME", "PATH", "OPENRIG_RECOVERY_PROVIDER_AUTH_ENV_ALLOWLIST", "OPENAI_API_KEY");
+    const saved = saveEnv("HOME", "USERPROFILE", "CODEX_HOME", "PATH", "OPENRIG_RECOVERY_PROVIDER_AUTH_ENV_ALLOWLIST", "OPENAI_API_KEY");
     process.env.HOME = daemonHome;
+    process.env.USERPROFILE = daemonHome; // os.homedir() reads USERPROFILE on Windows
     delete process.env.CODEX_HOME;
     const launchPath = `/proof/openrig/bin${path.delimiter}${process.env.PATH}`;
     process.env.PATH = launchPath;
@@ -565,8 +566,9 @@ describe("createDaemon startup composition", () => {
     const codexHome = path.join(root, "daemon-codex");
     const workspace = path.join(root, "workspace");
     fs.mkdirSync(workspace, { recursive: true });
-    const saved = saveEnv("HOME", "CODEX_HOME");
+    const saved = saveEnv("HOME", "USERPROFILE", "CODEX_HOME");
     process.env.HOME = daemonHome;
+    process.env.USERPROFILE = daemonHome; // os.homedir() reads USERPROFILE on Windows
     process.env.CODEX_HOME = codexHome;
     let result: Awaited<ReturnType<typeof createDaemon>> | undefined;
 
@@ -584,7 +586,7 @@ describe("createDaemon startup composition", () => {
         updatedAt: "", cwd: workspace,
       });
       const configPath = path.join(codexHome, "config.toml");
-      expect(fs.readFileSync(configPath, "utf8")).toContain(`[projects."${workspace}"]`);
+      expect(fs.readFileSync(configPath, "utf8")).toContain(`[projects.${JSON.stringify(workspace)}]`);
       expect(fs.existsSync(path.join(daemonHome, ".codex", "config.toml"))).toBe(false);
     } finally {
       result?.db.close();

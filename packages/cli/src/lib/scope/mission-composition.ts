@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { parseDocument } from "yaml";
 import { ScopeCliError } from "./types.js";
 import { pendingCompletedSliceRefs, markSliceRegistrationsVerified } from "./slice-claims.js";
+import { replaceFileSync } from "./replace-file.js";
 import {
   LifecycleManifestValidationError,
   validateMissionComposition,
@@ -150,7 +151,7 @@ export function applyMissionCompositionEdits(edits: MissionCompositionEdit[]): v
       staged.push({ edit, temporary });
     }
     for (const item of staged) {
-      fs.renameSync(item.temporary, item.edit.manifestPath);
+      replaceFileSync(item.temporary, item.edit.manifestPath);
       applied.push(item.edit);
     }
   } catch (error) {

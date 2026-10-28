@@ -6,6 +6,14 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { remainingDaemonImports } from "./rewrite-daemon-imports.mjs";
+import { packageBuildShell } from "./package-build-shell.mjs";
+
+// Native Windows assembles under Git Bash, as `npm run build:package:windows` does, and starts npm.cmd
+// only through a shell, so npm's own CLI script runs with this Node. A global prefix there has no lib/.
+const BUILD_SHELL = packageBuildShell(process.platform, process.env);
+const npm = (args, options) => process.platform === "win32"
+  ? execFileSync(process.execPath, [join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js"), ...args], options)
+  : execFileSync("npm", args, options);
 
 // 51-04 Q2 — the pack-step proof. The old guard only string-matched `npm pack`, so it stayed GREEN
 // over THREE stacked breaks (root package / no bin / non-standalone-installable). Tiers:
@@ -57,15 +65,15 @@ test("pre-check: @openrig/cli, ships the `rig` bin, and does not depend on the u
 
 test("package proof: the tarball ships the daemon surfaces and no packaged JS imports @openrig/daemon", () => {
   // assemble (stages daemon/, rewrites daemon imports) — heavy but no install/native build
-  execFileSync("bash", [join(REPO_ROOT, "scripts", "build-package.sh")], { cwd: REPO_ROOT, stdio: "inherit" });
+  execFileSync(BUILD_SHELL, [join(REPO_ROOT, "scripts", "build-package.sh")], { cwd: REPO_ROOT, stdio: "inherit" });
   assert.ok(!existsSync(join(CLI_DIR, "node_modules", "@openrig", "daemon")),
     "build-package.sh must not leave a bundled <cli>/node_modules/@openrig/daemon copy");
 
-  const tgz = execFileSync("npm", ["pack", "--silent"], { cwd: CLI_DIR, encoding: "utf8" }).trim().split("\n").filter(Boolean).pop();
+  const tgz = npm(["pack", "--silent"], { cwd: CLI_DIR, encoding: "utf8" }).trim().split("\n").filter(Boolean).pop();
   const tgzPath = join(CLI_DIR, tgz);
   const extract = mkdtempSync(join(tmpdir(), "q2-pack-content-"));
   try {
-    const listing = execFileSync("tar", ["-tzf", tgzPath], { encoding: "utf8" });
+    const listing = execFileSync("tar", ["-tzf", tgz], { cwd: CLI_DIR, encoding: "utf8" });
     assert.match(listing, /^package\/dist\/bin-wrapper\.js$/m, "the tarball must ship the `rig` bin");
     assert.match(listing, /^package\/tui\/dist\/main\.js$/m, "the tarball must ship the `openrig-tui` bin");
     assert.doesNotMatch(listing, /^package\/node_modules\//m, "the tarball must not bundle node_modules");
@@ -79,7 +87,7 @@ test("package proof: the tarball ships the daemon surfaces and no packaged JS im
     assert.equal(packed.dependencies?.["@openrig/daemon"], undefined, "the packed manifest must not depend on @openrig/daemon");
     assert.equal(packed.bundledDependencies, undefined, "the packed manifest must not bundle dependencies");
 
-    execFileSync("tar", ["-xzf", tgzPath, "-C", extract]);
+    execFileSync("tar", ["-xzf", tgz, "-C", extract], { cwd: CLI_DIR });
     const left = [];
     const walk = (dir) => {
       for (const entry of readdirSync(dir)) {
@@ -105,14 +113,14 @@ test("install RED (resident, docker-free): a clean install materializes a COMPLE
   // (daemon present + better-sqlite3 absent) FALSE-GREENS this — it passes on the broken pack. The
   // effect is only visible one layer later, at INSTALL. --ignore-scripts skips the native build, so
   // this is TOOLCHAIN-INDEPENDENT + fast (the effect one layer earlier than the container gate).
-  execFileSync("bash", [join(REPO_ROOT, "scripts", "build-package.sh")], { cwd: REPO_ROOT, stdio: "inherit" });
+  execFileSync(BUILD_SHELL, [join(REPO_ROOT, "scripts", "build-package.sh")], { cwd: REPO_ROOT, stdio: "inherit" });
   const prefix = mkdtempSync(join(tmpdir(), "q2-install-red-"));
   let tgzPath;
   try {
-    const tgz = execFileSync("npm", ["pack", "--silent"], { cwd: CLI_DIR, encoding: "utf8" }).trim().split("\n").filter(Boolean).pop();
+    const tgz = npm(["pack", "--silent"], { cwd: CLI_DIR, encoding: "utf8" }).trim().split("\n").filter(Boolean).pop();
     tgzPath = join(CLI_DIR, tgz);
-    execFileSync("npm", ["install", "-g", "--prefix", prefix, "--ignore-scripts", tgzPath], { cwd: REPO_ROOT, stdio: "inherit" });
-    const bsq3 = join(prefix, "lib", "node_modules", "@openrig", "cli", "node_modules", "better-sqlite3");
+    npm(["install", "-g", "--prefix", prefix, "--ignore-scripts", tgzPath], { cwd: REPO_ROOT, stdio: "inherit" });
+    const bsq3 = join(prefix, ...(process.platform === "win32" ? [] : ["lib"]), "node_modules", "@openrig", "cli", "node_modules", "better-sqlite3");
     assert.ok(existsSync(bsq3), "a clean install must materialize the cli-level better-sqlite3 dir");
     assert.ok(existsSync(join(bsq3, "binding.gyp")),
       "better-sqlite3 must be COMPLETE (binding.gyp present) — an EMPTY placeholder is the bundled-daemon-deps break #5 the pack-content assertion cannot see");
@@ -126,14 +134,14 @@ test("install RED (resident, docker-free): a clean install materializes a COMPLE
 
 const RUN_GATE = process.env.RUN_TESTBED_PACK_GATE === "1";
 test("GATE (target-native): install the tarball + a cli command LOADS the daemon subpath", { skip: RUN_GATE ? false : "opt-in RUN_TESTBED_PACK_GATE=1; needs TARGET build tools (better-sqlite3 builds fresh) — the operator's Docker rerun is this gate" }, () => {
-  execFileSync("bash", [join(REPO_ROOT, "scripts", "build-package.sh")], { cwd: REPO_ROOT, stdio: "inherit" });
+  execFileSync(BUILD_SHELL, [join(REPO_ROOT, "scripts", "build-package.sh")], { cwd: REPO_ROOT, stdio: "inherit" });
   const prefix = mkdtempSync(join(tmpdir(), "q2-gate-prefix-"));
   const home = mkdtempSync(join(tmpdir(), "q2-gate-home-"));
   let tgzPath;
   try {
-    const tgz = execFileSync("npm", ["pack", "--silent"], { cwd: CLI_DIR, encoding: "utf8" }).trim().split("\n").filter(Boolean).pop();
+    const tgz = npm(["pack", "--silent"], { cwd: CLI_DIR, encoding: "utf8" }).trim().split("\n").filter(Boolean).pop();
     tgzPath = join(CLI_DIR, tgz);
-    execFileSync("npm", ["install", "-g", "--prefix", prefix, tgzPath], { cwd: REPO_ROOT, stdio: "inherit" });
+    npm(["install", "-g", "--prefix", prefix, tgzPath], { cwd: REPO_ROOT, stdio: "inherit" });
     const rigBin = join(prefix, "bin", "rig");
     const out = execFileSync(rigBin, [
       "gateway", "human", "add", "gateuser",

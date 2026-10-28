@@ -66,7 +66,7 @@ function withExecOutput(err: unknown): unknown {
  */
 export const execCommand: ExecFn = async (cmd: string): Promise<string> => {
   try {
-    const { stdout } = await execAsync(cmd);
+    const { stdout } = await execAsync(cmd, { windowsHide: true });
     return stdout;
   } catch (err) {
     throw withExecOutput(err);

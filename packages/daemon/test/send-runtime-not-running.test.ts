@@ -12,7 +12,7 @@ import { migrate } from "../src/db/migrate.js";
 import { outboxEntriesSchema } from "../src/db/migrations/027_outbox_entries.js";
 import type { TmuxAdapter } from "../src/adapters/tmux.js";
 import { createFullTestDb } from "./helpers/test-app.js";
-import type { NativeProcessRow } from "../src/domain/native-process-lineage.js";
+import { parseWindowsProcesses, type NativeProcessRow } from "../src/domain/native-process-lineage.js";
 
 function tmuxWithPane(getPaneCommand: () => Promise<string | null>) {
   const sendText = vi.fn(async () => ({ ok: true as const }));
@@ -69,6 +69,23 @@ describe("#142 transport refuses to type into a bare shell where an agent runtim
     expect(result).toMatchObject({ ok: false, sent: false, reason: runtime === "claude-code" ? "target_runtime_not_running" : "target_runtime_unverified" });
     expect(result.error).toContain(runtime === "claude-code" ? "idle shell" : `${shell.replace(/^-/, "")} as the foreground command`);
     expect(result.error).toContain("No text was sent");
+    expect(sendText).not.toHaveBeenCalled();
+    expect(sendKeys).not.toHaveBeenCalled();
+  });
+
+  // Windows has no foreground process group: a psmux pane's own PowerShell with no child is the idle shell.
+  it("claude-code seat showing an idle native Windows PowerShell: refused, nothing typed", async () => {
+    const { node } = seat("claude-code", "dev-impl@my-rig");
+    const { tmux, sendText, sendKeys } = tmuxWithPane(async () => "powershell");
+    sessionRegistry.updateBinding(node.id, { tmuxSession: "dev-impl@my-rig", tmuxPane: "%1" });
+    tmux.getPanePid = async () => 1135;
+    const powershell = "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
+    const listProcesses = async () => parseWindowsProcesses(JSON.stringify([{ ProcessId: 1135, ParentProcessId: 900, Name: "powershell.exe",
+      ExecutablePath: powershell, CommandLine: `${powershell} -NoLogo -NoExit`, StartedAt: "2026-10-17T10:00:00.000Z" }]));
+    const result = await watchdogSend(new SessionTransport({ db, rigRepo, sessionRegistry, tmuxAdapter: tmux, listProcesses }), "dev-impl@my-rig");
+
+    expect(result).toMatchObject({ ok: false, sent: false, reason: "target_runtime_not_running" });
+    expect(result.error).toContain("idle shell");
     expect(sendText).not.toHaveBeenCalled();
     expect(sendKeys).not.toHaveBeenCalled();
   });

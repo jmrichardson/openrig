@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -6,13 +6,15 @@ import { tmpdir } from "node:os";
 import { addGitContext, inspectGitContext, updateGitContext } from "../src/lib/context-git.js";
 
 const homes: string[] = [];
-afterEach(() => { for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true }); });
+afterEach(() => { vi.unstubAllEnvs(); for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true }); });
 function git(path: string, ...args: string[]) {
   return execFileSync("git", ["-C", path, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
 function commit(path: string, message: string) { git(path, "add", "."); git(path, "-c", "user.name=Context Test", "-c", "user.email=context@example.invalid", "commit", "-m", message); }
 function fixture() {
   const home = mkdtempSync(join(tmpdir(), "openrig-git-context-")); homes.push(home);
+  // The fixture compares exact LF bytes; keep a machine-wide core.autocrlf from converting the checkout.
+  vi.stubEnv("GIT_CONFIG_COUNT", "1"); vi.stubEnv("GIT_CONFIG_KEY_0", "core.autocrlf"); vi.stubEnv("GIT_CONFIG_VALUE_0", "false");
   const upstream = join(home, "upstream"); mkdirSync(upstream);
   git(upstream, "init", "-b", "main");
   const pack = ".openrig/context-packs/guide";
@@ -94,7 +96,7 @@ describe("Git context selections preserve author work", () => {
     const f = fixture();
     expect(() => addGitContext(f.checkout, { checkout: true, pack: "../outside", name: "escape" }, f.root)).toThrow(/relative/);
     expect(() => addGitContext(f.checkout, { checkout: true, name: "../escape" }, f.root)).toThrow(/unsafe/);
-    symlinkSync(f.home, join(f.checkout, f.pack, "escape"));
+    symlinkSync(f.home, join(f.checkout, f.pack, "escape"), process.platform === "win32" ? "junction" : "dir");
     expect(() => addGitContext(f.checkout, { checkout: true, name: "escape" }, f.root)).toThrow(/symlink/);
     expect(existsSync(join(f.root, "escape"))).toBe(false);
   });

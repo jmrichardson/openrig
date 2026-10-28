@@ -1,8 +1,8 @@
 // OPR.0.4.1.29 — rig auth secret-safe core (CLI-local, daemon-free). Foundational primitives:
 // fail-closed profile-name whitelist + CODEX_HOME path resolution (default $HOME/.codex, overridable).
 import { describe, it, expect } from "vitest";
-import { userInfo } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { homedir, userInfo } from "node:os";
+import { isAbsolute, join, resolve } from "node:path";
 import { validateProfileName, resolveCodexHome } from "../src/lib/codex-auth.js";
 
 describe("validateProfileName (OPR.0.4.1.29 — fail-closed whitelist)", () => {
@@ -24,19 +24,34 @@ describe("validateProfileName (OPR.0.4.1.29 — fail-closed whitelist)", () => {
 
 describe("resolveCodexHome (OPR.0.4.1.29 — default $HOME/.codex, env-overridable)", () => {
   it("uses CODEX_HOME when set, deriving the secret-adjacent paths under it", () => {
-    const p = resolveCodexHome({ CODEX_HOME: "/fix/codex" });
-    expect(p.codexHome).toBe("/fix/codex");
-    expect(p.profileDir).toBe("/fix/codex/auth-profiles");
-    expect(p.activeAuth).toBe("/fix/codex/auth.json");
-    expect(p.registryPath).toBe("/fix/codex/auth-seat-registry.tsv");
+    const home = resolve("fixture", "codex");
+    const p = resolveCodexHome({ CODEX_HOME: home, HOME: resolve("other-home"), USERPROFILE: resolve("other-profile") });
+    expect(p.codexHome).toBe(home);
+    expect(p.profileDir).toBe(join(home, "auth-profiles"));
+    expect(p.activeAuth).toBe(join(home, "auth.json"));
+    expect(p.registryPath).toBe(join(home, "auth-seat-registry.tsv"));
   });
 
   it("defaults to $HOME/.codex when CODEX_HOME is unset/empty (no personal path baked in)", () => {
-    expect(resolveCodexHome({ HOME: "/home/u" }).codexHome).toBe("/home/u/.codex");
-    expect(resolveCodexHome({ HOME: "/home/u", CODEX_HOME: "" }).codexHome).toBe("/home/u/.codex");
+    const home = resolve("fixture", "home");
+    expect(resolveCodexHome({ HOME: home }, "linux").codexHome).toBe(join(home, ".codex"));
+    expect(resolveCodexHome({ HOME: home, CODEX_HOME: "" }, "darwin").codexHome).toBe(join(home, ".codex"));
   });
 
-  it("falls back to the user's home when HOME is unset or empty (never a cwd-relative .codex)", () => {
+  it("keeps the POSIX fallback when HOME is unset: .codex under the account home, never USERPROFILE", () => {
+    expect(resolveCodexHome({}, "linux").codexHome).toBe(join(userInfo().homedir, ".codex"));
+    expect(resolveCodexHome({ USERPROFILE: resolve("other-profile") }, "darwin").codexHome).toBe(join(userInfo().homedir, ".codex"));
+  });
+
+  it("uses the profile directory on Windows, as Codex does, even when HOME points elsewhere", () => {
+    const profile = resolve("fixture", "windows-profile");
+    expect(resolveCodexHome({ HOME: resolve("fixture", "msys-home"), USERPROFILE: profile }, "win32").codexHome).toBe(join(profile, ".codex"));
+    expect(resolveCodexHome({ USERPROFILE: profile, CODEX_HOME: "" }, "win32").codexHome).toBe(join(profile, ".codex"));
+    expect(resolveCodexHome({}, "win32").codexHome).toBe(join(homedir(), ".codex"));
+  });
+
+  // Codex for Windows reads ~/.codex from the user profile, never HOME or userInfo(); the case above pins that path.
+  it.skipIf(process.platform === "win32")("falls back to the user's home when HOME is unset or empty (never a cwd-relative .codex)", () => {
     expect(resolveCodexHome({}).codexHome).toBe(join(userInfo().homedir, ".codex"));
     expect(resolveCodexHome({ HOME: "" }).codexHome).toBe(join(userInfo().homedir, ".codex"));
     expect(resolveCodexHome({ HOME: "", CODEX_HOME: "" }).codexHome).toBe(join(userInfo().homedir, ".codex"));

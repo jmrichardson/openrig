@@ -468,7 +468,7 @@ describe("execution view — S27 (OPR.0.5.6.27)", () => {
     const doc = await show();
     const q2 = doc.q2_sequencing as Record<string, unknown>[];
     expect((q2.find((s) => s.slice_id === "OPR.9.9.31")?.source as Record<string, unknown>).arrangement_path)
-      .toContain("31-alpha/slice.yaml");
+      .toContain(path.join("31-alpha", "slice.yaml"));
     expect(q2.find((s) => s.slice_id === "OPR.9.9.32")?.depends_on).toEqual(["OPR.9.9.31"]);
     const q3 = doc.q3_care as Record<string, unknown>[];
     expect(q3.find((s) => s.slice_id === "OPR.9.9.31")?.build_wave).toBe("WA");

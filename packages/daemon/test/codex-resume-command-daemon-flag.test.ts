@@ -3,6 +3,7 @@
 // That choice rides the existing launch-fact record. A choice that was never recorded stays unknown: the old
 // command, plus a note saying so. A legacy choice (no --no-daemon) prints the old command unchanged.
 import { mockShellCommand } from "./helpers/shell-command-mock.js";
+import { useChosenCodexWindowsSandbox } from "./helpers/codex-windows-sandbox.js";
 import type Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createFullTestDb } from "./helpers/test-app.js";
@@ -33,6 +34,7 @@ const codexFloor = observeCodexSandbox("-s workspace-write");
 const withChoice = (daemonOptOut: boolean) => ({ ...codexFloor, daemonOptOut }) as AppliedLaunchObservation;
 
 describe("the printed Codex resume command", () => {
+  useChosenCodexWindowsSandbox();
   it("adds --no-daemon right after codex only for a positively recorded opt-out", () => {
     const old = buildCodexResumeCore("sess 456", null);
     expect(old).toBe("codex -s workspace-write resume 'sess 456'");
@@ -75,6 +77,7 @@ describe("the launch-fact record keeps a Codex launch's daemon choice", () => {
 });
 
 describe("rig ps resumeCommand and the node detail's recovery guidance", () => {
+  useChosenCodexWindowsSandbox();
   let db: Database.Database;
   let registry: SessionRegistry;
   let store: AppliedLaunchObservationStore;

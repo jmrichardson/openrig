@@ -2,7 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { devNull, tmpdir } from "node:os";
 import path from "node:path";
 import type { DaemonClient } from "../src/client.js";
 import { openTerminalWindow, type WindowDeps } from "../src/terminal-window.js";
@@ -13,7 +13,7 @@ const sockets: string[] = [];
 const dirs: string[] = [];
 const env = { ...process.env }; delete env["TMUX"];
 function tmux(socket: string, args: string[]): string {
-  return execFileSync("tmux", ["-L", socket, "-f", "/dev/null", ...args], { encoding: "utf8", env, timeout: 5000 });
+  return execFileSync("tmux", ["-L", socket, "-f", devNull, ...args], { encoding: "utf8", env, timeout: 5000 });
 }
 afterEach(() => {
   for (const socket of sockets.splice(0)) {
@@ -22,7 +22,9 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-it.each([
+// This macOS launcher path never runs on Windows (openWindowsTerminalView renders Windows Terminal directly),
+// and psmux does not reproduce tmux's detached default-size/resize-window sizing or its sh-wrapper panes.
+it.skipIf(process.platform === "win32").each([
   ["shared", "80x24"], ["shared", "120x40"], ["separate", "120x40"],
 ])("opens nineteen composed seats on %s servers at configured size %s", async (placement, size) => {
   const id = randomUUID().slice(0, 12);

@@ -9,6 +9,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createFullTestDb } from "./helpers/test-app.js";
+import { nativePath } from "./helpers/fixture-path.js";
 import { RigRepository } from "../src/domain/rig-repository.js";
 import { PodRepository } from "../src/domain/pod-repository.js";
 import { SessionRegistry } from "../src/domain/session-registry.js";
@@ -122,12 +123,12 @@ describe("Agent Starter v1 vertical — real Codex adapter delivery (M2 R2)", ()
 
       const fsOps: AgentResolverFsOps = {
         readFile: (p: string) => {
-          if (p === `${RIG_ROOT}/agents/impl/agent.yaml`) {
+          if (nativePath(p) === nativePath(`${RIG_ROOT}/agents/impl/agent.yaml`)) {
             return `name: impl\nversion: "1.0.0"\nresources:\n  skills: []\nprofiles:\n  default:\n    uses:\n      skills: []`;
           }
           throw new Error(`Not found: ${p}`);
         },
-        exists: (p: string) => p === `${RIG_ROOT}/agents/impl/agent.yaml`,
+        exists: (p: string) => nativePath(p) === nativePath(`${RIG_ROOT}/agents/impl/agent.yaml`),
       };
 
       const inst = new PodRigInstantiator({
@@ -164,7 +165,7 @@ describe("Agent Starter v1 vertical — real Codex adapter delivery (M2 R2)", ()
       expect(result.ok, JSON.stringify(result)).toBe(true);
       expect(tmux.sendShellCommand).toHaveBeenCalledTimes(1);
 
-      const expectedAgentsMdPath = path.join(RIG_ROOT, "AGENTS.md");
+      const expectedAgentsMdPath = nativePath(path.join(RIG_ROOT, "AGENTS.md"));
       const agentsMd = codexFs._store[expectedAgentsMdPath];
       expect(agentsMd, "expected real CodexRuntimeAdapter to have written AGENTS.md via guidance_merge").toBeDefined();
       expect(agentsMd).toContain("BEGIN OpenRig MANAGED BLOCK: codex-fixture-starter.yaml");

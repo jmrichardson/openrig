@@ -1,3 +1,4 @@
+import { powershellQuote } from "@openrig/daemon/windows-launch";
 import type { DaemonClient } from "../daemon-client.js";
 import { windowProvider } from "./open-window.js";
 import type { ExplorerRow, FleetSnapshot, ViewState } from "../types.js";
@@ -74,7 +75,28 @@ export function terminalExplorerRows(state: ViewState, snap: FleetSnapshot): Exp
   return rows;
 }
 
-export function terminalLines(state: ViewState, snap: FleetSnapshot, width: number): ContentLine[] {
+function powershellWord(word: string): string {
+  return /^[A-Za-z0-9_./\\:-]+$/.test(word) ? word : powershellQuote(word);
+}
+
+/**
+ * The daemon's attach command as Windows PowerShell runs it, which has no `env`: the same literal
+ * words, re-quoted, with TMUX cleared. The daemon composes plain words and quoted strings only.
+ */
+function powershellAttach(command: string): string {
+  const words: string[] = [];
+  let word = "", quote: string | undefined, started = false;
+  for (const char of command) {
+    if (quote) { if (char === quote) quote = undefined; else word += char; }
+    else if (char === "'" || char === '"') { quote = char; started = true; }
+    else if (/\s/.test(char)) { if (started) words.push(word); word = ""; started = false; }
+    else { word += char; started = true; }
+  }
+  if (started) words.push(word);
+  return `Remove-Item Env:TMUX -ErrorAction SilentlyContinue; & ${words.map(powershellWord).join(" ")}`;
+}
+
+export function terminalLines(state: ViewState, snap: FleetSnapshot, width: number, platform: NodeJS.Platform = process.platform): ContentLine[] {
   const read = snap.terminals;
   const lines: ContentLine[] = [{ text: "TERMINALS · Saved and Derived views" }];
   if (state.terminalResult && state.terminalResult.view === state.terminalView) lines.push({ text: `Last Open result: ${state.terminalResult!.message}` });

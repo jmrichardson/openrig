@@ -20,6 +20,12 @@ estimated_tokens: 500
 `;
 
 describe("parseManifest", () => {
+  // Windows path rules; elsewhere these are ordinary relative names (see path-safety.test.ts).
+  it.skipIf(process.platform !== "win32").each(["C:notes.md", "C:\\notes.md", "C:/notes.md", "\\notes.md", "\\\\server\\share\\notes.md"])("rejects rooted pack file paths: %s", (path) => {
+    expect(() => parseManifest(validManifest.replace("prd.md", JSON.stringify(path)), "/manifest.yaml"))
+      .toThrow(/relative path inside the pack/);
+  });
+
   it("parses a valid manifest into the typed shape", () => {
     const m = parseManifest(validManifest, "/test/manifest.yaml");
     expect(m.name).toBe("pl-005-priming");

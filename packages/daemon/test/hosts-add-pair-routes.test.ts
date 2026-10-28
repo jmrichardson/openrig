@@ -516,7 +516,8 @@ describe("local pair-client seam — POST /pair + GET /pair/:id (the browser's w
 
     const tokenPath = join(home, "secrets", "host-vps-paired.token");
     expect(readFileSync(tokenPath, "utf8")).toBe("remote-bearer-value\n");
-    expect(statSync(tokenPath).mode & 0o777).toBe(0o600);
+    // POSIX mode bits; Windows uses ACLs
+    if (process.platform !== "win32") expect(statSync(tokenPath).mode & 0o777).toBe(0o600);
     const yaml = readFileSync(join(home, "hosts.yaml"), "utf8");
     expect(yaml).toContain("vps-paired");
     expect(yaml).toContain(`bearer_file: ${tokenPath}`);
@@ -562,7 +563,8 @@ describe("local pair-client seam — POST /pair + GET /pair/:id (the browser's w
     expect(targetRequests).toBe(0);
     expect(readFileSync(join(home, "hosts.yaml"), "utf8")).toBe(yamlBefore);
     expect(readFileSync(tokenPath, "utf8")).toBe("live-credential\n");
-    expect(statSync(tokenPath).mode & 0o777).toBe(0o600);
+    // POSIX mode bits; Windows uses ACLs
+    if (process.platform !== "win32") expect(statSync(tokenPath).mode & 0o777).toBe(0o600);
   });
 
   it("B1: a pre-existing token file at the derived path rejects the pair before target contact — file untouched", async () => {
@@ -581,7 +583,8 @@ describe("local pair-client seam — POST /pair + GET /pair/:id (the browser's w
 
     expect(targetRequests).toBe(0);
     expect(readFileSync(tokenPath, "utf8")).toBe("stale-but-not-ours-to-delete\n");
-    expect(statSync(tokenPath).mode & 0o777).toBe(0o600);
+    // POSIX mode bits; Windows uses ACLs
+    if (process.platform !== "win32") expect(statSync(tokenPath).mode & 0o777).toBe(0o600);
     expect(existsSync(join(home, "hosts.yaml"))).toBe(false);
   });
 
@@ -619,7 +622,8 @@ describe("local pair-client seam — POST /pair + GET /pair/:id (the browser's w
     expect(done.status).toBe(409);
     expect(((await done.json()) as { error: string }).error).toBe("pair_token_path_exists");
     expect(readFileSync(tokenPath, "utf8")).toBe("winner-credential\n");
-    expect(statSync(tokenPath).mode & 0o777).toBe(0o600);
+    // POSIX mode bits; Windows uses ACLs
+    if (process.platform !== "win32") expect(statSync(tokenPath).mode & 0o777).toBe(0o600);
     expect(existsSync(join(home, "hosts.yaml"))).toBe(false);
   });
 

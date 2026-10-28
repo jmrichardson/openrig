@@ -6,6 +6,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { canCreateFileSymlinks } from "../test/symlink-capability.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "..");
@@ -546,7 +547,7 @@ test("OPR.0.5.6.10 GENERATOR STAMPS — skill-projected packs carry pack-level t
   }
 });
 
-test("STATIC PACK SYMLINKS: a link into docs/reference ships as a real file; any other link fails the build", () => {
+test("STATIC PACK SYMLINKS: a link into docs/reference ships as a real file; any other link fails the build", { skip: !canCreateFileSymlinks && "needs file symlink privilege" }, () => {
   const base = mkdtempSync(join(tmpdir(), "r061-static-symlink-"));
   try {
     const source = join(base, "skills");
@@ -573,6 +574,44 @@ test("STATIC PACK SYMLINKS: a link into docs/reference ships as a real file; any
     assert.ok(failure, "a symlink outside docs/reference must fail the build");
     assert.match(String(failure.stderr), /must point to a file under docs\/reference/);
     assert.ok(!existsSync(badOut), "no projection may be written after a refused symlink");
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+// Git for Windows' default core.symlinks=false checks a committed link out as a file holding its target.
+test("STATIC PACK SYMLINKS checked out as text: the linked document ships, and any other target fails the build", { skip: process.platform !== "win32" && "POSIX checks symlinks out as links" }, () => {
+  const base = mkdtempSync(join(tmpdir(), "r061-static-placeholder-"));
+  try {
+    const source = join(base, "skills");
+    skill(source, "core/x", { name: "x", description: "d", files: {} });
+    const staticSrc = join(base, "static");
+    staticWorldPack(staticSrc, "linked");
+    const git = (args, input) => execFileSync("git", args, { cwd: staticSrc, encoding: "utf8", input });
+    // The file holds the link text, and the index records it as a link, as such a checkout leaves it.
+    const placeholder = (target) => {
+      writeFileSync(join(staticSrc, "linked/b.md"), target);
+      const blob = git(["hash-object", "-w", "--stdin"], target).trim();
+      git(["update-index", "--add", "--cacheinfo", `120000,${blob},linked/b.md`]);
+    };
+    git(["init", "--quiet"]);
+    git(["config", "core.symlinks", "false"]);
+    placeholder(join(REPO, "docs/reference/getting-started.md"));
+    const out = join(base, "out");
+    runWithStatic(source, staticSrc, out);
+    assert.equal(readFileSync(join(out, "linked/b.md"), "utf8"), readFileSync(join(REPO, "docs/reference/getting-started.md"), "utf8"));
+
+    placeholder(join(REPO, "README.md"));
+    const badOut = join(base, "bad-out");
+    let failure;
+    try {
+      runWithStatic(source, staticSrc, badOut);
+    } catch (error) {
+      failure = error;
+    }
+    assert.ok(failure, "a link outside docs/reference must fail the build");
+    assert.match(String(failure.stderr), /must point to a file under docs\/reference/);
+    assert.ok(!existsSync(badOut), "no projection may be written after a refused link");
   } finally {
     rmSync(base, { recursive: true, force: true });
   }

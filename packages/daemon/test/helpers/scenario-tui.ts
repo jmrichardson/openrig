@@ -19,6 +19,7 @@
 
 import net from "node:net";
 import { spawn, type ChildProcess } from "node:child_process";
+import { controlEndpoint } from "../../../tui/src/socket-server.js";
 
 /** Thrown when the TUI could not be provisioned (early exit or readiness timeout). */
 export class TuiProvisioningError extends Error {
@@ -71,7 +72,8 @@ export function probeTuiState(socketPath: string, timeoutMs = 1000): Promise<boo
   return new Promise((resolve) => {
     let settled = false;
     const done = (v: boolean) => { if (!settled) { settled = true; resolve(v); } };
-    const conn = net.createConnection(socketPath);
+    // The TUI listens on a named pipe derived from the path on Windows.
+    const conn = net.createConnection(controlEndpoint(socketPath));
     let buf = "";
     const timer = setTimeout(() => { conn.destroy(); done(false); }, timeoutMs);
     conn.on("connect", () => conn.write("state\n"));

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { describe, it, expect, vi } from "vitest";
 import { mockShellCommand } from "./helpers/shell-command-mock.js";
+import { CODEX_LAUNCH_DEFAULTS } from "./helpers/codex-state.js";
 import { CodexRuntimeAdapter, type CodexAdapterFsOps } from "../src/adapters/codex-runtime-adapter.js";
 import { CodexResumeAdapter } from "../src/adapters/codex-resume.js";
 import {
@@ -188,7 +189,7 @@ describe("#275 every Codex launch site adds the override only when the reader ap
       await declined.run();
 
       expect(baseline.commands()).toHaveLength(1);
-      const launchDefaults = " -s workspace-write '-c' 'check_for_update_on_startup=false'";
+      const launchDefaults = ` -s workspace-write ${CODEX_LAUNCH_DEFAULTS}`;
       expect(baseline.commands()[0]).toContain(launchDefaults);
       expect(applied.commands()).toEqual([
         baseline.commands()[0]!.replace(launchDefaults, `${launchDefaults} -c 'sandbox_workspace_write.network_access=true'`),

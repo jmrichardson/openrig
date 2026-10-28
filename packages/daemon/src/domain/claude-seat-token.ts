@@ -1,5 +1,6 @@
 import type Database from "better-sqlite3";
 import fs from "node:fs";
+import { powershellQuote } from "../adapters/windows-launch.js";
 import path from "node:path";
 import { OUTRANKING_TOKEN_ENV } from "./claude-credential-precedence.js";
 
@@ -73,4 +74,20 @@ export function claudeSeatTokenStep(ref: ClaudeSeatTokenRef, quote: (value: stri
 /** Whether a launch warning is the one a launch that couldn't apply the seat's token gives. */
 export function isClaudeSeatTokenFallback(warning: string): boolean {
   return warning.includes("This seat's Claude subscription token (") && warning.includes(") wasn't applied: ");
+}
+
+/** Read the selected credential in the child launch only; never serialize its value into a command. */
+export function claudeSeatTokenWindowsStep(ref: ClaudeSeatTokenRef, environment: string, opts: { removeOnFailure?: boolean } = {}): string {
+  const notice = claudeSeatTokenFallbackNotice(ref, "the token file couldn't be read when Claude started");
+  return `$openrigToken = $null
+try { $openrigToken = [IO.File]::ReadAllText(${powershellQuote(ref.tokenFile)}).TrimEnd([char[]]@(10,13)) } catch {}
+if ($openrigToken) {
+${OUTRANKING_TOKEN_ENV.map(name => `  ${environment}.Remove(${powershellQuote(name)})`).join("\n")}
+  ${environment}['CLAUDE_CODE_OAUTH_TOKEN'] = $openrigToken
+} else {
+${opts.removeOnFailure ? `  ${environment}.Remove('CLAUDE_CODE_OAUTH_TOKEN')` : ""}
+  [Console]::Error.WriteLine(${powershellQuote("OpenRig: " + notice)})
+}
+$openrigToken = $null
+`;
 }

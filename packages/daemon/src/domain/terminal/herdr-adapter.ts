@@ -33,6 +33,8 @@ import type { FollowControls } from "./terminal-follow-policy.js";
 //    `ssh 'dest' tmux attach …`); the pane node's `command` is an ARGV array —
 //    it is carried through `sh -c` with Herdr's fixed Claude/Codex/Pi detection
 //    hint when the live runtime is known, without re-parsing shell quoting.
+//    Native Windows has no `sh`: herdr starts the argv directly there, so the
+//    composer's literal words become the argv (see windowsPaneNode).
 //  - Liveness/availability = the socket `ping` (is the multiplexer's OWN
 //    control socket answering — NOT a daemon server ping; HERDR-FINDINGS #3's
 //    intent, carried to the socket transport). No "layout command" probe: the
@@ -74,6 +76,7 @@ import type {
   HerdrTransportFactory,
 } from "./herdr-transport.js";
 import { buildTileGrid, planTileLabels, type TileGrid, type TileNodes } from "./tile-layout.js";
+import { parseLiteralLaunchWords } from "../../adapters/windows-launch.js";
 
 /** Sentinel host for herdr-surface degrades (a pane herdr itself failed to render). */
 const HERDR_SURFACE_HOST = "herdr";
@@ -182,6 +185,8 @@ export interface HerdrPaneNode {
   type: "pane";
   label: string;
   command: string[];
+  /** Extra pane environment (Windows only; herdr 0.9.3 applies it to the pane process). */
+  env?: Record<string, string>;
 }
 
 /** A herdr layout-tree binary split (capture-verified shape). */
@@ -233,8 +238,16 @@ const HERDR_TILE_NODES: TileNodes<HerdrLayoutNode> = {
 };
 
 /** The equal grid for one page (see `buildTileGrid`): N=2 → 2×1, N=5 → 3×2, N=7 → 3×3 (cols×rows). */
-export function buildGridRoot(panes: ComposedPane[], columns?: number): TileGrid<HerdrLayoutNode> {
-  return buildTileGrid(panes, columns, HERDR_TILE_NODES);
+export function buildGridRoot(panes: ComposedPane[], columns?: number, platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env): TileGrid<HerdrLayoutNode> {
+  if (platform !== "win32") return buildTileGrid(panes, columns, HERDR_TILE_NODES);
+  const nodes: TileNodes<HerdrLayoutNode> = {
+    ...HERDR_TILE_NODES,
+    tile: pane => ({ type: "pane", label: pane.label, command: parseLiteralLaunchWords(pane.paneCommand),
+      env: { ...(env.PSMUX_DATA_DIR ? { PSMUX_DATA_DIR: env.PSMUX_DATA_DIR } : {}), TMUX: "", PSMUX_SESSION: "", PSMUX_TARGET_SESSION: "" } }),
+    blank: () => ({ type: "pane", label: "", command: ["powershell.exe", "-NoLogo", "-NoProfile"] }),
+  };
+  return buildTileGrid(panes, columns, nodes);
 }
 
 /** The per-page socket request plan — pure, so it is asserted directly in tests. */
@@ -265,10 +278,12 @@ export function planHerdrLayout(
   view: ComposedView,
   launchToken: string,
   tabPrefix: string = "openrig",
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
 ): HerdrLayoutPlan {
   const labels = planTileLabels(view, launchToken, tabPrefix);
   const pages: HerdrPagePlan[] = view.pages.map((page, pageIndex) => {
-    const grid = buildGridRoot(page, view.columns);
+    const grid = buildGridRoot(page, view.columns, platform, env);
     return { tabLabel: labels.pages[pageIndex]!, root: grid.root, blanks: grid.blanks };
   });
   return { workspaceLabel: labels.space, pages };
@@ -314,6 +329,8 @@ export interface HerdrAdapterDeps {
   tabPrefix?: string;
   /** The wait between restart-command report rounds. Injectable for tests. */
   sleep?: (ms: number) => Promise<void>;
+  platform?: NodeJS.Platform;
+  env?: NodeJS.ProcessEnv;
 }
 
 /** The applied pane ids of a page, in its leaf order, when Herdr's reply echoes exactly the requested tree. */
@@ -499,7 +516,7 @@ export class HerdrAdapter implements TerminalProvider {
     }
 
     const launchToken = this.newLaunchToken();
-    const plan = planHerdrLayout(view, launchToken, this.tabPrefix);
+    const plan = planHerdrLayout(view, launchToken, this.tabPrefix, this.deps.platform, this.deps.env);
 
     // Nothing to tile (an all-absent/degraded view) → no workspace side effect.
     if (plan.pages.length === 0) {

@@ -22,8 +22,12 @@ function realpath(p: string): string {
  * with no custom TMUX_TMPDIR in play: nothing for its `default` socket, `-L <name>` for another.
  * Every other socket is named by its path, `-S <path>`. Outside tmux (no $TMUX), nothing: the daemon
  * shares the TMUX_TMPDIR of the shell that started it, so the default form stays as it was.
+ * Native Windows (psmux) ignores $TMUX when the daemon creates a session, so seats stay on the default
+ * server whatever pane the daemon was started from: nothing there either.
  */
-export function tmuxServerArgs(env: NodeJS.ProcessEnv, uid: number | undefined = process.getuid?.()): string[] {
+export function tmuxServerArgs(env: NodeJS.ProcessEnv, uid: number | undefined = process.getuid?.(),
+  platform: NodeJS.Platform = process.platform): string[] {
+  if (platform === "win32") return [];
   // tmux puts the socket path first, as is: keep any whitespace in it.
   const socket = env["TMUX"]?.split(",")[0];
   if (!socket?.trim()) return [];

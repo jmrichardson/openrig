@@ -1,7 +1,8 @@
 import { mockShellCommand } from "./helpers/shell-command-mock.js";
 import fs from "node:fs";
+import os from "node:os";
 import nodePath from "node:path";
-import { beforeEach, describe, it, expect, vi } from "vitest";
+import { afterAll, beforeEach, describe, it, expect, vi } from "vitest";
 import { CodexRuntimeAdapter, type CodexAdapterFsOps } from "../src/adapters/codex-runtime-adapter.js";
 import { CodexResumeAdapter } from "../src/adapters/codex-resume.js";
 import { buildCodexResumeCore } from "../src/domain/native-resume-probe.js";
@@ -192,8 +193,17 @@ describe("#69 production wiring", () => {
 
 describe("#69 production detector with a fake executor", () => {
   type HelpCallback = (error: Error | null, stdout: string) => void;
-  const launchPath = "./bin:/usr/bin:/bin";
-  const cwd = "/seat space's";
+  const win32 = process.platform === "win32";
+  // On Windows the probe resolves Codex itself (execFile cannot start npm's codex.cmd), so the
+  // seat's relative PATH entry must really hold a codex.exe; elsewhere the bare name is spawned.
+  const cwd = win32 ? fs.mkdtempSync(nodePath.join(os.tmpdir(), "seat space's-")) : "/seat space's";
+  const launchPath = win32 ? ".\\bin;C:\\Windows\\System32" : "./bin:/usr/bin:/bin";
+  if (win32) {
+    fs.mkdirSync(nodePath.join(cwd, "bin"));
+    fs.writeFileSync(nodePath.join(cwd, "bin", "codex.exe"), "");
+  }
+  const seatCodex = win32 ? fs.realpathSync(nodePath.join(cwd, "bin", "codex.exe")) : "/seat space's/bin/codex";
+  afterAll(() => { if (win32) fs.rmSync(cwd, { recursive: true, force: true }); });
   const kinds = ["fresh", "fork", "resume", "restore", "last"] as const;
 
   function fixture(kind: typeof kinds[number], detectDaemonSupport?: CodexDaemonSupportDetector,
@@ -222,11 +232,11 @@ describe("#69 production detector with a fake executor", () => {
       it(`${kind}/${posture}: cwd/PATH parity, one probe, legacy bytes, model and profile survive`, async () => {
         let help = LEGACY_HELP;
         processMocks.execFile.mockImplementation((file, args, options, callback: HelpCallback) => {
-          expect(file).toBe("codex");
+          expect(file).toBe(win32 ? seatCodex : "codex");
           expect(args).toEqual(["--help"]);
           expect(options.cwd).toBe(cwd);
           expect(options.env.PATH).toBe(launchPath);
-          expect(nodePath.resolve(options.cwd, options.env.PATH.split(":")[0], file)).toBe("/seat space's/bin/codex");
+          expect(nodePath.resolve(options.cwd, options.env.PATH.split(nodePath.delimiter)[0], file)).toBe(seatCodex);
           expect(options.timeout).toBe(10_000);
           expect(options.killSignal).toBe("SIGKILL");
           callback(null, help);
@@ -241,7 +251,7 @@ describe("#69 production detector with a fake executor", () => {
         await actual.run(); // Same adapter, same PATH: an upgrade is evaluated afresh.
         expect(processMocks.execFile).toHaveBeenCalledTimes(2);
         expect(actual.commands()[1]).toBe(baseline.commands()[0]!.replace(" codex ", " codex --no-daemon "));
-        expect(actual.commands()[1]).toContain("env PATH='./bin:/usr/bin:/bin'");
+        expect(actual.commands()[1]).toContain(`env PATH='${launchPath}'`);
         expect(processMocks.execSync).not.toHaveBeenCalled();
       });
     }

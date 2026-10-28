@@ -1,4 +1,4 @@
-import { fileTargetForPath } from "./reading.js";
+import { fileTargetForPath, isWindowsAbsolute } from "./reading.js";
 import { terminalExplorerRows } from "./terminals/terminal-model.js";
 import { CONFIG_CATEGORIES } from "./config/config-model.js";
 import { availableTabs, COMMAND_REGISTRY } from "./commands/registry.js";
@@ -155,7 +155,12 @@ function reduce(state: ViewState, action: Action, snap: FleetSnapshot): ViewStat
       const hash = action.path.indexOf("#");
       const target = fileTargetForPath(hash < 0 ? action.path : action.path.slice(0, hash), snap.fileRoots ?? []);
       if (target && hash >= 0) target.anchor = action.path.slice(hash + 1);
-      const project = detail.item.project && action.path.startsWith(detail.item.project.root + "/") ? detail.item.project : null;
+      const root = detail.item.project?.root;
+      // A Windows daemon's drive/UNC project root uses that path syntax's containment.
+      const inProject = root !== undefined && (isWindowsAbsolute(root)
+        ? fileTargetForPath(action.path, [{ name: "project", path: root }]) !== null
+        : action.path.startsWith(root + "/"));
+      const project = inProject ? detail.item.project : null;
       return { ...resetContent({ ...next, project, file: target ?? { root: "", path: action.path } }), focusedPane: "content" };
     }
     case "file-open":

@@ -59,6 +59,10 @@ npm run lint           # typecheck every package
 runs too. Use `npm install <package>` only when you're adding or changing a dependency, and commit
 the lockfile change with it.
 
+On [native Windows (experimental)](docs/reference/windows-support-experiment.md), package with
+`npm run build:package:windows`. `npm test` is not expected to pass there: run the steps in
+`.github/workflows/windows-native.yml`, and the full package suites on macOS or Linux.
+
 `npm test` builds the daemon and runs repository checks before the package suites. Read the
 specific failure. Each shipped skill has one editable home in this repository (see
 ["A shipped skill" in ARCHITECTURE.md](ARCHITECTURE.md#a-shipped-skill)). Edit its home, run

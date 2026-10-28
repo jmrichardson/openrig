@@ -224,3 +224,191 @@ describe("resolveIdentityVerifiedClaudeRecord — occupant boot_at is a SQLite U
     }
   });
 });
+
+describe("native Windows current-generation observation", () => {
+  const sessionId = "daaeb7b4-841b-45cb-8a33-b062e0ce8296";
+  const otherId = "11111111-1111-4111-8111-111111111111";
+  const birth = "2026-10-17T10:00:00.000Z";
+  function row(pid: number, ppid: number, executablePath: string, args = "", startedAt = birth): ProcessRow {
+    return {
+      platform: "win32", pid, ppid, executablePath,
+      executableName: executablePath.split("\\").at(-1),
+      command: `"${executablePath}"${args ? ` ${args}` : ""}`,
+      startedAt,
+    };
+  }
+  const shell = row(10, 1, String.raw`C:\Program Files\PowerShell\7\pwsh.exe`);
+  const claude = String.raw`C:\Program Files\Claude\claude.exe`;
+  const codex = String.raw`C:\Program Files\Codex\codex.exe`;
+  const node = String.raw`C:\Program Files\nodejs\node.exe`;
+  const claudeScript = String.raw`C:\Users\Test User\AppData\Roaming\npm\node_modules\@anthropic-ai\claude-code\cli.js`;
+  const codexScript = String.raw`C:\Users\Test User\AppData\Roaming\npm\node_modules\@openai\codex\bin\codex.js`;
+
+  it.each([
+    [claude, ""],
+    [node, `"${claudeScript}" `],
+  ])("reads quoted Claude identity from %s", async (executable, prefix) => {
+    expect(await paneClaudeSessionIdArgument("s", {
+      getPanePid: async () => 10,
+      listProcesses: async () => [shell, row(20, 10, executable, `${prefix}--resume "${sessionId}"`)],
+    })).toEqual({ ok: true, id: sessionId });
+  });
+
+  it.each([
+    [codex, ""],
+    [node, `"${codexScript}" `],
+  ])("passes the native PID and ISO birth stamp to the Codex log join for %s", async (executable, prefix) => {
+    const calls: Array<[number, string | undefined]> = [];
+    expect(await resolveLiveCodexThreadId("s", {
+      getPanePid: async () => 10,
+      listProcesses: async () => [shell, row(20, 10, executable, `${prefix}resume "${sessionId}"`)],
+      readThreadIdByPid: (pid, identity) => { calls.push([pid, identity]); return sessionId; },
+    })).toEqual({ ok: true, id: sessionId });
+    expect(calls).toEqual([[20, birth]]);
+  });
+
+  it("recognizes a runtime that is itself the pane process", async () => {
+    expect(await paneClaudeSessionIdArgument("s", {
+      getPanePid: async () => 10,
+      listProcesses: async () => [row(10, 1, claude, `--session-id="${sessionId}"`)],
+    })).toEqual({ ok: true, id: sessionId });
+  });
+
+  it("rejects unrelated executables, argument mentions, and untrusted Node entrypoints", async () => {
+    for (const candidate of [
+      row(20, 10, String.raw`C:\Tools\notclaude.exe`, `--resume "${sessionId}"`),
+      row(20, 10, node, `"C:\\Tools\\report.js" "${claude}" --resume "${sessionId}"`),
+      row(20, 10, node, `-e "claude" --resume "${sessionId}"`),
+      { ...row(20, 10, claude, `--resume "${sessionId}"`), executableName: "unrelated.exe" },
+    ]) {
+      const result = await paneClaudeSessionIdArgument("s", {
+        getPanePid: async () => 10, listProcesses: async () => [shell, candidate],
+      });
+      expect(result.ok).toBe(false);
+    }
+  });
+
+  it("rejects ambiguous and quoted non-identity Claude arguments", async () => {
+    for (const args of [
+      `--resume "${sessionId}" --resume "${otherId}"`,
+      `--resume "${sessionId}" --session-id "${otherId}"`,
+      `--name "--resume ${sessionId}"`,
+    ]) {
+      expect((await paneClaudeSessionIdArgument("s", {
+        getPanePid: async () => 10,
+        listProcesses: async () => [shell, row(20, 10, claude, args)],
+      })).ok).toBe(false);
+    }
+    expect((await paneClaudeSessionIdArgument("s", {
+      getPanePid: async () => 10,
+      listProcesses: async () => [
+        shell, row(20, 10, claude, `--resume "${sessionId}"`),
+        row(21, 10, claude, `--resume "${otherId}"`),
+      ],
+    })).ok).toBe(false);
+  });
+
+  it("does not join children of a recycled or unobserved Windows parent PID", async () => {
+    for (const rows of [
+      [shell, row(20, 10, codex, "", "2026-10-17T09:00:00.000Z")],
+      [shell, { ...row(20, 10, codex), startedAt: undefined }],
+      [row(20, 10, codex)],
+    ]) {
+      const calls: number[] = [];
+      expect((await resolveLiveCodexThreadId("s", {
+        getPanePid: async () => 10, listProcesses: async () => rows,
+        readThreadIdByPid: (pid) => { calls.push(pid); return sessionId; },
+      })).ok).toBe(false);
+      expect(calls).toEqual([]);
+    }
+  });
+
+  it("rejects multiple native Codex conversations rather than picking the first", async () => {
+    expect((await resolveLiveCodexThreadId("s", {
+      getPanePid: async () => 10,
+      listProcesses: async () => [shell, row(20, 10, codex), row(21, 10, codex)],
+      readThreadIdByPid: (pid) => pid === 20 ? sessionId : otherId,
+    })).ok).toBe(false);
+  });
+
+  it.each([false, true])("checks native pane birth before selecting the generation sidecar (recycled: %s)", async (recycled) => {
+    const result = await resolveIdentityVerifiedClaudeRecord({
+      sessionName: "s", generation: "current", occupantBootAt: "2026-10-17T08:00:00.000Z",
+      binding: { tmuxSession: "s", tmuxPane: "%1" },
+      identity: {
+        verdict: "verified", sessionName: "s",
+        observedAt: recycled ? "2026-10-17T09:00:00.000Z" : "2026-10-17T11:00:00.000Z",
+        evidence: { registeredPane: "%1", observedPid: 10 },
+      },
+      sidecar: {
+        session_id: sessionId, session_name: "s", transcript_path: `C:\\records\\${sessionId}.jsonl`,
+        sampled_at: birth, occupant_generation: "current",
+      },
+    }, {
+      getPanePid: async () => 10,
+      listProcesses: async () => [shell, row(20, 10, claude, `--resume "${sessionId}"`)],
+    }, () => true);
+    if (recycled) {
+      expect(result.ok).toBe(false);
+      expect(!result.ok && result.reason).toContain("process birth");
+    } else {
+      expect(result).toMatchObject({ ok: true, id: sessionId, source: "generation-sidecar" });
+    }
+  });
+});
+
+// `ps` rows (no platform, no OS executable) keep the original descendant scan: any argv token whose
+// basename is the runtime, and the first 36-character lowercase id after --session-id, then --resume.
+describe("POSIX current-generation observation", () => {
+  const sessionId = "daaeb7b4-841b-45cb-8a33-b062e0ce8296";
+  const otherId = "11111111-1111-4111-8111-111111111111";
+  const shell: ProcessRow = { pid: 10, ppid: 1, command: "-zsh", startedAt: "Sat Oct 17 10:00:00 2026" };
+  const child = (command: string, startedAt = "Sat Oct 17 10:00:05 2026"): ProcessRow => ({ pid: 20, ppid: 10, command, startedAt });
+  const claudeArgument = (rows: ProcessRow[]) => paneClaudeSessionIdArgument("s", { getPanePid: async () => 10, listProcesses: async () => rows });
+
+  it.each([
+    `claude --resume ${sessionId}`,
+    `node /usr/local/bin/claude --session-id ${sessionId}`,
+    `'/opt/bin/claude' --session-id ${sessionId}`,
+    `claude --verbose --add-dir /tmp/x --session-id=${sessionId}`,
+    `claude --resume ${otherId} --session-id ${sessionId}`,
+  ])("reads the session id from %s", async (command) => {
+    expect(await claudeArgument([shell, child(command)])).toEqual({ ok: true, id: sessionId });
+  });
+
+  it("keeps a child whose ps start time precedes its parent's", async () => {
+    expect(await claudeArgument([shell, child(`claude --resume ${sessionId}`, "Sat Oct 17 09:59:00 2026")])).toEqual({ ok: true, id: sessionId });
+  });
+
+  it.each([
+    `/Users/x/.local/share/claude/versions/2.1.5 --session-id ${sessionId}`,
+    `node /usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js --session-id ${sessionId}`,
+  ])("does not scan %s as a claude process", async (command) => {
+    expect(await claudeArgument([shell, child(command)])).toEqual({ ok: false, reason: "no claude process under the live pane of s" });
+  });
+
+  it("does not scan the pane process itself", async () => {
+    expect(await claudeArgument([{ ...shell, command: `claude --session-id ${sessionId}` }]))
+      .toEqual({ ok: false, reason: "no claude process under the live pane of s" });
+  });
+
+  it.each([`claude --session-id abc`, `claude --session-id ${sessionId.toUpperCase()}`])("reads no session id from %s", async (command) => {
+    expect(await claudeArgument([shell, child(command)]))
+      .toEqual({ ok: false, reason: "live claude process under s carries no --session-id/--resume argument" });
+  });
+
+  it("joins a Codex npm launcher and its native child to the log reader, launcher first", async () => {
+    const calls: number[] = [];
+    const rows: ProcessRow[] = [shell, child("node /usr/local/bin/codex resume x"),
+      { pid: 30, ppid: 20, command: "/usr/local/lib/node_modules/@openai/codex/vendor/x/codex/codex resume x", startedAt: shell.startedAt }];
+    expect(await resolveLiveCodexThreadId("s", {
+      getPanePid: async () => 10, listProcesses: async () => rows,
+      readThreadIdByPid: (pid) => { calls.push(pid); return pid === 30 ? sessionId : undefined; },
+    })).toEqual({ ok: true, id: sessionId });
+    expect(calls).toEqual([20, 30]);
+    expect((await resolveLiveCodexThreadId("s", {
+      getPanePid: async () => 10, listProcesses: async () => [shell, child("node /usr/lib/node_modules/@openai/codex/bin/codex.js resume x")],
+      readThreadIdByPid: () => sessionId,
+    }))).toEqual({ ok: false, reason: "no codex process under the live pane of s" });
+  });
+});

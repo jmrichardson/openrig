@@ -4,6 +4,7 @@ import { claudeSeatTokenFallbackNotice } from "../domain/claude-seat-token.js";
 import nodePath from "node:path";
 import fs from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import type { TmuxAdapter } from "./tmux.js";
 import type { SeatLaunchEnvironment } from "../domain/seat-launch-environment.js";
 import { claudePostureFlag, claudeClassicRendererEnvPrefix } from "./yolo-mode.js";
@@ -21,6 +22,8 @@ import { subtreeNamesClaudeExecutable, claudeCommandSessionToken, listNativeProc
 import { isPerSeatRoleGuidance, mergeManagedBlock, perSeatRoleSkipWarning, DEFAULT_CLAUDE_MANAGED_BLOCK_FILE, type ClaudeManagedBlockFile } from "../domain/managed-blocks.js";
 import { claudeResumeLaunchEnv, claudeResumeLaunchPrefix } from "./claude-resume-launch.js";
 import { shellQuote } from "./shell-quote.js";
+import { isRuntimeShell } from "../domain/shell-classifier.js";
+import { projectionResourceDirectory, projectionResourceId } from "../domain/projection-resource-path.js";
 import { validateClaudeActivityHookDelivery, claudeActivityRelayPath, CLAUDE_ACTIVITY_RELAY_RELATIVE_PATH, parseManagedClaudeNodeCommand } from "../domain/claude-activity-hooks.js";
 import { isFilesystemRoot } from "../domain/cwd-resolution.js";
 import { observeClaudePermission } from "../domain/permission-drift.js";
@@ -46,8 +49,6 @@ export interface ClaudeAdapterFsOps {
   /** User home directory (for session file lookup). */
   homedir?: string;
 }
-
-const SHELL_COMMANDS = new Set(["bash", "fish", "nu", "sh", "tmux", "zsh"]);
 
 /**
  * Claude Code runtime adapter. Projects resources to .claude/ targets
@@ -124,7 +125,7 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
     const skillsDir = binding.seatSkillsRoot ?? nodePath.join(binding.cwd, ".claude", "skills");
     if (this.fs.exists(skillsDir) && this.fs.listFiles) {
       for (const file of this.fs.listFiles(skillsDir)) {
-        results.push({ effectiveId: file, category: "skill", installedPath: nodePath.join(skillsDir, file) });
+        results.push({ effectiveId: file.split(nodePath.sep).map(part => projectionResourceId(part)).join(nodePath.sep), category: "skill", installedPath: nodePath.join(skillsDir, file) });
       }
     }
     return results;
@@ -298,7 +299,7 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
         return assertSelected ? this.tmux.sendText(session, cmd, assertSelected) : this.tmux.sendText(session, cmd);
       }
       const staged = await this.seatLaunchEnvironment.command(session, cmd, { nodeId: binding.nodeId, generation: binding.launchGeneration,
-        runtime: this.runtime, ...(seatToken ? { claudeTokenStep: seatToken.step } : {}) });
+        runtime: this.runtime, ...(seatToken ? { claudeTokenStep: seatToken.step, claudeTokenRef: seatToken.ref } : {}) });
       if (seatToken && !staged.includes(seatToken.step)) {
         tokenWarnings.push(this.claudeManagedLaunch?.tokenNotApplied?.(binding.nodeId, seatToken.ref, "the seat's pane shell can't run the token step") ?? claudeSeatTokenFallbackNotice(seatToken.ref, "the seat's pane shell can't run the token step"));
       }
@@ -577,7 +578,7 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
    *  Claude is gone. With a bound pane, the process tree must show the pane's shell holding the terminal with
    *  nothing under it; Claude, or a launch script about to start it, is a slow resume. */
   private async paneReturnedToShell(binding: NodeBinding, paneCommand: string | null): Promise<boolean> {
-    if (!paneCommand || !SHELL_COMMANDS.has(paneCommand)) return false;
+    if (!paneCommand || !isRuntimeShell(paneCommand)) return false;
     if (!binding.tmuxPane) return true;
     const observed = await observeClaudeDelivery({ target: binding.tmuxPane, tmux: this.tmux, listProcesses: this.listProcesses },
       { unknownKeepsIdle: false });
@@ -891,8 +892,8 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
       case "skill": return nodePath.join(seatSkillsRoot ?? nodePath.join(cwd, ".claude", "skills"), entry.effectiveId);
       case "guidance": return null; // handled via merge
       case "subagent": return nodePath.join(cwd, ".claude", "agents");
-      case "plugin": return nodePath.join(cwd, ".claude", "plugins", entry.effectiveId);
-      case "runtime_resource": return nodePath.join(cwd, ".claude", "extensions", entry.effectiveId);
+      case "plugin": return nodePath.join(cwd, ".claude", "plugins", projectionResourceDirectory(entry.effectiveId));
+      case "runtime_resource": return nodePath.join(cwd, ".claude", "extensions", projectionResourceDirectory(entry.effectiveId));
       default: return null;
     }
   }
@@ -1005,11 +1006,12 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
         failures.push((err as Error).message);
       }
     }
+    const trustKeys = cwd ? this.workspaceTrustKeys(cwd) : [];
     // Each file is merged on its own: unmergeable state in one is preserved and reported,
     // and never stops the other from being provisioned.
     for (const statePath of statePaths) {
       try {
-        this.provisionClaudeState(statePath, cwd);
+        this.provisionClaudeState(statePath, trustKeys);
       } catch (err) {
         failures.push(`${statePath}: ${(err as Error).message}`);
       }
@@ -1017,17 +1019,17 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
     if (failures.length > 0) throw new Error(failures.join("; "));
   }
 
-  private provisionClaudeState(statePath: string, cwd: string | null | undefined): void {
+  private provisionClaudeState(statePath: string, trustKeys: readonly string[]): void {
     // Preserve every existing field. Unreadable/malformed/non-object state is
     // left untouched and reported through the caller's best-effort bootstrap boundary.
     const state = this.fs.exists(statePath) ? this.readJsonObjectStrict(statePath) : {};
     // Running Claude processes read and write this file, so it is rewritten only when a flag is
     // missing: an already-provisioned file (every relaunch, resume and post-launch delivery) is left alone.
     let changed = false;
-    if (cwd) {
+    if (trustKeys.length > 0) {
       const projects = this.readJsonObjectField(state, "projects");
       if (Object.hasOwn(state, "projects") && projects !== state["projects"]) throw new Error("Claude bootstrap projects must be a JSON object; existing state preserved.");
-      for (const trustKey of this.workspaceTrustKeys(cwd)) {
+      for (const trustKey of trustKeys) {
         const projectState = this.readJsonObjectField(projects, trustKey);
         if (Object.hasOwn(projects, trustKey) && projectState !== projects[trustKey]) throw new Error("Claude bootstrap project state must be a JSON object; existing state preserved.");
         if (projectState["hasTrustDialogAccepted"] === true) continue;
@@ -1058,6 +1060,20 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
       keys.add(fs.realpathSync.native(cwd));
     } catch {
       // Best-effort only — non-existent test paths can still use the resolved input.
+    }
+    if (process.platform === "win32") {
+      // Native Claude records trust against the Git project root with forward
+      // slashes, even when it was opened from a nested working directory.
+      try {
+        const root = execFileSync("git", ["-C", cwd, "rev-parse", "--show-toplevel"],
+          { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], windowsHide: true, timeout: 2000 }).trim();
+        const resolved = nodePath.resolve(cwd);
+        const relative = nodePath.relative(root, resolved);
+        if (nodePath.isAbsolute(root) && relative !== ".." && !relative.startsWith(`..${nodePath.sep}`) && !nodePath.isAbsolute(relative)) {
+          keys.add(nodePath.resolve(root));
+        }
+      } catch { /* Non-Git workspaces retain their own canonical trust keys. */ }
+      for (const key of [...keys]) keys.add(key.replace(/\\/g, "/"));
     }
     return Array.from(keys);
   }
@@ -1274,7 +1290,12 @@ function hookCommand(hook: unknown): string | undefined {
 // OpenRig-owned collectors use canonical POSIX-quoted paths. Recognise older unquoted
 // three/four-token commands too, but preserve commands composed with shell operators or
 // extra arguments. Old unquoted paths containing spaces cannot be identified unambiguously.
-const OWNED_COLLECTOR_SUFFIX = nodePath.sep + nodePath.join(".openrig", "context-collector.cjs");
+const OWNED_COLLECTOR_SUFFIX = "/.openrig/context-collector.cjs";
+
+/** A Windows path matches with either separator; on POSIX a backslash is a filename character, never one. */
+function ownedPathForm(value: string): string {
+  return process.platform === "win32" ? value.replace(/\\/g, "/") : value;
+}
 
 function isOwnedCollectorCommand(cmd: string): boolean {
   if (/[\r\n]/.test(cmd)) return false;
@@ -1292,7 +1313,7 @@ function isOwnedRelayCommand(cmd: string | undefined): boolean {
   if (!cmd) return false;
   const parsed = parseManagedClaudeNodeCommand(cmd);
   if (!parsed || parsed.args.length !== 1) return false;
-  const relay = parsed.args[0]!;
+  const relay = ownedPathForm(parsed.args[0]!);
   return relay.endsWith("/plugins/openrig-core/hooks/scripts/activity-relay.cjs")
     || relay.endsWith(LEGACY_OWNED_RELAY_SUFFIX)
     || relay.endsWith(`/${CLAUDE_ACTIVITY_RELAY_RELATIVE_PATH}`);

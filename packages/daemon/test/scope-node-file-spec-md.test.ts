@@ -72,10 +72,10 @@ describe("daemon node-file resolution", () => {
   });
 
   it("resolves through an injected reader for callers that do not touch fs directly", () => {
-    const tree = new Map([["/m/01/SPEC.md", "spec body"], ["/m/02/README.md", "legacy body"]]);
+    const tree = new Map([[path.join("/m/01", "SPEC.md"), "spec body"], [path.join("/m/02", "README.md"), "legacy body"]]);
     const read = (p: string) => tree.get(p) ?? null;
-    expect(resolveNodeFileVia("/m/01", read)).toEqual({ path: "/m/01/SPEC.md", content: "spec body" });
-    expect(resolveNodeFileVia("/m/02", read)).toEqual({ path: "/m/02/README.md", content: "legacy body" });
+    expect(resolveNodeFileVia("/m/01", read)).toEqual({ path: path.join("/m/01", "SPEC.md"), content: "spec body" });
+    expect(resolveNodeFileVia("/m/02", read)).toEqual({ path: path.join("/m/02", "README.md"), content: "legacy body" });
     expect(resolveNodeFileVia("/m/03", read)).toBeNull();
   });
 });

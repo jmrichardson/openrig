@@ -411,7 +411,16 @@ export function startTranscriptRotation(
       fs.mkdirSync(path.dirname(outputPath), { recursive: true });
       const tmpPath = `${outputPath}.tmp.${process.pid}`;
       fs.writeFileSync(tmpPath, payload);
-      fs.renameSync(tmpPath, outputPath);
+      try {
+        fs.renameSync(tmpPath, outputPath);
+      } catch (error) {
+        // Windows cannot rename over a file another process holds open (an agent's tail, a viewer),
+        // and such a reader may hold it for as long as it follows. Rewrite the file in place instead.
+        const code = (error as NodeJS.ErrnoException).code;
+        if (process.platform !== "win32" || !(code === "EPERM" || code === "EACCES" || code === "EBUSY")) throw error;
+        fs.writeFileSync(outputPath, payload);
+        fs.rmSync(tmpPath, { force: true });
+      }
       // Persistence succeeded — only NOW is the tick healthy, so record liveness.
       // A throw above jumps to the catch and never reaches here, so a failed
       // required write leaves liveness un-advanced and getIngestHealth reads the

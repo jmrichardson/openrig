@@ -14,10 +14,10 @@ import { NodeLauncher } from "../src/domain/node-launcher.js";
 import { StartupOrchestrator } from "../src/domain/startup-orchestrator.js";
 import { PodRigInstantiator } from "../src/domain/rigspec-instantiator.js";
 import { RigSpecCodec } from "../src/domain/rigspec-codec.js";
-import type { AgentResolverFsOps } from "../src/domain/agent-resolver.js";
 import type { RuntimeAdapter } from "../src/domain/runtime-adapter.js";
 import type { TmuxAdapter } from "../src/adapters/tmux.js";
 import type { RigSpec } from "../src/domain/types.js";
+import { fixtureFs } from "./helpers/fixture-path.js";
 
 const RIG_ROOT = "/project/rigs/my-rig";
 const RELAY_FIX = "/fixtures/activity-relay.cjs";
@@ -55,12 +55,6 @@ function mockAdapter(runtime = "claude-code"): RuntimeAdapter {
     launchHarness: vi.fn(async () => ({ ok: true })),
   };
 }
-function mockFs(files: Record<string, string>): AgentResolverFsOps {
-  return {
-    readFile: (p: string) => { if (p in files) return files[p]!; throw new Error(`Not found: ${p}`); },
-    exists: (p: string) => p in files,
-  };
-}
 function makeRigSpec(): RigSpec {
   return {
     version: "0.2", name: "test-rig",
@@ -81,7 +75,7 @@ function setup(activityAssets: { relayPath?: string; manifestPath?: string }, ex
   const files: Record<string, string> = { [`${RIG_ROOT}/agents/impl/agent.yaml`]: AGENT_YAML, ...extraFiles };
   const inst = new PodRigInstantiator({
     db, rigRepo, podRepo, sessionRegistry, eventBus, nodeLauncher, startupOrchestrator: startupOrch,
-    fsOps: mockFs(files), claudeActivityAssets: activityAssets,
+    fsOps: fixtureFs(files), claudeActivityAssets: activityAssets,
     adapters: { "claude-code": mockAdapter(), "codex": mockAdapter("codex"), "terminal": mockAdapter("terminal") },
     tmuxAdapter: tmux,
   });

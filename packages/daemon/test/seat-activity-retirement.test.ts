@@ -25,7 +25,7 @@ async function fixture() {
     CREATE TABLE queue_items(qitem_id TEXT PRIMARY KEY, source_session TEXT, destination_session TEXT,
       state TEXT, blocked_on TEXT, closure_required_at TEXT, ts_created TEXT, tags TEXT);`);
   const adapter = new TmuxAdapter(async () => { throw new Error("unexpected shell path"); }, undefined,
-    async argv => tmux(...argv.slice(1)));
+    async argv => tmux(...argv.slice(1)), process.platform === "win32" ? "psmux" : "tmux");
   // A reader clock ten seconds ahead makes genuine native window timestamps idle
   // without a wall-clock sleep. Only the service clock is injected, not tmux data.
   const svc = new SeatActivityService({ tmux: adapter, defaultWindowSeconds: 3,

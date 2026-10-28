@@ -242,7 +242,7 @@ describe("GET /api/skills/:id/files/list (slice 28)", () => {
     const escapeTarget = join(env.root, "outside-target");
     mkdirSync(escapeTarget, { recursive: true });
     writeFileSync(join(escapeTarget, "secret.txt"), "out-of-bounds");
-    symlinkSync(escapeTarget, join(env.sharedSkillsDir, "core/openrig-user/escape-link"));
+    symlinkSync(escapeTarget, join(env.sharedSkillsDir, "core/openrig-user/escape-link"), process.platform === "win32" ? "junction" : "dir");
     const id = "openrig-managed:core/openrig-user";
     const res = await createApp(env.service).request(`/api/skills/${encodeURIComponent(id)}/files/list?path=escape-link`);
     expect(res.status).toBe(400);

@@ -441,8 +441,7 @@ edges: []
     const program = new Command();
     program.addCommand(importCommand(deps));
     await captureLogs(() => program.parseAsync(["node", "rig", "import", "rig.yaml", "--materialize-only", "--cwd", "relative/project", "--rig-root", "/tmp"]));
-    expect(capturedImportHeaders["x-cwd-override"]).toMatch(/^\//);
-    expect(String(capturedImportHeaders["x-cwd-override"])).toContain("relative/project");
+    expect(capturedImportHeaders["x-cwd-override"]).toBe(nodePath.resolve("relative/project"));
   });
 
   it("import --workspace-only targets the workspace-only route", async () => {
@@ -594,7 +593,7 @@ edges: []
     const output = logs.join("\n");
     expect(output).toContain("imported-rig");
     // Verify X-Rig-Root header was sent
-    expect(capturedImportHeaders["x-rig-root"]).toMatch(/\/my\/project/);
+    expect(capturedImportHeaders["x-rig-root"]).toBe(nodePath.resolve("/my/project"));
   });
 
   it("import --instantiate with --cwd forwards absolute cwd override", async () => {
@@ -603,8 +602,7 @@ edges: []
     const program = new Command();
     program.addCommand(importCommand(deps));
     await captureLogs(() => program.parseAsync(["node", "rig", "import", "rig.yaml", "--instantiate", "--cwd", "relative/project", "--rig-root", "/my/project"]));
-    expect(capturedImportHeaders["x-cwd-override"]).toMatch(/^\//);
-    expect(String(capturedImportHeaders["x-cwd-override"])).toContain("relative/project");
+    expect(capturedImportHeaders["x-cwd-override"]).toBe(nodePath.resolve("relative/project"));
   });
 
   // NS-T14: import --instantiate handoff includes attach command

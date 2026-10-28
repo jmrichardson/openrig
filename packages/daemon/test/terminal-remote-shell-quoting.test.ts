@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { expect, it } from "vitest";
 import { composeView } from "../src/domain/terminal/view-composer.js";
 
-it("keeps remote session names intact through both POSIX shell boundaries", () => {
+// Runs the composed command through /bin/sh as both POSIX shell boundaries; Windows has no /bin/sh.
+it.skipIf(process.platform === "win32")("keeps remote session names intact through both POSIX shell boundaries", () => {
   const root = mkdtempSync(join(tmpdir(), "openrig-remote-shell-"));
   const bin = join(root, "bin");
   mkdirSync(bin);

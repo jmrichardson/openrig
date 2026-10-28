@@ -1,5 +1,5 @@
 import { readFileSync, statSync, realpathSync } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { createHash } from "node:crypto";
 import { resolveAllowedFile } from "./files/path-safety.js";
@@ -55,7 +55,7 @@ export function healthSelectedContext(workspace: string, missionRoot?: string): 
       try {
         const { ref, headerPath } = parseAddress(address);
         // Only explicitly selected local project files; unsupported transports stay visible.
-        if (/^(?:[a-z]+:|\$)/i.test(ref)) throw Error("Unsupported local context address");
+        if (!isAbsolute(ref) && /^(?:[a-z]+:|\$)/i.test(ref)) throw Error("Unsupported local context address");
         const path = resolve(root, ref);
         const file = readAuthorityFile(workspace, path);
         if (!file.content) throw Error("Selected file unavailable, aliased, outside project, or larger than 64 KiB");
@@ -102,10 +102,10 @@ export function healthAuthority(workspace: string, checkpoints: HealthCheckpoint
     slice: [...checkpoint?.authorityPaths.slice ?? [], ...record.ceremony?.context.filter((r) => r.role.startsWith("slice authority")).map((r) => r.path).filter((p) => /(?:SPEC\.md|slice\.yaml)$/.test(p)) ?? []],
   };
   const belongs = (level: AuthorityLevel, path: string): boolean => {
-    const parts = relative(resolve(workspace), resolve(workspace, path)).split("/");
+    const parts = relative(resolve(workspace), resolve(workspace, path)).split(sep);
     if (level === "project") return parts.length === 1 && ["SPEC.md", "project.yaml"].includes(parts[0]!);
     if (!missionDir) return false;
-    const workParts = relative(missionDir, resolve(workspace, path)).split("/");
+    const workParts = relative(missionDir, resolve(workspace, path)).split(sep);
     if (level === "mission") return workParts.length === 1 && ["SPEC.md", "mission.yaml"].includes(workParts[0]!);
     if (scope.type !== "slice" || workParts.length !== 3 || workParts[0] !== "slices" || !["SPEC.md", "slice.yaml"].includes(workParts[2]!)) return false;
     // Directory names are not slice IDs. The canonical sibling SPEC owns identity.

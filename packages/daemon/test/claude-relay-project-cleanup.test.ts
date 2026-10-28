@@ -7,6 +7,7 @@ import { afterEach, expect, it } from "vitest";
 import { ClaudeCodeAdapter } from "../src/adapters/claude-code-adapter.js";
 import type { NodeBinding } from "../src/domain/runtime-adapter.js";
 import type { ProjectionPlan } from "../src/domain/projection-planner.js";
+import { posixShell } from "./helpers/posix-shell.js";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
@@ -66,7 +67,7 @@ it.each(["-fd", "-fdx"])("keeps the configured real relay working after project 
   const address = server.address() as { port: number };
   const runHook = () => new Promise<{ code: number | null; stderr: string }>((resolve, reject) => {
     // Only this fixture receiver is reachable from the relay; no inherited daemon identity.
-    const child = spawn("/bin/sh", ["-c", command], {
+    const child = spawn(posixShell, ["-c", command], {
       cwd, env: {
         PATH: process.env.PATH, HOME: root, OPENRIG_HOME: stateDir,
         OPENRIG_URL: `http://127.0.0.1:${address.port}`, OPENRIG_ACTIVITY_HOOK_TOKEN: "fixture-token",
@@ -96,7 +97,8 @@ it.each(["-fd", "-fdx"])("keeps the configured real relay working after project 
     });
     const relay = path.join(stateDir, "state/claude-activity-hooks/activity-relay.cjs");
     expect(fs.readFileSync(relay)).toEqual(fs.readFileSync(asset));
-    expect(fs.statSync(relay).mode & 0o777).toBe(0o755);
+    // POSIX mode bits; Windows uses ACLs and reports no execute bit.
+    if (process.platform !== "win32") expect(fs.statSync(relay).mode & 0o777).toBe(0o755);
   } finally {
     await new Promise<void>((resolve, reject) => server.close(err => err ? reject(err) : resolve()));
   }

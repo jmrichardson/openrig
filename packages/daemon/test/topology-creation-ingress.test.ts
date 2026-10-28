@@ -91,9 +91,9 @@ describe("single topology-creation ingress (OPR.0.5.8.9)", () => {
 
     expect(added.ok).toBe(true);
     expect(setup.rigRepo.getRig(rig.id)?.nodes.find((node) => node.logicalId === "dev.worker")?.cwd)
-      .toBe("/private/tmp");
+      .toBe(resolve("/private/tmp"));
     expect(startNode).toHaveBeenCalledTimes(1);
-    expect(startNode.mock.calls[0]?.[0].binding.cwd).toBe("/private/tmp");
+    expect(startNode.mock.calls[0]?.[0].binding.cwd).toBe(resolve("/private/tmp"));
   });
 
   it("keeps one construction call site for each topology-creation effect", () => {

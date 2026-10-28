@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
+import { pathToFileURL } from "node:url";
 
 // The shared vitest setup makes a fixture home, a sibling user home and a TMPDIR of its own per worker. It
 // removes them when the worker exits; before, a full run left them behind and filled the (RAM-backed) /tmp.
@@ -13,12 +14,14 @@ afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursiv
 function runSetup(env: Record<string, string | undefined> = {}) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "fixture-home-run-"));
   roots.push(tmp);
+  // os.tmpdir() reads TEMP/TMP rather than TMPDIR on Windows.
+  const temp = env["TMPDIR"] ?? tmp;
   const child = spawnSync(process.execPath, [
-    "--import", createRequire(import.meta.url).resolve("tsx"),
+    "--import", pathToFileURL(createRequire(import.meta.url).resolve("tsx")).href,
     path.join(import.meta.dirname, "fixtures/fixture-home-child.ts"),
   ], {
     encoding: "utf-8", timeout: 60_000,
-    env: { PATH: process.env.PATH, TMPDIR: tmp, ...env },
+    env: { PATH: process.env.PATH, TMPDIR: tmp, ...env, ...(process.platform === "win32" ? { TEMP: temp, TMP: temp } : {}) },
   });
   expect(child.status, child.stderr).toBe(0);
   const homes = JSON.parse(child.stdout.trim().split("\n").pop()!) as {
@@ -82,7 +85,8 @@ describe("fixture homes are removed when the worker exits", () => {
     expect(fixtureEntries(tmp)).toEqual([]);
   });
 
-  it.each(["SIGTERM", "SIGINT", "SIGHUP"] as const)("removes both homes and its TMPDIR when the worker is ended by %s, and still dies of it", async (signal) => {
+  // Windows has no catchable SIGTERM/SIGHUP: child.kill() terminates the worker without running its handlers.
+  it.skipIf(process.platform === "win32").each(["SIGTERM", "SIGINT", "SIGHUP"] as const)("removes both homes and its TMPDIR when the worker is ended by %s, and still dies of it", async (signal) => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "fixture-home-signal-"));
     roots.push(tmp);
     const child = spawn(process.execPath, [
@@ -117,6 +121,16 @@ describe("fixture homes are removed when the worker exits", () => {
     } finally {
       child.kill("SIGKILL");
     }
+  });
+
+  // Windows reads the home from USERPROFILE and app data from APPDATA/LOCALAPPDATA; HOME alone would leave
+  // a native runtime on the developer's real profile and login.
+  it.runIf(process.platform === "win32")("points the Windows home, app data and runtime config at the user home and drops credentials", () => {
+    const { home, env } = runSetup({ CLAUDE_CONFIG_DIR: "C:\\real\\.claude", PI_CODING_AGENT_DIR: "C:\\real\\.pi", ANTHROPIC_API_KEY: "real", OPENAI_API_KEY: "real" });
+    expect(env).toEqual({
+      USERPROFILE: home, APPDATA: path.join(home, "AppData", "Roaming"), LOCALAPPDATA: path.join(home, "AppData", "Local"),
+      CLAUDE_CONFIG_DIR: path.join(home, ".claude"), PI_CODING_AGENT_DIR: path.join(home, ".pi", "agent"),
+    });
   });
 
   it("leaves a fixture home it only reused, which belongs to whoever made it", () => {

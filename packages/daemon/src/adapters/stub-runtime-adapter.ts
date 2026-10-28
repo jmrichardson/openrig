@@ -30,7 +30,10 @@ import {
   type StubRunnerState,
 } from "./stub-runner-protocol.js";
 
-const SHELL_COMMANDS = new Set(["bash", "fish", "nu", "sh", "tmux", "zsh"]);
+import { isRuntimeShell } from "../domain/shell-classifier.js";
+import type { SeatLaunchEnvironment } from "../domain/seat-launch-environment.js";
+import { renderWindowsLaunch } from "./windows-launch.js";
+import { projectionResourceDirectory } from "../domain/projection-resource-path.js";
 
 export interface StubAdapterFsOps {
   readFile(path: string): string;
@@ -42,6 +45,7 @@ export interface StubAdapterFsOps {
 
 export interface StubRuntimeAdapterDeps {
   tmux: TmuxAdapter;
+  seatLaunchEnvironment?: SeatLaunchEnvironment;
   /** Real filesystem operations. Absent in minimal/hermetic test constructions —
    *  the adapter then falls back to an in-memory launch record for readiness and
    *  performs NO real filesystem writes (so a `cwd: "."` binding never pollutes
@@ -69,6 +73,7 @@ interface StubLaunchRecord {
 export class StubRuntimeAdapter implements RuntimeAdapter {
   readonly runtime: string;
   private tmux: TmuxAdapter;
+  private seatLaunchEnvironment?: SeatLaunchEnvironment;
   private fsOps?: StubAdapterFsOps;
   private runnerEntryPath?: string;
   private sleep: (ms: number) => Promise<void>;
@@ -77,6 +82,7 @@ export class StubRuntimeAdapter implements RuntimeAdapter {
 
   constructor(deps: StubRuntimeAdapterDeps) {
     this.tmux = deps.tmux;
+    this.seatLaunchEnvironment = deps.seatLaunchEnvironment;
     this.fsOps = deps.fsOps;
     this.runtime = deps.runtime ?? "stub";
     this.runnerEntryPath = deps.runnerEntryPath;
@@ -190,10 +196,18 @@ export class StubRuntimeAdapter implements RuntimeAdapter {
         posture,
         resumeToken: opts.resumeToken,
       });
-      const textResult = await this.tmux.sendText(sessionName, cmd);
-      if (!textResult.ok) return { ok: false, error: `Failed to send stub launch command: ${textResult.message}` };
-      const enterResult = await this.tmux.sendKeys(sessionName, ["Enter"]);
-      if (!enterResult.ok) return { ok: false, error: `Failed to send Enter: ${enterResult.message}` };
+      if (process.platform === "win32") {
+        const command = this.seatLaunchEnvironment
+          ? await this.seatLaunchEnvironment.command(sessionName, cmd, { nodeId: binding.nodeId, generation: binding.launchGeneration, runtime: this.runtime })
+          : renderWindowsLaunch(cmd, {});
+        const result = await this.tmux.sendShellCommand(sessionName, command);
+        if (!result.ok) return { ok: false, error: `Failed to send stub launch command: ${result.message}` };
+      } else {
+        const textResult = await this.tmux.sendText(sessionName, cmd);
+        if (!textResult.ok) return { ok: false, error: `Failed to send stub launch command: ${textResult.message}` };
+        const enterResult = await this.tmux.sendKeys(sessionName, ["Enter"]);
+        if (!enterResult.ok) return { ok: false, error: `Failed to send Enter: ${enterResult.message}` };
+      }
 
       const ready = await this.waitForRunnerReady(binding, launchId);
       if (!ready.ok) return ready.failure;
@@ -236,7 +250,7 @@ export class StubRuntimeAdapter implements RuntimeAdapter {
       }
       if (typeof this.tmux?.getPaneCommand === "function") {
         const paneCommand = (await this.tmux.getPaneCommand(sessionName)) ?? "";
-        if (SHELL_COMMANDS.has(paneCommand)) {
+        if (isRuntimeShell(paneCommand)) {
           return { ready: false, reason: "stub readiness is stale; the pane is back at a shell", code: "runner_exited" };
         }
       }
@@ -293,7 +307,7 @@ export class StubRuntimeAdapter implements RuntimeAdapter {
       return this.mergeGuidance(targetPath, entry.effectiveId, this.fsOps.readFile(entry.absolutePath), warnings, entry.absolutePath);
     }
     if (entry.category === "skill") {
-      const targetDir = nodePath.join(binding.cwd, ".openrig", "stub", "skills", entry.effectiveId);
+      const targetDir = nodePath.join(binding.cwd, ".openrig", "stub", "skills", projectionResourceDirectory(entry.effectiveId));
       this.fsOps.mkdirp(targetDir);
       let isDir = false;
       if (this.fsOps.listFiles) {

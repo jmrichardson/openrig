@@ -88,7 +88,8 @@ function seedPluginTree(root: string) {
 function perm(p: string): number { return fs.statSync(p).mode & 0o777; }
 
 describe("CWD plugin projection preserves executable mode (skills-vendoring QA blocker)", () => {
-  it("Claude: nested exec helper keeps 0755, non-exec neighbor stays 0644", async () => {
+  // POSIX mode bits; Windows uses ACLs
+  it.skipIf(process.platform === "win32")("Claude: nested exec helper keeps 0755, non-exec neighbor stays 0644", async () => {
     const base = fs.mkdtempSync(nodePath.join(os.tmpdir(), "execmode-claude-"));
     const src = nodePath.join(base, "src");
     const rel = seedPluginTree(src);
@@ -104,7 +105,8 @@ describe("CWD plugin projection preserves executable mode (skills-vendoring QA b
     expect(perm(outSkill)).toBe(0o644);
   });
 
-  it("Codex: nested exec helper keeps 0755, non-exec neighbor stays 0644", async () => {
+  // POSIX mode bits; Windows uses ACLs
+  it.skipIf(process.platform === "win32")("Codex: nested exec helper keeps 0755, non-exec neighbor stays 0644", async () => {
     const base = fs.mkdtempSync(nodePath.join(os.tmpdir(), "execmode-codex-"));
     const src = nodePath.join(base, "src");
     const rel = seedPluginTree(src);
@@ -120,7 +122,8 @@ describe("CWD plugin projection preserves executable mode (skills-vendoring QA b
     expect(perm(outSkill)).toBe(0o644);
   });
 
-  it("Claude: re-projection reconciles mode even when content is byte-identical (idempotence-skip path)", async () => {
+  // POSIX mode bits; Windows uses ACLs
+  it.skipIf(process.platform === "win32")("Claude: re-projection reconciles mode even when content is byte-identical (idempotence-skip path)", async () => {
     const base = fs.mkdtempSync(nodePath.join(os.tmpdir(), "execmode-claude-idem-"));
     const src = nodePath.join(base, "src");
     const rel = seedPluginTree(src);

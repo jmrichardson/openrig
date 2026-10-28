@@ -17,6 +17,7 @@ import { PassiveCeremonySource } from "../src/domain/health-passive-ceremony.js"
 import { HealthProjectionService } from "../src/domain/health-detectors.js";
 import { HealthDiagnosisService } from "../src/domain/health-diagnosis.js";
 import { healthAuthority, healthSelectedContext, readHealthArtifact } from "../src/domain/health-context.js";
+import { canCreateFileSymlinks } from "../../../test/symlink-capability.mjs";
 
 const cleanup: Array<() => void> = [];
 afterEach(() => cleanup.splice(0).reverse().forEach(f => f()));
@@ -110,7 +111,8 @@ it("keeps correction, attribution and later effect separate without requiring a 
   expect(() => t.service.dispose(id, "owner@rig", { ...taken, correction: { ...taken.correction, effect: { state: "observed", summary: "Unsupported improvement", evidenceRefs: [] } } })).toThrow("require evidence");
 });
 
-it("refuses selected context escapes, aliases, ambiguous spans and oversized selections", async () => {
+// The alias case creates a file symlink, which needs SeCreateSymbolicLinkPrivilege on Windows.
+it.skipIf(!canCreateFileSymlinks)("refuses selected context escapes, aliases, ambiguous spans and oversized selections", async () => {
   const t = await setup(); symlinkSync(join(t.home, "trace.md"), join(t.home, "alias.md"));
   t.write("PREFLIGHT.md", "## Same\nOne\n## Same\nTwo\n");
   t.write("project.yaml", "metadata: {id: demo}\ninstall:\n  context: [../outside.md, alias.md, PREFLIGHT.md#same, 'https://example.com/context']\n");

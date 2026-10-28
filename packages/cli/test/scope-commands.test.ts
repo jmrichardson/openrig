@@ -133,13 +133,15 @@ describe("rig scope resolve-notes", () => {
   beforeEach(() => { root = mktemp(); });
   afterEach(() => { fs.rmSync(root, { recursive: true, force: true }); });
 
-  it.each([
+  it.for([
     { label: "current readable", current: true, legacy: false, unreadableCurrent: false, expected: "NOTES.md" },
     { label: "legacy readable", current: false, legacy: true, unreadableCurrent: false, expected: "MISSION_NOTES.md" },
     { label: "both readable prefer current", current: true, legacy: true, unreadableCurrent: false, expected: "NOTES.md" },
     { label: "current unreadable falls through", current: true, legacy: true, unreadableCurrent: true, expected: "MISSION_NOTES.md" },
     { label: "no readable notes", current: false, legacy: false, unreadableCurrent: false, expected: null },
-  ])("returns the locked JSON shape: $label", async ({ current, legacy, unreadableCurrent, expected }) => {
+  ])("returns the locked JSON shape: $label", async ({ current, legacy, unreadableCurrent, expected }, { skip }) => {
+    // POSIX mode bits; Windows uses ACLs, so chmod cannot make NOTES.md unreadable there.
+    if (unreadableCurrent && process.platform === "win32") skip();
     const node = path.join(root, "mission");
     const currentPath = path.join(node, "NOTES.md");
     const legacyPath = path.join(node, "MISSION_NOTES.md");
@@ -346,7 +348,8 @@ describe("rig scope slice rollback snapshots", () => {
   afterEach(() => { fs.rmSync(env.root, { recursive: true, force: true }); });
 
   // Root can read mode-000 files, so it cannot exercise this refusal.
-  it.skipIf(process.getuid?.() === 0).each([
+  // POSIX mode bits; Windows uses ACLs, so chmod cannot deny the snapshot read there.
+  it.skipIf(process.getuid?.() === 0 || process.platform === "win32").each([
     { operation: "close", unreadable: "source" },
     { operation: "ship", unreadable: "source" },
     { operation: "move", unreadable: "source" },
@@ -652,7 +655,8 @@ describe("rig scope slice moves in a dash-prefixed workspace", () => {
         "slice", "close", "01-debt-foo", "--reason", "wontfix", "--mission", "backlog", "--json",
       ], env.missionsRoot);
       expect(result.exitCode).toBe(1);
-      expect(result.stdout + result.stderr).toContain("EACCES");
+      // Windows reports a write to a read-only file as EPERM rather than EACCES.
+      expect(result.stdout + result.stderr).toContain(process.platform === "win32" ? "EPERM" : "EACCES");
       expect(fs.readFileSync(source, "utf8")).toBe(original);
       expect(fs.existsSync(path.join(env.missionsRoot, "backlog", "closed", "01-debt-foo"))).toBe(false);
       expect(execFileSync("git", ["-C", env.root, "status", "--porcelain"], { encoding: "utf8" })).toBe("");
@@ -1377,7 +1381,8 @@ describe("rig scope audit ordinal naming", () => {
     const options = { encoding: "utf8" as const, timeout: 15000, env: {
       PATH: process.env.PATH, HOME: home, TMPDIR: root,
       OPENRIG_HOME: path.join(home, ".openrig"), CODEX_HOME: path.join(home, "codex"),
-      CLAUDE_CONFIG_DIR: path.join(home, "claude"), GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: os.devNull,
+      // Git for Windows maps "/dev/null" itself but cannot open os.devNull ("\\.\nul") as a config file.
+      CLAUDE_CONFIG_DIR: path.join(home, "claude"), GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null",
     } };
     try {
       const result = await promisify(execFile)(process.execPath, command, options);
@@ -1474,6 +1479,34 @@ describe("rig scope audit edge cases (guard BLOCKING fixes)", () => {
     expect(sliceEntry).toBeDefined();
     expect(sliceEntry.findings.some((f: { kind: string }) => f.kind === "missing_id")).toBe(true);
     expect(sliceEntry.findings.some((f: { kind: string }) => f.kind === "missing_progress")).toBe(true);
+  });
+
+  // Only Windows reads CRLF frontmatter; Linux and macOS keep the LF-only match.
+  it.for([
+    { platform: "win32", ghost: false },
+    { platform: "linux", ghost: true },
+    { platform: "darwin", ghost: true },
+  ] as const)("reads a CRLF slice frontmatter on $platform (registration ghost: $ghost)", async ({ platform, ghost }) => {
+    const sliceDir = path.join(substrate.missionsRoot, "release-0.3.2", "slices", "02-crlf");
+    writeFile(path.join(sliceDir, "README.md"), "---\r\nid: OPR.0.3.2.2\r\ndepends_on: []\r\n---\r\n# crlf\r\n");
+    writeFile(path.join(sliceDir, "PROGRESS.md"), "# Progress\r\n");
+    const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { ...descriptor, value: platform });
+    let result: CaptureResult;
+    try {
+      result = await run(["audit", "--mission", "release-0.3.2", "--json"], substrate.missionsRoot);
+    } finally {
+      Object.defineProperty(process, "platform", descriptor);
+    }
+    const sliceEntry = JSON.parse(result.stdout).slices.find((s: { name: string }) => s.name === "02-crlf");
+    expect(sliceEntry.findings.some((f: { kind: string }) => f.kind === "registration_ghost")).toBe(ghost);
+    if (ghost) {
+      expect(sliceEntry.railStatus).toBe("malformed");
+      expect(sliceEntry.frontmatterError).toContain("Unexpected scalar at node end");
+    } else {
+      expect(sliceEntry.railStatus).toBe("present");
+      expect(sliceEntry.frontmatterError).toBeNull();
+    }
   });
 
   it("non-slice-shaped dir in slices/ with README + PROGRESS emits finding", async () => {

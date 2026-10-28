@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import nodePath from "node:path";
 import Database from "better-sqlite3";
 
 export const DESTROY_CONFIRM_TOKEN = "destroy-openrig-state";
@@ -68,8 +69,13 @@ function normalizePathForPrefix(path: string): string {
   return path.endsWith("/") ? path : `${path}/`;
 }
 
-export function isWithinPath(candidate: string, root: string): boolean {
+export function isWithinPath(candidate: string, root: string, platform: NodeJS.Platform = process.platform): boolean {
   if (candidate === root) return true;
+  if (platform === "win32") {
+    // Windows paths join with backslashes and compare without case.
+    const relative = nodePath.win32.relative(root, candidate);
+    return relative === "" || (relative !== ".." && !relative.startsWith("..\\") && !nodePath.win32.isAbsolute(relative));
+  }
   return candidate.startsWith(normalizePathForPrefix(root));
 }
 
@@ -271,9 +277,23 @@ export async function executeDestroy(plan: DestroyPlan, deps: DestroyDeps): Prom
   };
 }
 
-export function findListeningPidWithLsof(port: number): number | null {
+export function findListeningPid(port: number, platform: NodeJS.Platform = process.platform,
+  run: (file: string, args: string[]) => string = (file, args) => execFileSync(file, args, { encoding: "utf-8" })): number | null {
   try {
-    const output = execFileSync("lsof", ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], { encoding: "utf-8" }).trim();
+    if (platform === "win32") {
+      // netstat translates the state column (LISTENING is ABHÖREN in German), so recognise a listener
+      // by its unconnected foreign address instead. No -p filter: "-p tcp" omits IPv6 sockets such as [::1].
+      const candidates = run("netstat.exe", ["-ano"]).split(/\r?\n/).flatMap(line => {
+        const fields = line.trim().split(/\s+/);
+        if (fields[0] !== "TCP" || !fields[1]?.endsWith(`:${port}`) || !/^(?:0\.0\.0\.0|\[::\]):0$/.test(fields[2] ?? "")) return [];
+        return [fields.at(-1)];
+      });
+      const pids = [...new Set(candidates.map(value => Number(value)).filter(pid => Number.isSafeInteger(pid) && pid > 0))];
+      // Different processes may bind the same port on distinct interfaces. A
+      // port-wide lookup must not choose one arbitrarily and kill a sibling.
+      return pids.length === 1 ? pids[0]! : null;
+    }
+    const output = run("lsof", ["-ti", `tcp:${port}`, "-sTCP:LISTEN"]).trim();
     if (!output) return null;
     const first = output.split(/\s+/)[0]?.trim();
     if (!first) return null;
@@ -284,9 +304,17 @@ export function findListeningPidWithLsof(port: number): number | null {
   }
 }
 
-export function killTmuxSessionWithCli(sessionName: string): boolean {
+/** SIGTERM drains a POSIX daemon. On Windows it is TerminateProcess, with no drain or shutdown
+ *  receipt, so a daemon whose drain channel refused is left running instead. */
+export function terminateListenerPid(pid: number, platform: NodeJS.Platform = process.platform): void {
+  if (platform === "win32") throw new Error("Windows has no graceful stop signal; no termination was sent. Stop the daemon with rig daemon stop, then retry.");
+  process.kill(pid, "SIGTERM");
+}
+
+export function killTmuxSessionWithCli(sessionName: string, platform: NodeJS.Platform = process.platform): boolean {
   try {
-    execFileSync("tmux", ["kill-session", "-t", sessionName], { stdio: "ignore" });
+    // psmux matches a bare target by prefix; name the session exactly there.
+    execFileSync("tmux", ["kill-session", "-t", platform === "win32" ? `=${sessionName}` : sessionName], { stdio: "ignore" });
     return true;
   } catch {
     return false;

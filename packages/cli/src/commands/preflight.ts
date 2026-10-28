@@ -1,4 +1,5 @@
 import { Command } from "commander";
+import { dirname } from "node:path";
 import { SystemPreflight } from "../system-preflight.js";
 import { ConfigStore } from "../config-store.js";
 import { getDaemonStatus, type DaemonStatus } from "../daemon-lifecycle.js";
@@ -29,7 +30,8 @@ export function preflightCommand(depsOverride?: PreflightCommandDeps): Command {
         exec,
         configStore,
         getDaemonStatus: depsOverride?.getDaemonStatus ?? (() => getDaemonStatus(realDeps())),
-        riggedHome: depsOverride?.riggedHome ?? config.db.path.replace(/\/[^/]+$/, ""),
+        // A Windows database path ends in a backslash-separated file name.
+        riggedHome: depsOverride?.riggedHome ?? (process.platform === "win32" ? dirname(config.db.path) : config.db.path.replace(/\/[^/]+$/, "")),
       });
 
       const result = await preflight.run();

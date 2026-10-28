@@ -8,8 +8,12 @@ import { EventBus } from "../src/domain/event-bus.js";
 import { PodRepository } from "../src/domain/pod-repository.js";
 import { SelfAttachService } from "../src/domain/self-attach-service.js";
 import { TranscriptStore } from "../src/domain/transcript-store.js";
-import type { TmuxAdapter } from "../src/adapters/tmux.js";
+import { TmuxAdapter } from "../src/adapters/tmux.js";
+import { SeatDeliveryGuard, resolveGuardTarget } from "../src/domain/seat-delivery-guard.js";
 import { ALL_MIGRATIONS } from "../src/db/all-migrations.js";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 
 describe("SelfAttachService", () => {
@@ -23,6 +27,7 @@ describe("SelfAttachService", () => {
   let startPipePaneSpy: ReturnType<typeof vi.fn>;
   let ensureContextCollectorSpy: ReturnType<typeof vi.fn>;
   let transcriptStore: TranscriptStore;
+  let transcriptsRoot: string;
 
   beforeEach(() => {
     db = createDb();
@@ -36,7 +41,8 @@ describe("SelfAttachService", () => {
     tmuxAdapter = {
       startPipePane: startPipePaneSpy,
     } as unknown as TmuxAdapter;
-    transcriptStore = new TranscriptStore({ transcriptsRoot: "/tmp/openrig-self-attach-transcripts", enabled: true });
+    transcriptsRoot = mkdtempSync(join(tmpdir(), "openrig-self-attach-transcripts-"));
+    transcriptStore = new TranscriptStore({ transcriptsRoot, enabled: true });
     selfAttachService = new SelfAttachService({
       db,
       rigRepo,
@@ -53,6 +59,7 @@ describe("SelfAttachService", () => {
 
   afterEach(() => {
     db.close();
+    rmSync(transcriptsRoot, { recursive: true, force: true });
   });
 
   it("attachToNode binds the current raw agent as external_cli", async () => {
@@ -161,6 +168,47 @@ describe("SelfAttachService", () => {
     expect(binding?.tmuxWindow).toBe("@12");
     expect(binding?.tmuxPane).toBe("%34");
     expect(binding?.externalSessionName).toBeNull();
+  });
+
+  it("attachToNode binds a psmux pane's raw TMUX_PANE in the adapter's scoped form, so guarded input reaches it", async () => {
+    const calls: string[][] = [];
+    const psmux = new TmuxAdapter(async () => { throw new Error("No POSIX shell string on psmux"); }, {
+      writeFile: async () => {}, unlink: async () => {}, tmpName: () => "C:\\temp\\payload.txt", bufferName: () => "buf",
+    }, async (argv) => {
+      calls.push(argv);
+      if (argv.includes("list-panes")) return "s|%3|0|C:\\w|80|24|1\n";
+      if (argv.includes("display-message")) return "pwsh\n";
+      return "";
+    }, "psmux");
+    psmux.deliveryGuard = new SeatDeliveryGuard(db, (target) => resolveGuardTarget(db, target));
+    const service = new SelfAttachService({ db, rigRepo, podRepo, sessionRegistry, eventBus, tmuxAdapter: psmux });
+    const rig = rigRepo.createRig("rigged-buildout");
+    const node = rigRepo.addNode(rig.id, "dev1.impl2", { runtime: "claude-code" });
+
+    const result = await service.attachToNode({
+      rigId: rig.id,
+      logicalId: "dev1.impl2",
+      context: { attachmentType: "tmux", tmuxSession: "s", tmuxPane: "%3" },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(sessionRegistry.getBindingForNode(node.id)?.tmuxPane).toBe("psmux:cw:%3");
+    expect(await psmux.sendText("s", "hello")).toEqual({ ok: true });
+    expect(calls.at(-1)).toEqual(["tmux", "-t", "=s", "paste-buffer", "-t", "%3", "-b", "buf", "-d", "-r", "-p"]);
+  });
+
+  it("attachToNode keeps a tmux pane id as tmux reported it", async () => {
+    const service = new SelfAttachService({ db, rigRepo, podRepo, sessionRegistry, eventBus, tmuxAdapter: new TmuxAdapter(async () => "") });
+    const rig = rigRepo.createRig("rigged-buildout");
+    const node = rigRepo.addNode(rig.id, "dev1.impl2", { runtime: "claude-code" });
+
+    await service.attachToNode({
+      rigId: rig.id,
+      logicalId: "dev1.impl2",
+      context: { attachmentType: "tmux", tmuxSession: "s", tmuxPane: "%3" },
+    });
+
+    expect(sessionRegistry.getBindingForNode(node.id)?.tmuxPane).toBe("%3");
   });
 
   it("attachToNode starts transcript capture when self-attaching from tmux", async () => {

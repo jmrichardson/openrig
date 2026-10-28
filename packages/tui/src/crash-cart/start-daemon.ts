@@ -9,3 +9,10 @@ export function daemonStartArgs(target: string): string[] {
   return ["daemon", "start", "--no-kernel", "--host", url.hostname.replace(/^\[|\]$/g, ""),
     "--port", url.port || "80"];
 }
+
+/** ⏎ RESTORE EVERYTHING runs a plain `rig daemon start`. Windows runs it through the
+ * TUI's CLI entry, because Node's execFile cannot run the npm rig.cmd shim. */
+export function fleetRestoreStartCommand(executable: string, prefix: string[], platform: NodeJS.Platform = process.platform): { executable: string; args: string[] } {
+  if (platform === "win32") return { executable, args: [...prefix, "daemon", "start"] };
+  return { executable: "rig", args: ["daemon", "start"] };
+}

@@ -67,9 +67,9 @@ function checkEnvAssignment(assignment: string): string | null {
 // or a readable path-form YAML document with a top-level `rigs:` LIST.
 export function sourceLooksLikeTopology(source: string): boolean {
   if (/\.rigtopology$/i.test(source)) return true;
-  // Name-form sources (no slash, no known extension) keep rig-name
+  // Name-form sources (no separator, no known extension) keep rig-name
   // semantics — never sniffed (same precedence as the daemon router).
-  if (!source.includes("/") && !source.match(/\.(ya?ml)$/i)) return false;
+  if (!source.includes("/") && !source.includes(nodePath.sep) && !source.match(/\.(ya?ml)$/i)) return false;
   try {
     const p = nodePath.resolve(source);
     if (!existsSync(p)) return false;
@@ -240,7 +240,7 @@ team back with its conversations, run rig up <rig-name> --existing, not the spec
           return;
         }
         // The remote daemon restores a bare rig name from its own spec, so there is no launch for --env.
-        if (envOverrideBody && !source.includes("/") && !/\.(ya?ml|rigbundle|rigtopology)$/i.test(source)) {
+        if (envOverrideBody && !source.includes("/") && !source.includes(nodePath.sep) && !/\.(ya?ml|rigbundle|rigtopology)$/i.test(source)) {
           console.error("--env applies to a new launch from a rig spec or bundle. A restore keeps the rig's own env: block; to change it, edit env: in the spec and launch again.");
           process.exitCode = 1;
           return;
@@ -336,13 +336,14 @@ team back with its conversations, run rig up <rig-name> --existing, not the spec
 
       const client = deps.clientFactory(getDaemonUrl(status));
 
-      // Detect rig name vs file path: names don't contain / and don't end in
+      // Detect rig name vs file path: names don't contain / (nor the platform
+      // separator, '\' on Windows) and don't end in
       // .yaml/.yml/.rigbundle/.rigtopology. OPR.0.4.4.11 (guard G-1): the
       // topology extension resolves as a PATH (same as yaml/rigbundle) so a
       // bare `factory.rigtopology` reaches the daemon's topology routing
       // instead of library/existing-rig name resolution. Extensionless
       // no-slash sources keep rig_name precedence byte-for-byte.
-      const isRigName = !source.includes("/") && !source.match(/\.(ya?ml|rigbundle|rigtopology)$/i);
+      const isRigName = !source.includes("/") && !source.includes(nodePath.sep) && !source.match(/\.(ya?ml|rigbundle|rigtopology)$/i);
       let sourceRef = isRigName ? source : nodePath.resolve(source);
 
       // If it looks like a name, check for library spec match

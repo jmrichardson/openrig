@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
 import http from "node:http";
+import nodePath from "node:path";
 import { Command } from "commander";
 import { DaemonClient } from "../src/client.js";
 import { adoptCommand } from "../src/commands/adopt.js";
@@ -152,7 +153,7 @@ describe("rig adopt", () => {
 
     expect(exitCode).toBeUndefined();
     expect(capturedMaterializeHeaders["x-target-rig-id"]).toBe("rig-123");
-    expect(capturedMaterializeHeaders["x-rig-root"]).toBe("/tmp/captured-dev-pod");
+    expect(capturedMaterializeHeaders["x-rig-root"]).toBe(nodePath.resolve("/tmp/captured-dev-pod"));
     expect(bindRequests).toHaveLength(2);
     expect(bindRequests[0]!.body).toEqual({ rigId: "rig-123", logicalId: "research.scout" });
     expect(bindRequests[1]!.body).toEqual({ rigId: "rig-123", logicalId: "research.mapper" });

@@ -8,6 +8,7 @@ import { parse as parseYaml } from "yaml";
 import { registerBundleProject } from "../src/domain/workspace/project-registration.js";
 import { vendorProjectDir } from "../src/domain/bundle-carried-project.js";
 import { readProjectCatalog } from "../src/domain/workspace/project-catalog.js";
+import { canCreateFileSymlinks } from "../../../test/symlink-capability.mjs";
 
 const USER_CATALOG = `schema: openrig.workspace/v0alpha1
 # My own projects. Keep this comment.
@@ -97,7 +98,8 @@ describe("registerBundleProject", () => {
     expect(fs.existsSync(path.join(projectsRoot, "openrig"))).toBe(false);
   });
 
-  it("edits the file a symlinked catalog points at, and keeps the link", () => {
+  // Creating a file symlink needs SeCreateSymbolicLinkPrivilege on Windows.
+  it.skipIf(!canCreateFileSymlinks)("edits the file a symlinked catalog points at, and keeps the link", () => {
     fs.mkdirSync(workspace, { recursive: true });
     const real = path.join(work, "dotfiles", "workspace.yaml");
     fs.mkdirSync(path.dirname(real), { recursive: true });
@@ -109,7 +111,8 @@ describe("registerBundleProject", () => {
     expect(fs.readFileSync(real, "utf-8")).toContain("rigs: [openrig-dev]");
   });
 
-  it("keeps the existing catalog's permission bits", () => {
+  // POSIX mode bits; Windows uses ACLs
+  it.skipIf(process.platform === "win32")("keeps the existing catalog's permission bits", () => {
     fs.mkdirSync(workspace, { recursive: true });
     fs.writeFileSync(catalogPath, USER_CATALOG);
     fs.chmodSync(catalogPath, 0o600);
@@ -300,7 +303,8 @@ describe("vendorProjectDir", () => {
     expect(() => vendorProjectDir(projectDir, staging)).toThrow(/declares no id/);
   });
 
-  it("refuses a file that resolves outside the project folder", () => {
+  // Creating a file symlink needs SeCreateSymbolicLinkPrivilege on Windows.
+  it.skipIf(!canCreateFileSymlinks)("refuses a file that resolves outside the project folder", () => {
     fs.writeFileSync(path.join(work, "secret.md"), "outside\n");
     fs.symlinkSync(path.join(work, "secret.md"), path.join(projectDir, "notes.md"));
     expect(() => vendorProjectDir(projectDir, staging)).toThrow(/resolves outside the project directory/);

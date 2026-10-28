@@ -7,6 +7,7 @@ import { resolveConcreteHint } from "./runtime-adapter.js";
 import type { AgentSpec, StartupBlock } from "./types.js";
 import { seatAdditionPluginFolder } from "./rigspec-schema.js";
 import { normalizePreconditionsBlock } from "./bundle-types.js";
+import { projectionResourceDirectory } from "./projection-resource-path.js";
 
 type ObjectValue = Record<string, unknown>;
 type SourceRef = { path: string; field?: string };
@@ -321,8 +322,8 @@ export function describeBundleBehaviour(input: DescribeBundleInput): BundleBehav
               else view.toldFiles.push(fact);
               if (category === "guidance") continue; // the managed destination is listed once per seat
               const root = runtime === "claude-code" ? ".claude" : runtime === "codex" ? ".agents" : undefined;
-              if (root && category === "skills") write(seat, category, "seat_cwd", `${root}/skills/${selected}`, fact.sourceRefs);
-              else if (root && category === "plugins") write(seat, category, "seat_cwd", `${runtime === "codex" ? ".codex" : root}/plugins/${selected}`, fact.sourceRefs);
+              if (root && category === "skills") write(seat, category, "seat_cwd", `${root}/skills/${projectionResourceDirectory(selected)}`, fact.sourceRefs);
+              else if (root && category === "plugins") write(seat, category, "seat_cwd", `${runtime === "codex" ? ".codex" : root}/plugins/${projectionResourceDirectory(selected)}`, fact.sourceRefs);
               else if (root && category === "subagents") write(seat, category, "seat_cwd", `${runtime === "claude-code" ? ".claude/agents" : ".agents"}/${path.basename(ref)}`, fact.sourceRefs);
               else if (root && category === "runtimeResources" && "type" in resource) {
                 // Match the adapters' declared destinations without calling them or reading host settings.
@@ -332,7 +333,7 @@ export function describeBundleBehaviour(input: DescribeBundleInput): BundleBehav
                   write(seat, category, "seat_cwd", ".claude/settings.local.json", fact.sourceRefs, "merge settings or managed hooks");
                 } else if (runtime === "claude-code" && resource.type === "claude_mcp_fragment") {
                   write(seat, category, "seat_cwd", ".mcp.json", fact.sourceRefs, "merge MCP configuration fragment");
-                } else write(seat, category, "seat_cwd", `${root}/extensions/${selected}`, fact.sourceRefs);
+                } else write(seat, category, "seat_cwd", `${root}/extensions/${projectionResourceDirectory(selected)}`, fact.sourceRefs);
               }
               else unknown(selected, "Projection destination depends on the installed runtime adapter.", fact.sourceRefs, seat);
             }

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { canCreateFileSymlinks } from "../../../test/symlink-capability.mjs";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -57,6 +58,21 @@ describe("public finite Jev experiment", () => {
     expect((await command(["experimental","disable","--config",f.config])).enabled).toBe(false);
     expect(readExperiment(f.config).maxRequests).toBe(2);
   });
+  it("writes a config this user owns on every platform and refuses a hard-linked one without changing it",() => {
+    const f=fixture(2);
+    expect(setExperiment(f.config,false)).toMatchObject({enabled:false,maxRequests:2});
+    expect(readExperiment(f.config)).toMatchObject({enabled:false,maxRequests:2});
+    const linked=path.join(f.dir,"linked.json");fs.linkSync(f.config,linked);
+    const before=fs.readFileSync(f.config,"utf8");
+    expect(()=>setExperiment(linked,true)).toThrow("experiment config must be an owned regular file");
+    expect(fs.readFileSync(f.config,"utf8")).toBe(before);
+  });
+  it.skipIf(!canCreateFileSymlinks)("refuses a symlinked config without writing through it",() => {
+    const f=fixture(2),link=path.join(f.dir,"link.json");fs.symlinkSync(f.config,link,"file");
+    const before=fs.readFileSync(f.config,"utf8");
+    expect(()=>setExperiment(link,false)).toThrow();
+    expect(fs.readFileSync(f.config,"utf8")).toBe(before);
+  });
   it("missing credentials stop before output or provider work; config has no credentials",async () => {
     const f=fixture(), send=vi.fn();
     const result=await command(["experimental","capture","--config",f.config,"--input","missing","--output",path.join(f.dir,"out")],{experimentEnv:{},experimentFetch:send});
@@ -75,7 +91,9 @@ describe("public finite Jev experiment", () => {
     const result=await command(["experimental","capture","--config",f.config,"--input",input,"--output",output],{experimentEnv:{OPENROUTER_API_KEY:"synthetic-test-value"},experimentFetch:send});
     expect(result).toMatchObject({calls:1,inspected:1,remaining:1,unavailable:0});
     const row=JSON.parse(fs.readFileSync(output,"utf8"));expect(row).toMatchObject({attemptId:"attempt-1",binding:observation().binding,delivery:"INDETERMINATE",advisoryOnly:true,result:{status:"answered"}});
-    expect(fs.statSync(output).mode & 0o777).toBe(0o600);expect(fs.readFileSync(input,"utf8")).toBe(bytes);
+    // POSIX mode bits; Windows uses ACLs
+    if(process.platform!=="win32")expect(fs.statSync(output).mode & 0o777).toBe(0o600);
+    expect(fs.readFileSync(input,"utf8")).toBe(bytes);
     const saved=fs.readFileSync(output,"utf8");
     expect((await command(["experimental","capture","--config",f.config,"--input",input,"--output",output],{experimentEnv:{OPENROUTER_API_KEY:"synthetic-test-value"},experimentFetch:send})).error).toBe("capture_experiment_unavailable");
     expect(send).toHaveBeenCalledTimes(1);expect(fs.readFileSync(output,"utf8")).toBe(saved);

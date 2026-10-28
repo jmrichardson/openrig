@@ -22,7 +22,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { spawnSync, spawn } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { join, resolve, dirname } from "node:path";
+import { basename, join, resolve, dirname } from "node:path";
 import { tmpdir } from "node:os";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -172,7 +172,7 @@ describe("A3-R3 compaction-asset clock/stamp injection (real-spawn)", () => {
       const m = readMarker(home);
       // Normalize the ephemeral per-run tmp prefix out of outputDir — the timestamped
       // STAMP element (the clock-derived part) is what the pin proves deterministic.
-      const outStamp = String(m["outputDir"]).split("/").pop();
+      const outStamp = basename(String(m["outputDir"]));
       return { createdAt: m["createdAt"], outputDir: outStamp, deliveredAt: m["deliveredAt"], postCompactAt: m["postCompactAt"] };
     };
     const run1 = runOnce();

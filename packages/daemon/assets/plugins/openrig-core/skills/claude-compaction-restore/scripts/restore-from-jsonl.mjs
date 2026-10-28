@@ -22,7 +22,29 @@ function stripBinary(text) {
     (m) => `[base64 omitted: ~${m.length} bytes]`);
   return s;
 }
-const DEFAULT_OUT = "/tmp/claude-compaction-restore";
+const WINDOWS = process.platform === "win32";
+// Git for Windows mounts /tmp at %TEMP% (os.tmpdir()), so Node and Claude's Git Bash name one folder.
+const DEFAULT_OUT = WINDOWS ? path.join(os.tmpdir(), "claude-compaction-restore") : "/tmp/claude-compaction-restore";
+// Native Windows Claude records paths with "\" (C:\dev\x.ts, \\server\share\x.ts). The path shape
+// checks below read them with "/"; elsewhere a path is checked as written.
+const slashed = (text) => (WINDOWS ? text.replaceAll("\\", "/") : text);
+
+// Windows has no POSIX find (System32\find.exe searches text). Walk what `find root -maxdepth N`
+// lists in Node; symlinked directories are not followed, as with find's default -P.
+function walkEntries(root, maxDepth, accept) {
+  const found = [];
+  const walk = (dir, depth) => {
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      const file = path.join(dir, entry.name);
+      if (accept(entry)) found.push(file);
+      if (entry.isDirectory() && depth < maxDepth) walk(file, depth + 1);
+    }
+  };
+  walk(root, 1);
+  return found;
+}
 
 function parseArgs(argv) {
   const args = {
@@ -63,7 +85,9 @@ function findLatestJsonl(cwd) {
   const projectsRoot = path.join(os.homedir(), ".claude", "projects");
   if (!fs.existsSync(projectsRoot)) return null;
 
-  const encoded = cwd ? cwd.replaceAll("/", "-") : null;
+  // Native Windows Claude names the project folder with every non-alphanumeric character as "-"
+  // (C:\work\project -> C--work-project).
+  const encoded = cwd ? (WINDOWS ? cwd.replace(/[^A-Za-z0-9]/g, "-") : cwd.replaceAll("/", "-")) : null;
   const candidates = [];
   const roots = [];
 
@@ -74,11 +98,17 @@ function findLatestJsonl(cwd) {
   roots.push(projectsRoot);
 
   for (const root of roots) {
-    const result = spawnSync("find", [root, "-name", "*.jsonl", "-maxdepth", root === projectsRoot ? "4" : "2"], {
-      encoding: "utf8",
-    });
-    if (result.status !== 0 && !result.stdout) continue;
-    for (const file of result.stdout.split(/\r?\n/).filter(Boolean)) {
+    let files;
+    if (WINDOWS) {
+      files = walkEntries(root, root === projectsRoot ? 4 : 2, (entry) => entry.name.endsWith(".jsonl"));
+    } else {
+      const result = spawnSync("find", [root, "-name", "*.jsonl", "-maxdepth", root === projectsRoot ? "4" : "2"], {
+        encoding: "utf8",
+      });
+      if (result.status !== 0 && !result.stdout) continue;
+      files = result.stdout.split(/\r?\n/).filter(Boolean);
+    }
+    for (const file of files) {
       try {
         const stat = fs.statSync(file);
         candidates.push({ file, mtimeMs: stat.mtimeMs });
@@ -127,18 +157,22 @@ function walkStrings(value, acc = []) {
 function normalizeFile(candidate, cwd) {
   let file = candidate.trim().replace(/[),.;:'"`\]\}>]+$/g, "").replace(/^[('"`<\[]+/g, "");
   if (!file || file.includes("\n")) return null;
-  if (/\.(?:md|mdx|txt|json|jsonl|yaml|yml|toml|ts|tsx|js|jsx|mjs|cjs|py|sh|rs|go|sql|css|scss|html|xml|svg|csv|log|lock)\//i.test(file)) return null;
+  if (/\.(?:md|mdx|txt|json|jsonl|yaml|yml|toml|ts|tsx|js|jsx|mjs|cjs|py|sh|rs|go|sql|css|scss|html|xml|svg|csv|log|lock)\//i.test(slashed(file))) return null;
   if (file.startsWith("~")) file = path.join(os.homedir(), file.slice(1));
+  const shape = slashed(file);
   let normalized = null;
-  if (file.startsWith("/")) normalized = path.normalize(file);
-  else if (file.startsWith("./") || file.startsWith("../")) normalized = path.normalize(path.resolve(cwd, file));
-  else if (/^[A-Za-z0-9_@.+-][A-Za-z0-9_@.+/\-:]*\.[A-Za-z0-9]+$/.test(file)) {
+  if (WINDOWS && /^(?:[A-Za-z]:\/|\/\/)/.test(shape)) normalized = path.normalize(file);
+  else if (file.startsWith("/")) normalized = path.normalize(file);
+  else if (shape.startsWith("./") || shape.startsWith("../")) normalized = path.normalize(path.resolve(cwd, file));
+  else if (/^[A-Za-z0-9_@.+-][A-Za-z0-9_@.+/\-:]*\.[A-Za-z0-9]+$/.test(shape)) {
     normalized = path.normalize(path.resolve(cwd, file));
   } else if (/^(CLAUDE|AGENTS|README|DESIGN|CULTURE|MEMORY)\.md$/.test(file)) {
     normalized = path.normalize(path.resolve(cwd, file));
   }
 
   if (!normalized) return null;
+  // A UNC path is kept unprobed: checking it opens an SMB session to that host, which can block for seconds.
+  if (WINDOWS && normalized.startsWith("\\\\")) return normalized;
   try {
     if (fs.existsSync(normalized) && fs.statSync(normalized).isDirectory()) return null;
   } catch {
@@ -149,12 +183,15 @@ function normalizeFile(candidate, cwd) {
 
 function extractPaths(text, cwd) {
   const paths = new Set();
-  const s = String(text ?? "");
+  const s = slashed(String(text ?? ""));
   const absolute = /(?:^|[\s"'(<\[])(\/(?:Users|private|tmp|var|opt|Volumes)\/[^\s"'()\]<>]+)/g;
   const relative = /(?:^|[\s"'(<\[])((?:\.{1,2}\/)?[A-Za-z0-9_@.+-][A-Za-z0-9_@.+/\-:]*\.(?:md|mdx|txt|json|jsonl|yaml|yml|toml|ts|tsx|js|jsx|mjs|cjs|py|sh|rs|go|sql|css|scss|html|xml|svg|csv|log|lock))(?:$|[\s"')>\],.;:])/g;
   const namedMarkdown = /(?:^|[\s"'(<\[])((?:CLAUDE|AGENTS|README|DESIGN|CULTURE|MEMORY)\.md)(?:$|[\s"')>\],.;:])/g;
+  // Drive paths, after slashed() above. UNC paths come only from a tool's path inputs: in free text
+  // (tool output, fetched pages, protocol-relative URLs) a "//host/..." token can name any host.
+  const windowsAbsolute = /(?:^|[\s"'(<\[])([A-Za-z]:\/[^\s"'()\]<>]+)/g;
 
-  for (const regex of [absolute, relative, namedMarkdown]) {
+  for (const regex of WINDOWS ? [windowsAbsolute, absolute, relative, namedMarkdown] : [absolute, relative, namedMarkdown]) {
     let match;
     while ((match = regex.exec(s)) !== null) {
       const normalized = normalizeFile(match[1], cwd);
@@ -216,7 +253,7 @@ function scoreFile(entry) {
   if (ext === ".md" || ext === ".mdx") score += 20;
   if (entry.kinds.read) score += 10;
   if (entry.kinds.discovered) score += 4;
-  if (/\/docs\/as-built\//.test(entry.path)) score += 25;
+  if (/\/docs\/as-built\//.test(slashed(entry.path))) score += 25;
   if (/(codemap|architecture|CLAUDE|AGENTS|README|DESIGN|CULTURE|session\.log|queue\.md)/i.test(entry.path)) score += 15;
   score += Math.min(10, Object.values(entry.kinds).reduce((a, b) => a + b, 0));
   return score;
@@ -238,10 +275,16 @@ function discoverDocs(cwd) {
     const stat = fs.statSync(full);
     if (stat.isFile()) docs.add(full);
     if (stat.isDirectory()) {
-      const result = spawnSync("find", [full, "-maxdepth", candidate === "docs" ? "2" : "1", "-type", "f", "-name", "*.md"], {
-        encoding: "utf8",
-      });
-      for (const file of result.stdout.split(/\r?\n/).filter(Boolean)) {
+      let files;
+      if (WINDOWS) {
+        files = walkEntries(full, candidate === "docs" ? 2 : 1, (entry) => entry.isFile() && entry.name.endsWith(".md"));
+      } else {
+        const result = spawnSync("find", [full, "-maxdepth", candidate === "docs" ? "2" : "1", "-type", "f", "-name", "*.md"], {
+          encoding: "utf8",
+        });
+        files = result.stdout.split(/\r?\n/).filter(Boolean);
+      }
+      for (const file of files) {
         if (/as-built|codemap|architecture|README|overview/i.test(file)) docs.add(path.normalize(file));
       }
     }

@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { join, resolve } from "node:path";
 import { generateDraftRig } from "../src/domain/draft-rig-generator.js";
 import { RigSpecCodec } from "../src/domain/rigspec-codec.js";
 import { RigSpecSchema } from "../src/domain/rigspec-schema.js";
@@ -26,6 +27,19 @@ function makeSession(overrides: Partial<DiscoveredSession>): DiscoveredSession {
 }
 
 describe("Draft rig generator", () => {
+  it("names pods from the final native directory component", () => {
+    const cwd = join(resolve("workspace"), "Project Space");
+    const result = generateDraftRig([makeSession({ cwd })]);
+    const pods = (RigSpecCodec.parse(result.yaml) as Record<string, unknown>)["pods"] as Array<Record<string, unknown>>;
+    expect(pods[0]!["id"]).toBe("project-space");
+  });
+
+  it("names a pod for a filesystem-root or trailing-separator cwd with the 'node' fallback", () => {
+    const result = generateDraftRig([makeSession({ cwd: "/", tmuxSession: "a" }), makeSession({ cwd: "/work/proj/", tmuxSession: "b" })]);
+    const pods = (RigSpecCodec.parse(result.yaml) as Record<string, unknown>)["pods"] as Array<Record<string, unknown>>;
+    expect(pods.map(pod => pod["id"])).toEqual(["node", "node-2"]);
+  });
+
   // Test 1: groups by shared CWD
   it("groups sessions by shared CWD into pods", () => {
     const sessions = [

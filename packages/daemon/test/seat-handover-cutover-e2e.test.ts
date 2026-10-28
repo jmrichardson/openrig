@@ -1,6 +1,7 @@
 import { describe, it, expect, afterAll } from "vitest";
 import { execFile, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
+import { tmpdir } from "node:os";
 import { TmuxAdapter } from "../src/adapters/tmux.js";
 import { RigRepository } from "../src/domain/rig-repository.js";
 import { SessionRegistry } from "../src/domain/session-registry.js";
@@ -35,6 +36,10 @@ const exec = async (cmd: string): Promise<string> => {
 };
 const tmux = (a: string) => exec(`tmux ${a}`);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+// The daemon drives psmux natively on Windows (argv, no shell): give the adapter that transport, on this test's -L server.
+const psmux = process.platform === "win32";
+const argvExec = async (argv: string[]): Promise<string> =>
+  (await pexec(argv[0]!, ["-L", SOCK, ...argv.slice(1)], { env: cleanEnv, windowsHide: true })).stdout;
 
 function tmuxAvailableSync(): boolean {
   try { execFileSync("sh", ["-c", "command -v tmux"], { env: cleanEnv, stdio: "ignore" }); return true; } catch { return false; }
@@ -73,7 +78,7 @@ describe("seat-handover cutover money-proof (isolated tmux, both retiree-exit pa
         const rigRepo = new RigRepository(db), sessionRegistry = new SessionRegistry(db);
         const discoveryRepo = new DiscoveryRepository(db), eventBus = new EventBus(db);
         const rig = rigRepo.createRig(`${graceful ? "graceful" : "forced"}-rig`);
-        const node = rigRepo.addNode(rig.id, "dev.impl", { runtime: "codex", cwd: "/tmp" });
+        const node = rigRepo.addNode(rig.id, "dev.impl", { runtime: "codex", cwd: tmpdir() });
         const session = sessionRegistry.registerSession(node.id, SEAT);
         sessionRegistry.updateStatus(session.id, "running");
         sessionRegistry.updateStartupStatus(session.id, "ready", new Date("2026-08-07T09:00:00Z").toISOString());
@@ -82,15 +87,19 @@ describe("seat-handover cutover money-proof (isolated tmux, both retiree-exit pa
         const marker = {
           runtime: "codex",
           async launchHarness(binding: any) {
-            await tmux(`send-keys -t ${q(binding.tmuxSession)} -l -- ${q("printf '\\n=== SUCCESSOR v2 in the SAME pane ===\\n'; stty -echo 2>/dev/null; cat")}`);
+            // A PowerShell successor on psmux: Read-Host takes the packet as input, as cat does on POSIX.
+            await tmux(`send-keys -t ${q(binding.tmuxSession)} -l -- ${q(psmux
+              ? "Write-Output '=== SUCCESSOR v2 in the SAME pane ==='; while ($true) { $null = Read-Host }"
+              : "printf '\\n=== SUCCESSOR v2 in the SAME pane ===\\n'; stty -echo 2>/dev/null; cat")}`);
             await tmux(`send-keys -t ${q(binding.tmuxSession)} Enter`); await sleep(150);
             return { ok: true, resumeToken: "tok", resumeType: "codex_id" };
           },
-          async checkReady() { return { ready: true }; },
+          // A starting PowerShell drops input that arrives before its loop reads: ready once the loop runs.
+          async checkReady() { return { ready: !psmux || /^=== SUCCESSOR v2 in the SAME pane ===$/m.test(await tmux(`capture-pane -p -t ${q(SEAT)}`)) }; },
         };
         const service = new SeatHandoverService({
           db, rigRepo, sessionRegistry, discoveryRepo, eventBus,
-          tmuxAdapter: new TmuxAdapter(exec) as any, runtimeAdapters: { codex: marker as any },
+          tmuxAdapter: (psmux ? new TmuxAdapter(exec, undefined, argvExec, "psmux") : new TmuxAdapter(exec)) as any, runtimeAdapters: { codex: marker as any },
           predecessorRecapResolver: () => ({ recap: [{ role: "user", content: "finish A5" }, { role: "assistant", content: "A5 landed; handing to v2" }], recordPath: "/tmp/pred-record.jsonl" }),
           readinessTimeoutMs: 3000, sleep,
         });
@@ -119,7 +128,7 @@ describe("seat-handover cutover money-proof (isolated tmux, both retiree-exit pa
         // ghost-wake source) died with it. A regression that let the retiree survive the
         // cutover (or respawned WITHOUT terminating it first) flips this red.
         let retireeAlive = true;
-        try { execFileSync("sh", ["-c", `kill -0 ${retireePid}`], { env: cleanEnv, stdio: "ignore" }); }
+        try { process.kill(Number(retireePid), 0); }
         catch { retireeAlive = false; }
         expect(retireeAlive, `${graceful ? "graceful" : "forced"} retiree process (pid ${retireePid}) DEAD post-handover — session-local automations die with it`).toBe(false);
         db.close();

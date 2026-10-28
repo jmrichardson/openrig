@@ -620,7 +620,7 @@ export class SeatLifecycleService {
         emitted = { state: "unknown", detail: `No single ${runtime === "claude-code" ? "Claude" : "Codex"} process could be read in the seat's pane.` };
         observed = { state: "not_verified", detail: "The running process could not be read, so no turn can be tied to its launch." };
       } else {
-        const flag = emittedEffortFromArgv(runtime, processArgv(process.command));
+        const flag = emittedEffortFromArgv(runtime, processArgv(process.command, process.platform));
         const value = flag.flag === "present" ? flag.value : null;
         emitted = { state: "observed", value, pid: process.pid, startedAt: process.startedAt ?? null, matchesSaved: value === saved.effective };
         // Native effort is attributed only from the transcript of the conversation this process is on.
@@ -696,7 +696,7 @@ export class SeatLifecycleService {
   /** The transcript of the conversation the observed process is on, or why that join can't be made.
    *  The recorded conversation (Codex: the session's resume token; Claude: the status sidecar's session)
    *  must be the one the process itself names, by argv or, for a Codex that names none, by its own logs. */
-  private async joinedTranscript(runtime: "claude-code" | "codex", session: LatestSessionRow, process: { pid: number; command: string; startedAt?: string }):
+  private async joinedTranscript(runtime: "claude-code" | "codex", session: LatestSessionRow, process: { pid: number; command: string; startedAt?: string; platform?: "win32" }):
     Promise<{ path: string | null } | { detail: string }> {
     if (!this.transcripts) return { detail: "The native transcript for this session isn't known to OpenRig." };
     const mismatch = "The process in the pane isn't on the conversation recorded for this seat (or its conversation couldn't be read), so no native turn can be attributed to it.";
@@ -704,11 +704,13 @@ export class SeatLifecycleService {
       if (runtime === "codex") {
         const recorded = this.sessionResumeToken(session.id);
         if (!recorded) return { detail: "No Codex conversation is recorded for this session yet." };
-        let own = codexCommandResumeToken(process.command) ?? undefined;
+        let own = codexCommandResumeToken(process.command, process.platform) ?? undefined;
         if (own === undefined && process.startedAt) {
           const io = { ...defaultInPlaceRestartIo(), ...this.inPlaceRestartIo };
           const facts = await io.readProcess(process.pid);
-          const home = facts?.env.CODEX_HOME ?? (facts?.env.HOME ? nodePath.join(facts.env.HOME, ".codex") : undefined);
+          // A Windows process may name its home only by USERPROFILE, as the in-place restart reads it.
+          const userHome = facts?.env.HOME ?? facts?.env.USERPROFILE;
+          const home = facts?.env.CODEX_HOME ?? (userHome ? nodePath.join(userHome, ".codex") : undefined);
           own = home ? await io.readThreadId(process.pid, process.startedAt, home) : undefined;
         }
         if (own !== recorded) return { detail: mismatch };
@@ -717,7 +719,7 @@ export class SeatLifecycleService {
       const sidecar = this.transcripts.readSidecar(session.session_name);
       if (!sidecar.ok) return { detail: "Claude's status sidecar for this session isn't available, so its transcript isn't known." };
       const recorded = sidecar.data.session_id ?? null;
-      const own = claudeCommandSessionToken(process.command);
+      const own = claudeCommandSessionToken(process.command, process.platform);
       // A resumed Claude can rotate to a new session id; the registry's recorded rotation from the
       // launched id to the sidecar's joins them too.
       const rotated = this.db.prepare("SELECT 1 FROM sessions WHERE id = ? AND resume_token = ? AND resume_rotated_from = ?")

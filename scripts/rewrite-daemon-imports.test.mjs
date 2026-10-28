@@ -188,6 +188,8 @@ test("fails on a non-literal module argument naming the package, and on unparsea
 // miniature repositories whose paths need percent-encoding or pass through a symlink.
 const SCRIPT = fileURLToPath(new URL("./rewrite-daemon-imports.mjs", import.meta.url));
 const REPO_NODE_MODULES = fileURLToPath(new URL("../node_modules", import.meta.url));
+// A Windows directory symlink needs SeCreateSymbolicLinkPrivilege; a junction links a directory without it.
+const DIR_LINK = process.platform === "win32" ? "junction" : undefined;
 
 function miniatureRepo(parent, name, compiled) {
   const root = join(parent, name);
@@ -197,7 +199,7 @@ function miniatureRepo(parent, name, compiled) {
   };
   mkdirSync(join(root, "scripts"), { recursive: true });
   copyFileSync(SCRIPT, join(root, "scripts", "rewrite-daemon-imports.mjs"));
-  symlinkSync(REPO_NODE_MODULES, join(root, "node_modules")); // the build's TypeScript, read-only
+  symlinkSync(REPO_NODE_MODULES, join(root, "node_modules"), DIR_LINK); // the build's TypeScript, read-only
   write("packages/daemon/package.json", JSON.stringify({ exports: { "./attention": { import: "./dist/attention-surface.js" } } }));
   write("packages/cli/daemon/dist/attention-surface.js", "export const a = 1;\n");
   write("packages/cli/dist/x.js", compiled);
@@ -211,7 +213,7 @@ test("runs when executed directly from paths with spaces, # or a symlinked paren
   const parent = realpathSync(mkdtempSync(join(tmpdir(), "rewrite-direct-")));
   const linked = join(realpathSync(tmpdir()), `rewrite-direct-link-${process.pid}`);
   try {
-    symlinkSync(parent, linked);
+    symlinkSync(parent, linked, DIR_LINK);
     const cases = [["plain", parent], ["with space", parent], ["with#hash", parent], ["space and #hash", parent], ["via link", linked]];
     for (const [name, base] of cases) {
       const root = miniatureRepo(parent, name, 'import { a } from "@openrig/daemon/attention";\n');
@@ -221,7 +223,7 @@ test("runs when executed directly from paths with spaces, # or a symlinked paren
       assert.equal(readFileSync(join(root, "packages/cli/dist/x.js"), "utf8"), 'import { a } from "../daemon/dist/attention-surface.js";\n', name);
     }
   } finally {
-    rmSync(linked, { force: true });
+    rmSync(linked, { recursive: true, force: true });
     rmSync(parent, { recursive: true, force: true });
   }
 });

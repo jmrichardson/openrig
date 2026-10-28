@@ -6,8 +6,9 @@
 // tie from a working folder inside `/a` and stopped with project_required, contradicting
 // the documented "deepest declared root that contains the working directory" rule.
 //
-// These are POSIX paths on purpose: the repo targets macOS and Linux only, and the
-// case under test (`/` as a declared root) cannot be built from a real temp directory.
+// The paths are this platform's resolution of `/`, `/a` and `/ws` (`C:\`, `C:\a` on
+// Windows, whose drive root has the same trailing empty segment): the case under test
+// (the filesystem root as a declared root) cannot be built from a real temp directory.
 // The filesystem is mocked rather than created, so the test never depends on the
 // machine's real top-level layout.
 
@@ -20,7 +21,7 @@ vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
   const fake = (p: unknown) => {
     const s = String(p);
-    return s === "/" || s === "/ws" || s.startsWith("/ws/") || s === "/a" || s.startsWith("/a/");
+    return s === FS_ROOT || s === WS || s.startsWith(WS + path.sep) || s === A || s.startsWith(A + path.sep);
   };
   return {
     ...actual,
@@ -34,9 +35,13 @@ vi.mock("node:fs", async (importOriginal) => {
   };
 });
 import type * as fs from "node:fs";
+import path from "node:path";
 import { inferCatalogProject, ProjectReadError } from "../src/domain/workspace/project-catalog.js";
 
-const CATALOG = "/ws/workspace.yaml";
+const FS_ROOT = path.resolve("/");
+const A = path.resolve("/a");
+const WS = path.resolve("/ws");
+const CATALOG = path.join(WS, "workspace.yaml");
 let catalogYaml = "";
 
 /** Roots are absolute, so path.resolve against the catalog's directory returns them untouched. */
@@ -50,14 +55,14 @@ function infer(cwd: string, warnings: string[] = []) {
 
 describe("inferCatalogProject working-directory depth", () => {
   it("prefers a nested root over the filesystem root", () => {
-    catalog({ id: "root", root: "/" }, { id: "alpha", root: "/a" });
-    expect(infer("/a/b")).toEqual({ id: "alpha", root: "/a", selectedBy: "cwd" });
+    catalog({ id: "root", root: FS_ROOT }, { id: "alpha", root: A });
+    expect(infer(path.join(A, "b"))).toEqual({ id: "alpha", root: A, selectedBy: "cwd" });
   });
 
   it("still reports a tie when two projects share the deepest root", () => {
-    catalog({ id: "alpha", root: "/a" }, { id: "alpha-again", root: "/a" });
+    catalog({ id: "alpha", root: A }, { id: "alpha-again", root: A });
     try {
-      infer("/a/b");
+      infer(path.join(A, "b"));
       expect.unreachable("expected project_required");
     } catch (err) {
       expect(err).toBeInstanceOf(ProjectReadError);
@@ -67,7 +72,7 @@ describe("inferCatalogProject working-directory depth", () => {
   });
 
   it("keeps ordering among nested roots, deepest first", () => {
-    catalog({ id: "alpha", root: "/a" }, { id: "beta", root: "/a/b" });
-    expect(infer("/a/b/c")).toEqual({ id: "beta", root: "/a/b", selectedBy: "cwd" });
+    catalog({ id: "alpha", root: A }, { id: "beta", root: path.join(A, "b") });
+    expect(infer(path.join(A, "b", "c"))).toEqual({ id: "beta", root: path.join(A, "b"), selectedBy: "cwd" });
   });
 });

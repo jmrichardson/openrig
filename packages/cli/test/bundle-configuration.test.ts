@@ -8,6 +8,7 @@ import { parse as parseYaml } from "yaml";
 import {
   readDeclaredConfigurations, authoredMapping, resolveConfiguration, listConfigurations, checkDeclaredConfigurations, stageConfiguration, ConfigurationError,
 } from "../src/lib/bundle-configuration.js";
+import { canCreateFileSymlinks } from "../../../test/symlink-capability.mjs";
 
 const RIG = `version: "0.2"
 name: openrig-dev
@@ -97,7 +98,8 @@ describe("bundle configurations", () => {
 
   const stagingCopies = () => fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith("rig-configuration-")).length;
 
-  it("a symlinked rig.yaml is staged as its own file, and the author's file it points to is unchanged", () => {
+  // The subject is a file symlink, which Windows creates only with SeCreateSymbolicLinkPrivilege.
+  it.skipIf(!canCreateFileSymlinks)("a symlinked rig.yaml is staged as its own file, and the author's file it points to is unchanged", () => {
     fs.renameSync(nodePath.join(rigDir, "rig.yaml"), nodePath.join(rigDir, "real.yaml"));
     fs.symlinkSync("real.yaml", nodePath.join(rigDir, "rig.yaml"));
     const chosen = resolveConfiguration(declared(), authored(), { preset: "all-pi" });
@@ -121,7 +123,9 @@ describe("bundle configurations", () => {
   });
 
   it("a staging failure removes the copy and says why", () => {
-    fs.symlinkSync("missing.md", nodePath.join(rigDir, "dangling.md"));
+    // Any dangling link fails the dereferencing copy; without the file-symlink privilege use a junction.
+    if (canCreateFileSymlinks) fs.symlinkSync("missing.md", nodePath.join(rigDir, "dangling.md"));
+    else fs.symlinkSync(nodePath.join(rigDir, "missing"), nodePath.join(rigDir, "dangling"), "junction");
     const chosen = resolveConfiguration(declared(), authored(), { preset: "all-pi" });
     const before = stagingCopies();
     expect(() => stageConfiguration(rigDir, nodePath.join(rigDir, "rig.yaml"), declared(), chosen)).toThrow(/couldn't stage a copy of/);

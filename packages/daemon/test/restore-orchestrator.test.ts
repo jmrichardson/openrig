@@ -5351,9 +5351,9 @@ describe("RestoreOrchestrator", () => {
       expect(result.ok).toBe(true);
       const delivered = deliverStartup.mock.calls.flatMap((c) => c[0] as Array<{ path: string; absolutePath: string; ownerRoot: string; required: boolean; appliesOn: string[]; deliveryHint: string }>);
       const culture = delivered.filter((f) => f.path === "CULTURE-default.md");
-      expect(culture.map((f) => f.absolutePath).sort()).toEqual([`${RUNNING_ASSETS}/guidance/CULTURE-default.md`, "/user-rig/CULTURE-default.md"].sort());
+      expect(culture.map((f) => f.absolutePath).sort()).toEqual([path.join(RUNNING_ASSETS, "guidance/CULTURE-default.md"), "/user-rig/CULTURE-default.md"].sort());
       expect(delivered.find((f) => f.path === "openrig-start.md")).toMatchObject({
-        absolutePath: `${RUNNING_ASSETS}/guidance/openrig-start.md`, ownerRoot: RUNNING_ASSETS,
+        absolutePath: path.join(RUNNING_ASSETS, "guidance/openrig-start.md"), ownerRoot: RUNNING_ASSETS,
         required: true, appliesOn: ["fresh_start", "restore"], deliveryHint: "guidance_merge",
       });
       expect(delivered.some((f) => f.absolutePath.startsWith("/old-openrig"))).toBe(false);
@@ -5367,12 +5367,12 @@ describe("RestoreOrchestrator", () => {
       expect(result.ok).toBe(true);
       const delivered = deliverStartup.mock.calls.flatMap((c) => c[0] as Array<{ absolutePath: string }>);
       expect(delivered.some((f) => f.absolutePath.startsWith("/old-openrig"))).toBe(false);
-      expect(delivered.some((f) => f.absolutePath === `${RUNNING_ASSETS}/guidance/CULTURE-default.md`)).toBe(true);
+      expect(delivered.some((f) => f.absolutePath === path.join(RUNNING_ASSETS, "guidance/CULTURE-default.md"))).toBe(true);
     });
 
     it("a genuinely missing CURRENT built-in still blocks restore honestly, naming the running path", async () => {
       const { snap, adapter } = seedPodAware(false);
-      const runningCulture = `${RUNNING_ASSETS}/guidance/CULTURE-default.md`;
+      const runningCulture = path.join(RUNNING_ASSETS, "guidance/CULTURE-default.md");
       const result = await createOrchestrator().restore(snap.id, {
         adapters: { "claude-code": adapter }, fsOps: { exists: (p) => notOld(p) && p !== runningCulture }, freshLogicalIds: ["dev.impl"],
       });
@@ -5395,7 +5395,7 @@ describe("RestoreOrchestrator", () => {
       });
       expect(result.ok).toBe(true);
       const projected = adapter.project.mock.calls.flatMap((c) => ((c[0] as { entries: Array<{ effectiveId: string; absolutePath: string }> }).entries));
-      expect(projected.find((e) => e.effectiveId === "shared:claude-default-mcp")?.absolutePath).toBe(`${RUNNING_SPECS}/agents/shared/runtime/claude-mcp.fragment.json`);
+      expect(projected.find((e) => e.effectiveId === "shared:claude-default-mcp")?.absolutePath).toBe(path.join(RUNNING_SPECS, "agents/shared/runtime/claude-mcp.fragment.json"));
       expect(projected.find((e) => e.effectiveId === "shared:openrig-core")?.absolutePath).toBe("/home/u/.openrig/plugins/openrig-core");
       if (result.ok) {
         const drift = (result.result.warnings ?? []).filter((w) => w.includes("projection_drift"));
@@ -5417,7 +5417,7 @@ describe("RestoreOrchestrator", () => {
       });
       expect(result.ok).toBe(true);
       const delivered = deliverStartup.mock.calls.flatMap((c) => (c[0] as Array<{ absolutePath: string }>).map((f) => f.absolutePath));
-      expect(delivered.sort()).toEqual([`${RUNNING_SPECS}/rigs/launch/kernel/culture/CULTURE.md`, "/user-rig/CULTURE-default.md"].sort());
+      expect(delivered.sort()).toEqual([path.join(RUNNING_SPECS, "rigs/launch/kernel/culture/CULTURE.md"), "/user-rig/CULTURE-default.md"].sort());
     });
 
     it("restores a stored first-project culture from the upgraded shipped tree", async () => {
@@ -5439,8 +5439,8 @@ describe("RestoreOrchestrator", () => {
       expect(result.ok).toBe(true);
       const delivered = deliverStartup.mock.calls.flatMap((c) => c[0] as Array<typeof culture>);
       expect(delivered).toEqual([{
-        ...culture, absolutePath: `${RUNNING_SPECS}/rigs/launch/first-project/CULTURE.md`,
-        ownerRoot: `${RUNNING_SPECS}/rigs/launch/first-project`,
+        ...culture, absolutePath: path.join(RUNNING_SPECS, "rigs/launch/first-project/CULTURE.md"),
+        ownerRoot: path.join(RUNNING_SPECS, "rigs/launch/first-project"),
       }]);
       expect(fs.readFileSync(delivered[0]!.absolutePath, "utf8")).toContain("ask dev-check for an independent check");
     });

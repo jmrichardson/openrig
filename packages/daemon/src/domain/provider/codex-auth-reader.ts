@@ -7,7 +7,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { userInfo } from "node:os";
+import { homedir, userInfo } from "node:os";
 
 export interface CodexSeatRow {
   seat: string;
@@ -47,8 +47,10 @@ function accountHome(): string {
   try { return userInfo().homedir ?? ""; } catch { return ""; }
 }
 
-function resolveCodexHome(env: NodeJS.ProcessEnv): { profileDir: string; registryPath: string } {
-  const home = typeof env.HOME === "string" && env.HOME.length > 0 ? env.HOME : accountHome();
+function resolveCodexHome(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): { profileDir: string; registryPath: string } {
+  // Codex on Windows uses the profile folder, never HOME, as does the CLI's codex-auth that writes these files.
+  const home = platform === "win32" ? env.USERPROFILE || homedir()
+    : typeof env.HOME === "string" && env.HOME.length > 0 ? env.HOME : accountHome();
   const codexHome =
     typeof env.CODEX_HOME === "string" && env.CODEX_HOME.length > 0
       ? env.CODEX_HOME
@@ -106,8 +108,8 @@ function readSeats(registryPath: string): { seats: CodexSeatRow[]; registry: Cod
 
 /** Read the codex-auth on-disk METADATA (profile names + seat registry). Never throws; never
  *  surfaces token-class content. Absent home/files yield empty arrays. */
-export function readCodexAuthMetadata(env: NodeJS.ProcessEnv = process.env): CodexAuthMetadata {
-  const { profileDir, registryPath } = resolveCodexHome(env);
+export function readCodexAuthMetadata(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): CodexAuthMetadata {
+  const { profileDir, registryPath } = resolveCodexHome(env, platform);
   const { seats, registry } = readSeats(registryPath);
   const { profiles, profilesRead } = listProfiles(profileDir);
   return {

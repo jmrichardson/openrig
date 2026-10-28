@@ -3,7 +3,7 @@ import { allowFetchTarget } from "./fetch-guard.js";
 import http from "node:http";
 import { execFileSync, execSync, spawnSync } from "node:child_process";
 import { Command } from "commander";
-import { attachCommand, resolveAttachContext } from "../src/commands/attach.js";
+import { attachCommand, attachEnvironment, resolveAttachContext } from "../src/commands/attach.js";
 import { DaemonClient } from "../src/client.js";
 import { STATE_FILE, type LifecycleDeps, type DaemonState } from "../src/daemon-lifecycle.js";
 import type { StatusDeps } from "../src/commands/status.js";
@@ -136,7 +136,9 @@ describe("Attach CLI", () => {
 
   it("attach --self --print-env prints shell exports only", async () => {
     const { logs, exitCode } = await captureLogs(async () => {
-      await makeCmd().parseAsync(["node", "rig", "attach", "--self", "--rig", "rig-1", "--node", "orch1.lead", "--print-env"]);
+      // Windows defaults --print-env to PowerShell syntax; POSIX has no --shell option.
+      await makeCmd().parseAsync(["node", "rig", "attach", "--self", "--rig", "rig-1", "--node", "orch1.lead", "--print-env",
+        ...(process.platform === "win32" ? ["--shell", "posix"] : [])]);
     });
 
     expect(exitCode).toBeUndefined();
@@ -144,6 +146,22 @@ describe("Attach CLI", () => {
       "export OPENRIG_NODE_ID='node-1'",
       "export OPENRIG_SESSION_NAME='orch1-lead@rigged-buildout'",
     ]);
+  });
+
+  it.runIf(process.platform === "win32")("attach --self --print-env prints PowerShell assignments by default on Windows", async () => {
+    const { logs, exitCode } = await captureLogs(async () => {
+      await makeCmd().parseAsync(["node", "rig", "attach", "--self", "--rig", "rig-1", "--node", "orch1.lead", "--print-env"]);
+    });
+
+    expect(exitCode).toBeUndefined();
+    expect(logs).toEqual([
+      "$env:OPENRIG_NODE_ID='node-1'",
+      "$env:OPENRIG_SESSION_NAME='orch1-lead@rigged-buildout'",
+    ]);
+  });
+
+  it.skipIf(process.platform === "win32")("attach has no --shell option off Windows", () => {
+    expect(attachCommand(runningDeps(port)).options.map((option) => option.long)).not.toContain("--shell");
   });
 
   it("attach rejects missing --self", async () => {
@@ -170,6 +188,36 @@ describe("Attach CLI", () => {
 
     expect(exitCode).toBe(1);
     expect(logs.some((line) => line.includes("Pod attach requires"))).toBe(true);
+  });
+
+  it("renders literal PowerShell identity assignments without POSIX exports", () => {
+    expect(attachEnvironment("node'$(literal)", "seat&one", "powershell")).toEqual([
+      "$env:OPENRIG_NODE_ID='node''$(literal)'",
+      "$env:OPENRIG_SESSION_NAME='seat&one'",
+    ]);
+  });
+
+  it("doubles the Unicode single quotes that also end a PowerShell literal", () => {
+    expect(attachEnvironment("n", "O’Neil's ‘‚‛", "powershell")).toEqual([
+      "$env:OPENRIG_NODE_ID='n'",
+      "$env:OPENRIG_SESSION_NAME='O’’Neil''s ‘‘‚‚‛‛'",
+    ]);
+  });
+
+  it("renders POSIX exports with only the ASCII quote escaped", () => {
+    expect(attachEnvironment("node'$(literal)", "O’Neil's", "posix")).toEqual([
+      "export OPENRIG_NODE_ID='node'\\''$(literal)'",
+      "export OPENRIG_SESSION_NAME='O’Neil'\\''s'",
+    ]);
+  });
+
+  it.runIf(process.platform === "win32")("round-trips PowerShell assignments through Windows PowerShell without running the value", async () => {
+    const { execFileSync } = await import("node:child_process");
+    const value = "x’; Write-Output INJECTED; ’ ‘a’ ‚b‛ 'c'";
+    // Each line runs as Invoke-Expression would parse it.
+    const script = `[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); ${attachEnvironment(value, value, "powershell").join("; ")}; Write-Output $env:OPENRIG_NODE_ID $env:OPENRIG_SESSION_NAME`;
+    const out = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], { encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+    expect(out.split(/\r?\n/).filter(Boolean)).toEqual([value, value]);
   });
 
   it("resolveAttachContext detects tmux session metadata when TMUX_PANE is set", () => {

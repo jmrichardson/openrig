@@ -104,6 +104,6 @@ describe("resolveDaemonDbPath — prefer daemon.json.db, flag relative", () => {
 
   it("falls back to $OPENRIG_HOME/openrig.sqlite when there is no state file", () => {
     const r = resolveDaemonDbPath("/home/.openrig", () => undefined);
-    expect(r).toEqual({ path: "/home/.openrig/openrig.sqlite", fromStateFile: false, relative: false });
+    expect(r).toEqual({ path: join("/home/.openrig", "openrig.sqlite"), fromStateFile: false, relative: false });
   });
 });

@@ -6,6 +6,7 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { parse } from "yaml";
 import { parseAddress, parseMarkdownSections, resolveAddress, slugifyHeader } from "./markdown-address.js";
 import type { ContextPackLibraryService } from "./context-packs/context-pack-library-service.js";
+import { contextRefNames } from "./workflow-planning-context.js";
 
 type Mapping = Record<string, any>;
 type Source = { kind: string; path: string; sha256: string; binding: "matches-bound" | "differs-from-bound" | "not-bound" };
@@ -52,13 +53,13 @@ export function readWorkflowGuidance(input: GuidanceInput) {
   };
   try {
     for (const kind of ["project", "mission"]) {
-      const paths = refs.filter(ref => basename(ref) === kind + ".yaml");
+      const paths = refs.filter(ref => contextRefNames(ref, kind + ".yaml"));
       if (paths.length > 1) throw Error("Multiple " + kind + " sources; select unambiguous authored context: " + paths.join(", "));
       if (paths[0]) readManifest(kind, paths[0]);
     }
     // Bound members are membership, not the active slice. Only an explicit
     // context or a legacy slice's exact executable identity establishes it.
-    const slicePaths = refs.filter(ref => basename(ref) === "slice.yaml");
+    const slicePaths = refs.filter(ref => contextRefNames(ref, "slice.yaml"));
     if ((input.binding?.graphSource as Mapping | undefined)?.mode === "legacy-slices" && input.stepId) {
       for (const source of bound.filter(s => s.kind === "slice")) {
         const doc = mapping(parse(readFileSync(source.path, "utf8")), source.path);
@@ -119,7 +120,7 @@ export function readWorkflowGuidance(input: GuidanceInput) {
       const {ref, headerPath} = parseAddress(string(catalog.address, catalogSource + "#sdlc.catalog.address"));
       if (catalog.root !== undefined && catalog.root !== "repository") throw Error("Unknown SDLC catalog root: " + String(catalog.root));
       if (catalog.root === "repository") {
-        const repository = execFileSync("git", ["-C", dirname(catalogSource), "rev-parse", "--show-toplevel"], {encoding:"utf8", stdio:["ignore","pipe","pipe"], timeout:2000}).trim();
+        const repository = execFileSync("git", ["-C", dirname(catalogSource), "rev-parse", "--show-toplevel"], {encoding:"utf8", stdio:["ignore","pipe","pipe"], timeout:2000, windowsHide:true}).trim();
         catalogPath = resolve(repository, ref);
       } else if (ref.startsWith("$OPENRIG_HOME/")) {
         if (!process.env.OPENRIG_HOME) throw Error("OPENRIG_HOME is unavailable for " + ref);

@@ -4,7 +4,7 @@
 // context; a spec without topology/ is a normal no-op; failures are named,
 // never thrown (a rig launch must not die on a defaults copy).
 import { describe, it, expect } from "vitest";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { installTopologyDefaults, type TopologyDefaultsFsOps } from "../src/domain/topology-defaults-installer.js";
 
 const SPEC = "/specs/product-team";
@@ -13,7 +13,7 @@ const ROOT = "/inst/topology";
 function memFs(initial: Record<string, string>): { ops: TopologyDefaultsFsOps; files: Record<string, string>; dirs: Set<string> } {
   const files = { ...initial };
   const dirs = new Set<string>();
-  const isDir = (p: string) => dirs.has(p) || Object.keys(files).some((f) => f.startsWith(p + "/"));
+  const isDir = (p: string) => dirs.has(p) || Object.keys(files).some((f) => f.startsWith(p + sep));
   return {
     files,
     dirs,
@@ -21,11 +21,11 @@ function memFs(initial: Record<string, string>): { ops: TopologyDefaultsFsOps; f
       exists: (p) => p in files,
       isDirectory: isDir,
       listFiles: (d) => Object.keys(files)
-        .filter((f) => f.startsWith(d + "/") && !f.slice(d.length + 1).includes("/"))
+        .filter((f) => f.startsWith(d + sep) && !f.slice(d.length + 1).includes(sep))
         .map((f) => f.slice(d.length + 1)),
       listDirs: (d) => [...new Set(Object.keys(files)
-        .filter((f) => f.startsWith(d + "/") && f.slice(d.length + 1).includes("/"))
-        .map((f) => f.slice(d.length + 1).split("/")[0]!))],
+        .filter((f) => f.startsWith(d + sep) && f.slice(d.length + 1).includes(sep))
+        .map((f) => f.slice(d.length + 1).split(sep)[0]!))],
       read: (p) => {
         const v = files[p];
         if (v === undefined) throw new Error(`ENOENT: ${p}`);

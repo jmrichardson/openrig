@@ -118,7 +118,7 @@ function fixture() {
     `        agent_ref: "local:agents/impl"`,
     `        profile: default`,
     `        runtime: claude-code`,
-    `        cwd: "${cwd}"`,
+    `        cwd: ${JSON.stringify(cwd)}`,
     `        env:`,
     `          SHARED: from-member`,
     `          MEMBER_ONLY: member`,
@@ -126,7 +126,7 @@ function fixture() {
     `        agent_ref: "local:agents/impl"`,
     `        profile: default`,
     `        runtime: claude-code`,
-    `        cwd: "${cwd}"`,
+    `        cwd: ${JSON.stringify(cwd)}`,
     `    edges: []`,
     `edges: []`,
   ].join("\n") + "\n";

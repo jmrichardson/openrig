@@ -99,12 +99,13 @@ function substitutions(text) {
 
 // Decode literal shell words without executing anything. Keep command boundaries
 // for lifecycle asks, but never allow an entire compound/expanding command.
-function words(command, comments = true) {
+// `powershell` marks a word with a backslash escape in double quotes (a PowerShell backtick there) as `escaped`.
+function words(command, comments = true, powershell = false) {
   const commands = [];
-  let tokens = [], word = "", started = false, literal = true, quote = "", simple = true, rawWord = "";
+  let tokens = [], word = "", started = false, literal = true, quote = "", simple = true, rawWord = "", escaped = false;
   const flush = () => {
-    if (started) tokens.push({ value: word, literal, assignment: /^[A-Za-z_][A-Za-z0-9_]*=/.test(rawWord) });
-    word = ""; rawWord = ""; started = false; literal = true;
+    if (started) tokens.push({ value: word, literal, assignment: /^[A-Za-z_][A-Za-z0-9_]*=/.test(rawWord), escaped });
+    word = ""; rawWord = ""; started = false; literal = true; escaped = false;
   };
   const boundary = () => { flush(); if (tokens.length) commands.push(tokens); tokens = []; };
   for (let i = 0; i < command.length; i++) {
@@ -117,6 +118,7 @@ function words(command, comments = true) {
       if (next === undefined) { simple = false; literal = false; break; }
       if (next !== "\n") word += quote === '"' && !'$`"\\'.includes(next) ? "\\" + next : next;
       started = true;
+      if (powershell && quote === '"') escaped = true;
     } else if (quote === '"') {
       if (c === '"') quote = "";
       else { word += c; if (c === "$" || c === "`") { literal = false; simple = false; } }
@@ -137,7 +139,12 @@ function words(command, comments = true) {
   return { commands, simple: simple && commands.length === 1 };
 }
 
-function normalize(tokens, forAllow = false) {
+// PowerShell resolves a command name case-insensitively and finds rig.cmd, rig.ps1 or rig.exe for `rig`.
+function commandName(value, powershell) {
+  return powershell ? basename(value).toLowerCase().replace(/\.(?:cmd|ps1|bat|exe)$/, "") : basename(value);
+}
+
+function normalize(tokens, forAllow = false, powershell = false) {
   const result = [...tokens];
   while (result.length) {
     const first = result[0];
@@ -159,7 +166,7 @@ function normalize(tokens, forAllow = false) {
   if (!result[0]?.literal) return [];
   const executable = result[0].value;
   if (forAllow && executable.includes("/") && !isAbsolute(executable)) return [];
-  result[0] = { value: basename(executable), literal: true };
+  result[0] = { value: commandName(executable, powershell), literal: true };
   if (/\/(?:node_modules\/\.bin)\/(vitest|jest)$/.test(executable)) {
     result.unshift({ value: "npx", literal: true });
   }
@@ -175,13 +182,16 @@ function normalize(tokens, forAllow = false) {
   return result;
 }
 
-function prefixEnd(tokens, prefix) {
+function prefixEnd(tokens, prefix, powershell = false) {
   let i = 0;
   for (const part of prefix) {
     // Commander accepts separators before a subcommand, including at root.
     // A separator AFTER the lifecycle prefix still terminates help options.
     while (prefix[0] === "rig" && i > 0 && tokens[i]?.literal && tokens[i].value === "--") i++;
-    if (!tokens[i]?.literal || tokens[i].value !== part) return undefined;
+    // A PowerShell expression where a lifecycle word belongs ($x, $(...), @splat) may be that word, so it matches, as
+    // does a word holding an escape the reading left in place.
+    if (powershell && i > 0 && tokens[i] && (!tokens[i].literal || tokens[i].escaped)) return i;
+    if (!tokens[i]?.literal || (powershell ? tokens[i].value.toLowerCase() : tokens[i].value) !== part) return undefined;
     i++;
   }
   return i;
@@ -206,31 +216,38 @@ function helpOnly(tokens, prefixLength) {
     && args.slice(0, help).every(t => !t.value.startsWith("-"));
 }
 
-function decide(command, policy, depth = 0) {
+function decide(command, policy, depth = 0, powershell = false) {
   if (depth > 4) return undefined;
   const { main, expanding } = splitHeredocs(command);
   // Substitutions in double quotes and unquoted heredocs still execute. Literal
   // multiline strings and quoted heredocs are data, not lifecycle invocations.
   for (const source of [scanQuotes(main, true).text, ...expanding]) {
     for (const inner of substitutions(source)) {
-      if (decide(inner, policy, depth + 1) === "ask") return "ask";
+      if (decide(inner, policy, depth + 1, powershell) === "ask") return "ask";
     }
   }
-  const parsed = words(main.trim());
+  const parsed = words(main.trim(), true, powershell);
   const asks = prefixes(policy.ask);
   const askExecutables = new Set(asks.map(prefix => prefix[0]));
   // Retain comment text for asks too: a # inside backticks or ${...} must not
   // hide a later command. Keep the comment-aware scan as well, so quotes in a
   // real comment cannot swallow the following line. Allow parsing is unchanged.
-  for (const command of [...parsed.commands, ...words(main.trim(), false).commands]) {
+  for (let command of [...parsed.commands, ...words(main.trim(), false, powershell).commands]) {
+    // Windows PowerShell passes no argument for an empty string, so `rig '' down` runs `rig down`.
+    if (powershell) command = command.filter(t => !t.literal || t.value);
+    // PowerShell: cmd.exe parses the command line of a batch file (rig.cmd) or of cmd itself once more.
+    const batch = powershell && depth === 0 ? command.findIndex(t => t.literal && /^(?:rig|cmd|cmd\.exe|.+\.(?:cmd|bat))$/i.test(basename(t.value))) : -1;
+    const cmd = batch !== -1 && /^cmd(?:\.exe)?$/i.test(basename(command[batch].value));
+    if (batch !== -1 && (cmd || command.slice(batch + 1).some(t => /[&|<>^%"]/.test(t.value)))
+      && decide(batchCommandLine(command.slice(batch), cmd), policy, 1, true) === "ask") return "ask";
     // ponytail: ask conservatively at every word position rather than owning a
     // second shell grammar for wrappers/control flow. Unquoted prose may ask;
     // quoted messages remain single words, and literal heredoc bodies are gone.
     for (let i = 0; i < command.length; i++) {
-      if (!command[i].literal || !askExecutables.has(basename(command[i].value))) continue;
-      const tokens = normalize(command.slice(i));
+      if (!command[i].literal || !askExecutables.has(commandName(command[i].value, powershell))) continue;
+      const tokens = normalize(command.slice(i), false, powershell);
       for (const prefix of asks) {
-        const end = prefixEnd(tokens, prefix);
+        const end = prefixEnd(tokens, prefix, powershell);
         if (end !== undefined && !helpOnly(tokens, end)) return "ask";
       }
     }
@@ -240,7 +257,164 @@ function decide(command, policy, depth = 0) {
   return prefixes(policy.allow).some(prefix => prefixEnd(tokens, prefix) !== undefined) ? "allow" : undefined;
 }
 
-module.exports = { decide };
+// PowerShell text for the conservative scan above. A backslash is a path separator there, the backtick is the
+// escape character (and joins lines), braces always delimit a script block, and --% passes the rest of the
+// statement on as written. ';', newlines, '|', '&&', '||' and the call operator '&' already end a command.
+function powershellAsShell(command) {
+  return command.replace(/\\/g, "/").replace(/`\r?\n/g, " ").replace(/`/g, "\\").replace(/[{}]/g, " $& ")
+    .replace(/(^|\s)--%(?=\s|$)/g, "$1");
+}
+
+// A here-string's own quotes do not end it: @'...'@ is literal and @"..."@ expands only its $(...) parts.
+// It closes with '@ or "@ at the start of a line.
+function withoutHereStrings(command) {
+  return command.replace(/@(['"])[ \t]*\r?\n(?:([\s\S]*?)\r?\n)??\1@/g, (_, quote, body = "") => quote + body.replace(/['"]/g, "") + quote);
+}
+
+// PowerShell text as its tokenizer reads it, for the scan above. Outside strings, a block comment (<#...#>) or a line
+// comment that starts a token is dropped as PowerShell drops it, so `rig <# c #> down` reads as `rig down`; any other
+// # or < is plain text. A braced variable ${...}, whose name may hold quotes, reads as $v. (...), @(...) and @splat
+// in argument position read as $(...) and $splat, so prefixEnd treats them as a possible lifecycle word. A string that
+// starts a token also ends it ('seat'"stop" is two words). A here-string becomes a plain string, a $(...) in a string
+// moves out of it, and the rest of a --% line goes on without quotes, %NAME% reading as a variable. `loose` also
+// starts a comment after an operator character such as =, as expression mode does, and a block comment anywhere;
+// `redirects: false` drops each redirection with its target, since `rig 2>$null down` still passes `down`.
+// A backtick escapes the next character, in a double-quoted string too ("d`own" is down), but `0 `a `b `e `f `n `r `t
+// `v and `u{...} stand for other characters (`0 also ends a native command line) and read as a variable.
+// `statements` also reads an assignment operator (=, +=, ??= and the like) or @{ as the start of a statement, since
+// `$x=rig down x` and `@{a=rig down x}` run `rig down x`. A call or dot-source operator (& or .) before a command
+// name PowerShell computes ($x, (...), @(...), [type]..., r$x, a string that expands, a `u{...} escape) throws, so the
+// command asks whatever follows; so does a bare command name holding `u{...}, which PowerShell 7 may read as rig.
+function powershellReading(text, { loose = false, redirects = true, statements = false } = {}) {
+  const boundary = loose ? /[\s;|&(){},=+*/%!]/ : /[\s;|&(){}]/, hereOpen = /[ \t]*\r?\n/y, special = /[0abefnrtvu]/;
+  const gap = /(?:[ \t]|`\r?\n)*/y, unicodeName = /(?:[^\s;|&(){}<>'"`=]|`[^u])*`u/y,
+    computedWord = /(?:[^\s;|&(){}<>`$]|`[^u])*(?:`u|\$)/y;
+  let i = 0, level = 0;
+  function braced() {
+    for (i += 2; i < text.length && text[i] !== "}"; i++) if (text[i] === "`") i++;
+    i++;
+    return "$v";
+  }
+  // Whether the command name at j, after & or ., is one PowerShell computes. A script block is read as code.
+  function computedName(j) {
+    gap.lastIndex = j; gap.test(text); j = gap.lastIndex;
+    const c = text[j], next = text[j + 1] ?? "";
+    if (c === '"') {
+      for (let k = j + 1; k < text.length; k++) {
+        if (text[k] === "$" || (text[k] === "`" && special.test(text[k + 1] ?? ""))) return true;
+        if (text[k] === "`") k++;
+        else if (text[k] === '"' && text[++k] !== '"') return false;
+      }
+      return true;
+    }
+    if (c === "$" || c === "(" || c === "[" || (c === "@" && next !== "'")) return true;
+    // A bare name holding a variable or a `u{...} escape.
+    computedWord.lastIndex = j;
+    return computedWord.test(text);
+  }
+  function quoted() {
+    const here = text[i] === "@", q = text[here ? i + 1 : i];
+    let out = "";
+    for (i += here ? 2 : 1; i < text.length;) {
+      const c = text[i], next = text[i + 1];
+      if (here ? c === "\n" && next === q && text[i + 2] === "@" : c === q && next !== q) { i += here ? 3 : 1; return q + out + q; }
+      if (c === q) { i += here ? 1 : 2; continue; } // '' or "" (an escaped quote), or a here-string's own quote
+      if (q === '"' && c === "`") {
+        out += next === undefined ? c : special.test(next) ? "$" + next : /["$`\r\n]/.test(next) ? c + next : next;
+        i += 2; continue;
+      }
+      if (q === '"' && c === "$" && next === "(") { i += 2; out += `${q} $(${code(true)}) ${q}`; continue; }
+      if (q === '"' && c === "$" && next === "{") { out += braced(); continue; }
+      out += c; i++;
+    }
+    return q + out + q;
+  }
+  function redirection() {
+    if (text[i] !== ">") i++;
+    i += text[i + 1] === ">" ? 2 : 1;
+    if (text[i] === "&" && /[1-6]/.test(text[i + 1] ?? "")) { i += 2; return; }
+    while (text[i] === " " || text[i] === "\t") i++;
+    while (i < text.length && !/[\s;|&(){}<>]/.test(text[i])) {
+      if (text[i] === "'" || text[i] === '"') quoted();
+      else if (text[i] === "$" && text[i + 1] === "(") { i += 2; code(true); }
+      else if (text[i] === "$" && text[i + 1] === "{") braced();
+      else i += text[i] === "`" ? 2 : 1;
+    }
+  }
+  function code(sub) {
+    if (++level > 64) throw new RangeError("PowerShell strings and subexpressions nest too deeply");
+    // `statement`: at the start of a statement, where a command name (or the dot-source operator) can stand.
+    let out = "", depth = 0, start = true, statement = true;
+    while (i < text.length) {
+      const c = text[i], next = text[i + 1] ?? "";
+      if (statement && (unicodeName.lastIndex = i, unicodeName.test(text))) throw new Error("a `u{...} escape in a command name");
+      if (c === "`") {
+        out += special.test(next) ? "$" + next : c + next; i += 2;
+        start = next === "\n" || next === "\r"; statement &&= start; continue;
+      }
+      if (c === "@" && (next === "'" || next === '"') && ((hereOpen.lastIndex = i + 2), hereOpen.test(text))) { out += quoted() + " "; start = true; statement = false; continue; }
+      if (c === "'" || c === '"') { const began = start; out += quoted() + (began ? " " : ""); start = began; statement = false; continue; }
+      if ((start || loose) && c === "<" && next === "#") { const end = text.indexOf("#>", i + 2); i = end === -1 ? text.length : end + 2; out += " "; continue; }
+      if (start && c === "#") { while (i < text.length && text[i] !== "\n") i++; continue; }
+      if (c === "$" && next === "{") { out += braced(); start = false; statement = false; continue; }
+      if ((c === "&" && next !== "&" && text[i - 1] !== "&" && text[i - 1] !== ">") || (statement && c === "." && /[\s$('"@{]/.test(next))) {
+        if (computedName(i + 1)) throw new Error("a call operator before a computed command name");
+        out += c + " "; i++; start = true; statement = false; continue;
+      }
+      if (statements && (c === "=" || (c === "@" && next === "{"))) { out += " ; "; i += c === "=" ? 1 : 2; start = true; statement = true; continue; }
+      if (start && text.startsWith("--%", i) && !/\S/.test(text[i + 3] ?? "")) {
+        const end = text.includes("\n", i) ? text.indexOf("\n", i) : text.length;
+        out += " " + text.slice(i + 3, end).replace(/['"]/g, "").replace(/%([^%\s]+)%/g, "$$$1");
+        i = end; continue;
+      }
+      if (!redirects && (c === ">" || (start && /[1-6*]/.test(c) && next === ">"))) { redirection(); out += " "; start = true; continue; }
+      if (start && c === "@" && /[\w(?]/.test(next)) { out += "$"; i++; start = false; statement = false; continue; }
+      if (start && c === "(") out += "$";
+      if (sub && c === "(") depth++;
+      else if (sub && c === ")" && depth-- === 0) { i++; level--; return out; }
+      out += c === "#" || c === "<" ? "`" + c : c;
+      i++;
+      start = boundary.test(c);
+      statement = /[;|&({=\n]/.test(c) || (statement && /[ \t\r]/.test(c));
+    }
+    level--;
+    return out;
+  }
+  return code(false);
+}
+
+// What cmd.exe reads for a batch file or cmd: Windows PowerShell quotes an argument only when it holds whitespace, so an
+// & | < > in another argument (or after a quote inside one) starts a new command there. ^ escapes and %NAME% expands.
+// cmd /c also removes the quotes around its command, so its arguments are read unquoted.
+function batchCommandLine(tokens, cmd) {
+  return tokens.map(t => !cmd && /\s/.test(t.value) ? `"${t.value}"` : t.value).join(" ")
+    .replace(/\\/g, "/").replace(/['`]/g, "").replace(/#/g, "\\#").replace(/\^(.)/g, "\\$1").replace(/%([^%\s]+)%/g, "$$$1");
+}
+
+// Longer PowerShell commands ask unread: the scan is quadratic in places, and a hook that times out lets the command run.
+const POWERSHELL_SCAN_LIMIT = 16 * 1024;
+
+// Claude's PowerShell tool (native Windows). Only asks, as a second check: Claude's own PowerShell(...) rules own the
+// allowances, and its native ask rules see the lifecycle commands first.
+// Like the comment-aware and comment-blind scans, each reading can ask: the text as written and with here-strings
+// read as plain strings, and PowerShell's own tokenizer reading, strict and loose, with and without
+// redirections, and loose again with assignments starting statements.
+function decidePowerShell(command, policy) {
+  if (!prefixes(policy.ask).length) return undefined;
+  // A NUL ends a native command line, so whatever follows it (--help, say) never reaches rig.
+  if (command.length > POWERSHELL_SCAN_LIMIT || command.includes("\0")) return "ask";
+  // PowerShell also reads U+2018-U+201B as single quotes and U+201C-U+201E as double quotes.
+  const text = command.replace(/[‘-‛]/g, "'").replace(/[“-„]/g, '"');
+  const readings = [text, withoutHereStrings(text)];
+  try {
+    for (const loose of [false, true]) for (const redirects of [true, false]) readings.push(powershellReading(text, { loose, redirects }));
+    readings.push(powershellReading(text, { loose: true, redirects: false, statements: true }));
+  } catch { return "ask"; } // nested too deeply to read, or a command name PowerShell computes
+  // Readings often coincide; each distinct one is scanned once.
+  return [...new Set(readings.map(powershellAsShell))].some(reading => decide(reading, policy, 0, true) === "ask") ? "ask" : undefined;
+}
+
+module.exports = { decide, decidePowerShell };
 if (require.main === module) {
   let raw = "";
   process.stdin.setEncoding("utf8");
@@ -248,9 +422,11 @@ if (require.main === module) {
   process.stdin.on("end", () => {
     try {
       const input = JSON.parse(raw);
-      if (input.tool_name !== "Bash" || typeof input.tool_input?.command !== "string") return;
+      // Only the native Windows launch settings register this hook for PowerShell.
+      const decideFor = input.tool_name === "Bash" ? decide : input.tool_name === "PowerShell" ? decidePowerShell : undefined;
+      if (!decideFor || typeof input.tool_input?.command !== "string") return;
       const policy = JSON.parse(Buffer.from(process.argv[2], "base64").toString("utf8"));
-      const decision = decide(input.tool_input.command, policy);
+      const decision = decideFor(input.tool_input.command, policy);
       if (decision) process.stdout.write(JSON.stringify({ hookSpecificOutput: {
         hookEventName: "PreToolUse", permissionDecision: decision,
         permissionDecisionReason: decision === "ask"

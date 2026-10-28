@@ -66,9 +66,10 @@ describe.runIf(process.platform === "linux")("seat environment from a daemon sta
       },
     });
     scaffolds.push(scaffold);
+    // On Windows psmux finds the scaffold's server through PSMUX_DATA_DIR as well as -S.
     const tmux = (args: string[], env: Record<string, string | undefined> = process.env) =>
       run("tmux", ["-S", scaffold.tmuxSocketPath, ...args], {
-        env: { ...env, PATH: process.env.PATH, TMUX: undefined, TMUX_TMPDIR: undefined } as NodeJS.ProcessEnv,
+        env: { ...env, PATH: process.env.PATH, TMUX: undefined, TMUX_TMPDIR: undefined, PSMUX_DATA_DIR: scaffold.env.PSMUX_DATA_DIR } as NodeJS.ProcessEnv,
       });
     const environOf = (pid: string): Record<string, string> => parseEnv(readFileSync(`/proc/${pid}/environ`, "utf8"), "\0");
     const staged = stageTopologyRoot(join(HERE, "fixtures", "scenarios", "topo-stub-baton.yaml"), join(scaffold.root, "topology"));

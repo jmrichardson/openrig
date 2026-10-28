@@ -2,6 +2,7 @@ import { observeClaudePaneProcess, observeClaudePaneRuntime, observeCodexPanePro
 import { isShellForeground } from "./shell-classifier.js";
 import { claudeResumeRotation } from "./session-registry.js";
 import { randomUUID } from "node:crypto";
+import { win32 } from "node:path";
 import type Database from "better-sqlite3";
 import type { TmuxAdapter } from "../adapters/tmux.js";
 import type { SeatIdentityVerdict } from "./types.js";
@@ -46,8 +47,10 @@ const SHELL_COMMANDS = new Set([
 export function classifyPaneRuntimeMatch(
   command: string | null,
   expectedRuntime: string | null,
+  platform: NodeJS.Platform = process.platform,
 ): "match" | "mismatch" {
   if (!command) return "match"; // no signal — never false-mismatch a present pane
+  if (platform === "win32") return classifyWindowsPaneRuntimeMatch(command, expectedRuntime);
   const cmd = command.trim().toLowerCase();
   // Pi and OMP run their agent behind the OpenRig runner (`node`). Their supported launch shapes normally reach `node`
   // by the time readiness succeeds, but any check can still see a shell: before the launch, or after the agent exits.
@@ -68,6 +71,23 @@ export function classifyPaneRuntimeMatch(
   if (expectsAgent && SHELL_COMMANDS.has(cmd)) return "mismatch";
 
   // Ambiguous / expected-shell (terminal nodes) — no contradiction.
+  return "match";
+}
+
+/** The same lenient rules for psmux, which may report a full executable path: a directory
+ *  that names a runtime is not that runtime, so only the executable's own name counts. */
+function classifyWindowsPaneRuntimeMatch(command: string, expectedRuntime: string | null): "match" | "mismatch" {
+  const cmd = win32.basename(command.trim()).replace(/\.exe$/i, "").toLowerCase();
+  // As on POSIX: Pi and OMP run their agent behind the OpenRig runner (`node`), so a bare shell contradicts them too.
+  const expectsAgent = expectedRuntime === "claude-code" || expectedRuntime === "codex"
+    || expectedRuntime === "pi" || expectedRuntime === "omp";
+  const claude = cmd === "claude" || cmd === "claude-code";
+  const codex = cmd === "codex";
+  if (expectedRuntime === "claude-code" && claude) return "match";
+  if (expectedRuntime === "codex" && codex) return "match";
+  if (expectedRuntime === "claude-code" && codex) return "mismatch";
+  if (expectedRuntime === "codex" && claude) return "mismatch";
+  if (expectsAgent && isShellForeground(command, null, "win32")) return "mismatch";
   return "match";
 }
 

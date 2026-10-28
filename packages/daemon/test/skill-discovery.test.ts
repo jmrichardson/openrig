@@ -70,6 +70,28 @@ describe("parseSkillFrontmatter — structural validation", () => {
     }
   });
 
+  // Only Windows reads CRLF frontmatter; Linux and macOS keep the LF-only match.
+  describe.each([
+    { platform: "win32", crlf: true },
+    { platform: "linux", crlf: false },
+    { platform: "darwin", crlf: false },
+  ] as const)("CRLF SKILL.md on $platform", ({ platform, crlf }) => {
+    const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+    beforeEach(() => { Object.defineProperty(process, "platform", { ...descriptor, value: platform }); });
+    afterEach(() => { Object.defineProperty(process, "platform", descriptor); });
+
+    it(crlf ? "accepts a quoted last frontmatter value" : "rejects a quoted last frontmatter value as a YAML error", () => {
+      const result = parseSkillFrontmatter("---\r\nname: my-skill\r\ndescription: Does a thing.\r\nmetadata:\r\n  status: \"Verify; then run.\"\r\n---\r\n\r\nBody.\r\n");
+      if (crlf) expect(result).toMatchObject({ ok: true, frontmatter: { metadata: { status: "Verify; then run." } }, body: "Body.\r\n" });
+      else expect(result).toMatchObject({ ok: false, reason: expect.stringMatching(/^frontmatter YAML parse error: Unexpected scalar at node end/) });
+    });
+
+    it(crlf ? "reads a plain last frontmatter value without its CR" : "keeps the CR on a plain last frontmatter value", () => {
+      const result = parseSkillFrontmatter("---\r\ndescription: Does a thing.\r\nname: my-skill\r\n---\r\n\r\nBody.\r\n");
+      expect(result).toMatchObject({ ok: true, frontmatter: { name: crlf ? "my-skill" : "my-skill\r", description: "Does a thing." }, body: "Body.\r\n" });
+    });
+  });
+
   it("rejects a file with no frontmatter as structurally invalid", () => {
     const content = "Just a regular markdown file.\n\nNo frontmatter at all.\n";
     const result = parseSkillFrontmatter(content);

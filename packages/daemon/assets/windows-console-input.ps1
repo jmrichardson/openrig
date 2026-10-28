@@ -25,7 +25,7 @@ public static class OpenRigConsoleInput {
   [DllImport("kernel32.dll", SetLastError=true)] public static extern bool CloseHandle(IntPtr handle);
   [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
   public static extern bool WriteConsoleInputW(IntPtr handle, InputRecord[] records, uint count, out uint written);
-  public static void Write(IntPtr handle, string text, bool codex) {
+  public static void Write(IntPtr handle, string text, bool codex, bool clear) {
     for (int start=0; start<text.Length; start+=2048) {
       int count=Math.Min(2048, text.Length-start);
       var records=new InputRecord[count];
@@ -33,10 +33,11 @@ public static class OpenRigConsoleInput {
         char character=text[start+i];
         // Crossterm's native Windows backend reads key events, not VT paste
         // delimiters. Shift+Return inserts a literal newline in Codex's composer.
+        // Only the clear mode's own ^U is Ctrl+U: a U+0015 in a message stays text.
         records[i]=new InputRecord { Type=1, Key=new KeyEvent {
           Down=1,Repeat=1,Character=(ushort)(codex && character=='\n' ? '\r' : character),
-          VirtualKey=(ushort)(codex && character=='\n' ? 13 : codex && character==21 ? 85 : 0),
-          Control=(uint)(codex && character=='\n' ? 16 : codex && character==21 ? 8 : 0)
+          VirtualKey=(ushort)(codex && character=='\n' ? 13 : clear && character==21 ? 85 : 0),
+          Control=(uint)(codex && character=='\n' ? 16 : clear && character==21 ? 8 : 0)
         }};
       }
       uint written;
@@ -57,8 +58,9 @@ public static class OpenRigConsoleInput {
     if ((Get-Process -Id $TargetPid).StartTime.ToUniversalTime().Ticks -ne $birth) { throw 'Target changed' }
     $phase = 'write'
     $codex = $Mode -ne 'bracketed'
-    $payload = if ($codex) { $text } else { [char]27 + '[200~' + $text + [char]27 + '[201~' }
-    [OpenRigConsoleInput]::Write($handle, $payload, $codex)
+    # Crossterm drops a CR sent without its virtual key: a CRLF or lone CR is one Shift+Return newline.
+    $payload = if ($Mode -eq 'codex') { $text -replace "`r`n?", "`n" } elseif ($codex) { $text } else { [char]27 + '[200~' + $text + [char]27 + '[201~' }
+    [OpenRigConsoleInput]::Write($handle, $payload, $codex, $Mode -eq 'codex-clear')
     if ($codex) { Start-Sleep -Milliseconds 250 }
   } finally { [OpenRigConsoleInput]::CloseHandle($handle) | Out-Null; [OpenRigConsoleInput]::FreeConsole() | Out-Null }
 } catch {

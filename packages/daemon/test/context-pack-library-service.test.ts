@@ -208,6 +208,10 @@ files:
     const entry = lib.getByRef("guard")!;
     expect(() => lib.resolveFileWithinPack(entry, "../etc/passwd")).toThrow(/inside the pack/);
     expect(() => lib.resolveFileWithinPack(entry, "/abs")).toThrow(/inside the pack/);
+    // Windows path rules; elsewhere these are ordinary relative names (see path-safety.test.ts).
+    if (process.platform === "win32") for (const path of ["C:notes.md", "C:\\notes.md", "\\notes.md", "\\\\server\\share\\notes.md"]) {
+      expect(() => lib.resolveFileWithinPack(entry, path)).toThrow(/inside the pack/);
+    }
   });
 });
 

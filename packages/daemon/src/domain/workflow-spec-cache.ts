@@ -874,7 +874,8 @@ export class WorkflowSpecCache {
     // A diagnostic row is named after its file. When another row already holds that name with no
     // version (a retained version a previous writer blanked, or a same-named file in another
     // folder), use the file's path instead, which no other diagnostic row holds (#511).
-    const basename = opts.sourcePath.split("/").pop() ?? opts.sourcePath;
+    // Windows source paths separate with "\".
+    const basename = opts.sourcePath.split(process.platform === "win32" ? /[\\/]/ : "/").pop() ?? opts.sourcePath;
     const basenameTaken = this.db
       .prepare(`SELECT 1 FROM workflow_specs WHERE name = ? AND version = '' AND spec_id != ?`)
       .get(basename, existing?.spec_id ?? "") !== undefined;
@@ -987,16 +988,18 @@ export class WorkflowSpecCache {
   pruneNoiseDirRows(installRoot?: string): number {
     const guardClause = installRoot ? ` AND source_path NOT LIKE ? || '%'` : "";
     const params: string[] = installRoot ? [installRoot] : [];
+    // Windows source paths use "\" (or a mix of separators); compare them with "/".
+    const path = process.platform === "win32" ? `REPLACE(source_path, '\\', '/')` : "source_path";
     const result = this.db
       .prepare(
         `DELETE FROM workflow_specs WHERE (
-           source_path LIKE '%/.worktrees/%'
-           OR source_path LIKE '%/node_modules/%'
-           OR source_path LIKE '%/.git/%'
-           OR source_path LIKE '%/dist/%'
-           OR source_path LIKE '%/build/%'
-           OR source_path LIKE '%/.turbo/%'
-           OR source_path LIKE '%/.next/%'
+           ${path} LIKE '%/.worktrees/%'
+           OR ${path} LIKE '%/node_modules/%'
+           OR ${path} LIKE '%/.git/%'
+           OR ${path} LIKE '%/dist/%'
+           OR ${path} LIKE '%/build/%'
+           OR ${path} LIKE '%/.turbo/%'
+           OR ${path} LIKE '%/.next/%'
          )${guardClause}`,
       )
       .run(...params);

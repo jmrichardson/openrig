@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, mkdtempSync, copyFileSync, chmodSync, statSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { execSync, spawn, spawnSync } from "node:child_process";
 import { ClaudeCodeAdapter } from "../src/adapters/claude-code-adapter.js";
@@ -9,6 +9,7 @@ import { replaceFile } from "../src/adapters/replace-file.js";
 import type { NodeBinding } from "../src/domain/runtime-adapter.js";
 import type { ProjectionPlan } from "../src/domain/projection-planner.js";
 import type { TmuxAdapter } from "../src/adapters/tmux.js";
+import { posixShell } from "./helpers/posix-shell.js";
 
 const VALID_STATUS_LINE = JSON.stringify({
   context_window: {
@@ -100,7 +101,7 @@ describe("Claude Status Line Collector Script", () => {
   // T1: Parses valid status line and writes sidecar
   it("parses valid Claude status line JSON and writes sidecar file", () => {
     const outputPath = join(tmpDir, "context", "test.json");
-    execSync(`echo '${VALID_STATUS_LINE}' | node ${collectorPath} ${outputPath}`, { encoding: "utf-8" });
+    execFileSync("node", [collectorPath, outputPath], { input: VALID_STATUS_LINE, encoding: "utf-8" });
 
     expect(existsSync(outputPath)).toBe(true);
     const content = JSON.parse(readFileSync(outputPath, "utf-8"));
@@ -128,7 +129,7 @@ describe("Claude Status Line Collector Script", () => {
   // T2: Atomic write (no .tmp left behind on success)
   it("writes atomically — no .tmp file left behind", () => {
     const outputPath = join(tmpDir, "context", "atomic.json");
-    execSync(`echo '${VALID_STATUS_LINE}' | node ${collectorPath} ${outputPath}`, { encoding: "utf-8" });
+    execFileSync("node", [collectorPath, outputPath], { input: VALID_STATUS_LINE, encoding: "utf-8" });
 
     expect(existsSync(outputPath)).toBe(true);
     expect(existsSync(outputPath + ".tmp")).toBe(false);
@@ -165,7 +166,7 @@ describe("Claude Status Line Collector Script", () => {
 
   it("writes to a session-specific sidecar when given a context directory", () => {
     const outputDir = join(tmpDir, "context");
-    execSync(`echo '${VALID_STATUS_LINE}' | node ${collectorPath} ${outputDir}`, { encoding: "utf-8" });
+    execFileSync("node", [collectorPath, outputDir], { input: VALID_STATUS_LINE, encoding: "utf-8" });
 
     const sessionSidecar = join(outputDir, "dev-impl@test.json");
     expect(existsSync(sessionSidecar)).toBe(true);
@@ -268,12 +269,14 @@ describe("ClaudeCodeAdapter Context Collector Provisioning", () => {
 
   /** Provide filesystem operations for collector fixtures. */
   function mockFsOps() {
+    // Fixtures key files by POSIX path; the product builds native paths (\project\... on win32).
+    const key = (p: string) => process.platform === "win32" ? p.replaceAll("\\", "/") : p;
     return {
-      readFile: (p: string) => written[p] ?? (() => { throw new Error("ENOENT"); })(),
-      writeFile: (p: string, c: string) => { written[p] = c; },
-      exists: (p: string) => p in written,
+      readFile: (p: string) => written[key(p)] ?? (() => { throw new Error("ENOENT"); })(),
+      writeFile: (p: string, c: string) => { written[key(p)] = c; },
+      exists: (p: string) => key(p) in written,
       mkdirp: (p: string) => { dirsMade.push(p); },
-      copyFile: (src: string, dest: string) => { written[dest] = `copied:${src}`; },
+      copyFile: (src: string, dest: string) => { written[key(dest)] = `copied:${src}`; },
       homedir: "/home/tester",
     };
   }
@@ -352,7 +355,7 @@ describe("ClaudeCodeAdapter Context Collector Provisioning", () => {
       await deliver();
       const statusLine = JSON.parse(written[settingsPath]!).statusLine;
       expect(statusLine).toMatchObject({ type: "command", padding: 3 });
-      expect(statusLine.command).toContain("/project/.openrig/context-collector.cjs");
+      expect(statusLine.command).toContain(join("/project", ".openrig", "context-collector.cjs"));
     });
 
     it("leaves a settings file it cannot parse byte-for-byte untouched", async () => {
@@ -384,7 +387,7 @@ describe("ClaudeCodeAdapter Context Collector Provisioning", () => {
     it.each(["", "  \n"])("installs the collector into an empty settings file (%j)", async (text) => {
       written[settingsPath] = text;
       await deliver();
-      expect(written[settingsPath]).toContain("/project/.openrig/context-collector.cjs");
+      expect(written[settingsPath]).toContain(JSON.stringify(join("/project", ".openrig", "context-collector.cjs")).slice(1, -1));
       expect(JSON.parse(written[settingsPath]!).statusLine).toEqual({
         type: "command",
         command: `${shellQuote(process.execPath)} ${shellQuote("/project/.openrig/context-collector.cjs")} ${shellQuote(join(tmpDir, "state", "context-usage"))} ${shellQuote(join(tmpDir, "state", "provider-usage"))}`,
@@ -627,7 +630,7 @@ describe("ClaudeCodeAdapter Context Collector Provisioning", () => {
     const statePath = "/home/tester/.claude.json";
     expect(written[statePath]).toBeDefined();
     const state = JSON.parse(written[statePath]!);
-    expect(state.projects["/project"].hasTrustDialogAccepted).toBe(true);
+    expect(state.projects[resolve("/project")].hasTrustDialogAccepted).toBe(true);
   });
 
   it("deliverStartup marks Claude onboarding complete for fresh managed sessions", async () => {
@@ -671,7 +674,7 @@ describe("provisioned collector command shell paths", () => {
   it.each(["workspace with spaces", "O'Brien workspace"])("runs the real collector through /bin/sh for %s", (name) => {
     const state = join(root, "state " + name);
     const settings = provision(join(root, name), state);
-    const result = spawnSync("/bin/sh", ["-c", settings.statusLine.command], {
+    const result = spawnSync(posixShell, ["-c", settings.statusLine.command], {
       input: VALID_STATUS_LINE, encoding: "utf8", env: { ...process.env, OPENRIG_OCCUPANT_GENERATION: "fixture-generation" },
     });
     expect(result.status, result.stderr).toBe(0);
@@ -721,10 +724,11 @@ describe("re-seating the collector from a read-only asset", () => {
     const cwd = join(root, "seat");
     const adapter = adapterFor(asset, copyFileSync);
     adapter.ensureContextCollector({ cwd });
-    expect(() => adapter.ensureContextCollector({ cwd })).toThrow(/EACCES/);
+    expect(() => adapter.ensureContextCollector({ cwd })).toThrow(process.platform === "win32" ? /EPERM/ : /EACCES/);
   });
 
-  it.skipIf(process.getuid?.() === 0)("updates a writable collector in a readonly directory", () => {
+  // POSIX directory mode bits; Windows uses ACLs and ignores a directory's read-only attribute.
+  it.skipIf(process.getuid?.() === 0 || process.platform === "win32")("updates a writable collector in a readonly directory", () => {
     const asset = join(root, "asset.cjs");
     writeFileSync(asset, "// v1\n"); chmodSync(asset, 0o644);
     const cwd = join(root, "seat");
@@ -742,7 +746,8 @@ describe("re-seating the collector from a read-only asset", () => {
     } finally { chmodSync(parent, 0o755); }
   });
 
-  it.skipIf(process.getuid?.() === 0)("updates a writable activity relay in a readonly directory", async () => {
+  // POSIX directory mode bits; Windows uses ACLs and ignores a directory's read-only attribute.
+  it.skipIf(process.getuid?.() === 0 || process.platform === "win32")("updates a writable activity relay in a readonly directory", async () => {
     const asset = join(root, "relay.cjs");
     writeFileSync(asset, "// relay v1\n"); chmodSync(asset, 0o755);
     const stateDir = join(root, "relay-state");

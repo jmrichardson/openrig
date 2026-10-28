@@ -165,7 +165,7 @@ describe("rig context recap-write — the boundary write verb", () => {
       const outside = join(tmp, "outside");
       mkdirSync(rigDir, { recursive: true });
       mkdirSync(outside);
-      symlinkSync(outside, join(rigDir, "seats"));
+      symlinkSync(outside, join(rigDir, "seats"), process.platform === "win32" ? "junction" : "dir");
       const recap = join(tmp, "recap.md");
       writeFileSync(recap, "## Recent Decisions\nnone");
 

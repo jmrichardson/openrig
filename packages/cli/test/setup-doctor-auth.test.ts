@@ -1,9 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { join, resolve } from "node:path";
 import { Command } from "commander";
 import { doctorCommand, runDoctorChecks, type DoctorDeps } from "../src/commands/doctor.js";
 import { runSetup, type SetupDeps } from "../src/commands/setup.js";
 
 const originalExitCode = process.exitCode;
+const fixtureHome = resolve("fixture");
+const codexHome = join(fixtureHome, "codex");
+const codexConfig = join(codexHome, "config.toml");
 afterEach(() => {
   process.exitCode = originalExitCode;
   vi.restoreAllMocks();
@@ -16,7 +20,7 @@ function fixture(options: {
   env?: NodeJS.ProcessEnv;
 } = {}): { setup: SetupDeps; doctor: DoctorDeps; commands: string[] } {
   const commands: string[] = [];
-  const readFile = vi.fn((p: string) => p === "/fixture/codex/config.toml" ? options.config ?? null : null);
+  const readFile = vi.fn((p: string) => p === codexConfig ? options.config ?? null : null);
   const exec = (command: string) => {
     commands.push(command);
     if (options.missingCli?.some((name) => command === `${name} --version` || command.startsWith("npm install"))) {
@@ -27,7 +31,7 @@ function fixture(options: {
     if (command === "cmux capabilities --json") return '{"capabilities":[]}';
     return "available";
   };
-  const common = { exec, readFile, exists: () => true, platform: "linux" as const, env: { HOME: "/fixture", CODEX_HOME: "/fixture/codex", ...options.env } };
+  const common = { exec, readFile, exists: () => true, platform: "linux" as const, env: { HOME: fixtureHome, CODEX_HOME: codexHome, ...options.env } };
   return {
     commands,
     setup: { ...common, writeFile: vi.fn(), mkdirp: vi.fn() },
@@ -72,7 +76,7 @@ describe("setup and doctor provider facts", () => {
     expect(check?.message).toContain("FIXTURE_PROVIDER_KEY");
     expect(JSON.stringify(check)).not.toContain("inert-test-value");
     expect(commands).not.toContain("codex login status");
-    expect(doctor.readFile).toHaveBeenCalledWith("/fixture/codex/config.toml");
+    expect(doctor.readFile).toHaveBeenCalledWith(codexConfig);
   });
 
   it.each(["broken = [", 'profile = "legacy"\n' + providerConfig])("keeps the unresolved-config login fallback (%s)", async (config) => {

@@ -148,10 +148,13 @@ function parseArguments(argv) {
 
 function derivePackageArtifacts(packageRoot) {
   if (!existsSync(packageRoot)) throw new Error(`package root not found: ${packageRoot}`);
-  const packed = spawnSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], {
-    cwd: packageRoot,
-    encoding: "utf8",
-  });
+  // npm is npm.cmd on Windows, which Node starts only through a shell; these words are literal.
+  const packed = process.platform === "win32"
+    ? spawnSync("npm pack --dry-run --json --ignore-scripts", { cwd: packageRoot, encoding: "utf8", shell: true, windowsHide: true })
+    : spawnSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], {
+      cwd: packageRoot,
+      encoding: "utf8",
+    });
   if (packed.status !== 0) {
     throw new Error(`npm artifact enumeration failed:\n${packed.stderr || packed.stdout || `exit ${packed.status}`}`);
   }

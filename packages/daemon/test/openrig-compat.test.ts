@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { join } from "node:path";
 
 const ORIGINAL_OPENRIG_HOME = process.env.OPENRIG_HOME;
 const ORIGINAL_RIGGED_HOME = process.env.RIGGED_HOME;
@@ -22,7 +23,7 @@ describe("openrig-compat", () => {
     const mod = await import("../src/openrig-compat.js");
 
     expect(mod.getOpenRigHome()).toBe("/tmp/custom-openrig-home");
-    expect(mod.getDefaultOpenRigPath("daemon.json")).toBe("/tmp/custom-openrig-home/daemon.json");
+    expect(mod.getDefaultOpenRigPath("daemon.json")).toBe(join("/tmp/custom-openrig-home", "daemon.json"));
   });
 
   it("getOpenRigHome falls back to RIGGED_HOME with warning", async () => {

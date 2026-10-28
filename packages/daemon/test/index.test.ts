@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const serveMock = vi.fn();
 const createDaemonMock = vi.fn();
+const startWindowsControlMock = vi.fn();
 const serverMock = { prependListener: vi.fn() };
 let signalListenersBefore: { SIGINT: Function[]; SIGTERM: Function[] };
 
@@ -13,6 +14,12 @@ vi.mock("../src/startup.js", () => ({
   createDaemon: createDaemonMock,
 }));
 
+// The Windows stop channel runs PowerShell and a named pipe; its own suite covers them natively.
+vi.mock("../src/windows-daemon-control.js", () => ({
+  startWindowsDaemonControl: startWindowsControlMock,
+  requestWindowsDaemonStop: vi.fn(),
+}));
+
 describe("daemon startServer", () => {
   beforeEach(() => {
     signalListenersBefore = {
@@ -22,6 +29,8 @@ describe("daemon startServer", () => {
     serveMock.mockReset();
     serverMock.prependListener.mockReset();
     serveMock.mockReturnValue(serverMock);
+    startWindowsControlMock.mockReset();
+    startWindowsControlMock.mockResolvedValue(async () => {});
     createDaemonMock.mockReset();
     createDaemonMock.mockResolvedValue({
       app: { fetch: vi.fn() },
@@ -90,5 +99,49 @@ describe("daemon startServer", () => {
         terminalBearerToken: "daemon-token",
       }),
     );
+  });
+
+  describe("Windows private stop channel", () => {
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    const as = (value: string) => Object.defineProperty(process, "platform", { ...platform, value });
+    afterEach(() => { Object.defineProperty(process, "platform", platform); vi.restoreAllMocks(); });
+
+    it("is published before any listener binds, so the CLI never sees a daemon it cannot drain", async () => {
+      as("win32");
+      const order: string[] = [];
+      startWindowsControlMock.mockImplementation(async () => { order.push("control"); return async () => {}; });
+      serveMock.mockImplementation(() => { order.push("serve"); return serverMock; });
+      const { startServer } = await import("../src/index.js");
+
+      await startServer(7441);
+
+      // One serve per bind host (loopback, plus Tailscale where it is up).
+      expect(order[0]).toBe("control");
+      expect(order.length).toBeGreaterThan(1);
+      expect(new Set(order.slice(1))).toEqual(new Set(["serve"]));
+    });
+
+    it("exits before listening, with the reason, when the channel cannot be published", async () => {
+      as("win32");
+      startWindowsControlMock.mockRejectedValue(new Error("Windows private control directory unavailable; no capability published"));
+      const exit = vi.spyOn(process, "exit").mockImplementation(((code: number) => { throw new Error(`exit ${code}`); }) as never);
+      const log = vi.spyOn(console, "error").mockImplementation(() => {});
+      const { startServer } = await import("../src/index.js");
+
+      await expect(startServer(7441)).rejects.toThrow("exit 1");
+
+      expect(exit).toHaveBeenCalledWith(1);
+      expect(serveMock).not.toHaveBeenCalled();
+      expect(log).toHaveBeenCalledWith("[windows-control] Windows private control directory unavailable; no capability published; the daemon did not start.");
+    });
+
+    it("is never opened on Linux or macOS", async () => {
+      for (const host of ["linux", "darwin"]) {
+        as(host);
+        const { startServer } = await import("../src/index.js");
+        await startServer(7441);
+      }
+      expect(startWindowsControlMock).not.toHaveBeenCalled();
+    });
   });
 });

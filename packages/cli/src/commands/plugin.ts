@@ -454,7 +454,8 @@ function validateSkillFrontmatter(skillPath: string, skillId: string): string[] 
     return errors;
   }
   // Frontmatter: file MUST start with `---\n` and contain a closing `---` line
-  const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
+  // (Windows editors and checkouts may write CRLF; other platforms keep the LF-only match).
+  const fmMatch = content.match(process.platform === "win32" ? /^---\r?\n([\s\S]*?)\r?\n---/ : /^---\n([\s\S]*?)\n---/);
   if (!fmMatch) {
     errors.push(`skill "${skillId}": SKILL.md missing frontmatter (must open with --- ... ---)`);
     return errors;

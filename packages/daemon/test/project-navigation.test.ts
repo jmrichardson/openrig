@@ -115,7 +115,7 @@ describe("catalog project identity across work reads", () => {
     scopes = await get("/api/scopes?detail=1&project=a"); expect(scopes.body.missions[0].slices[0].error).toContain("Invalid frontmatter"); expect(scopes.body.readErrors).toEqual([]);
     expect((await get("/api/views/execution?project=a&mission=../b")).status).toBe(409);
     fs.renameSync(path.join(root, "a/missions"), path.join(root, "a/missions-retained"));
-    fs.symlinkSync(path.join(root, "b/missions"), path.join(root, "a/missions"));
+    fs.symlinkSync(path.join(root, "b/missions"), path.join(root, "a/missions"), process.platform === "win32" ? "junction" : "dir");
     expect((await get("/api/scopes?project=a")).status).toBe(409);
     file(path.join(root, "workspace.yaml"), "projects: [broken");
     expect((await get("/api/scopes/projects")).status).toBe(409);
@@ -125,16 +125,19 @@ describe("catalog project identity across work reads", () => {
     const missing = path.join(root, "a/missions/release-x/slices/02-missing"); fs.mkdirSync(missing);
     expect(() => workSource(project.root, missing)).toThrow("No work source");
     expect(() => projectMission(project, "release-x")).not.toThrow();
-    const denied = path.join(root, "a/missions/release-x/slices/03-denied/SPEC.md"); file(denied, source("private")); fs.chmodSync(denied, 0);
-    try {
-      expect(() => workSource(project.root, path.dirname(denied))).toThrow(/EACCES/);
-      const result = (await get("/api/scopes?detail=1&project=a")).body;
-      expect(result.readErrors).toEqual([]);
-      expect(result.missions[0].slices.find((s: any) => s.dirName === "02-missing").error).toContain("No work source");
-      expect(result.missions[0].slices.find((s: any) => s.dirName === "03-denied").error).toContain("EACCES");
-      expect(result.missions[0].slices.find((s: any) => s.dirName === "01-story").intent).toBe("a slice only");
-    } finally { fs.chmodSync(denied, 0o600); }
-    fs.symlinkSync(path.join(root, "b/missions/release-x/slices/01-story"), path.join(root, "a/missions/release-x/slices/escape"));
+    // POSIX mode bits (chmod 0 denies reads); Windows uses ACLs.
+    if (process.platform !== "win32") {
+      const denied = path.join(root, "a/missions/release-x/slices/03-denied/SPEC.md"); file(denied, source("private")); fs.chmodSync(denied, 0);
+      try {
+        expect(() => workSource(project.root, path.dirname(denied))).toThrow(/EACCES/);
+        const result = (await get("/api/scopes?detail=1&project=a")).body;
+        expect(result.readErrors).toEqual([]);
+        expect(result.missions[0].slices.find((s: any) => s.dirName === "02-missing").error).toContain("No work source");
+        expect(result.missions[0].slices.find((s: any) => s.dirName === "03-denied").error).toContain("EACCES");
+        expect(result.missions[0].slices.find((s: any) => s.dirName === "01-story").intent).toBe("a slice only");
+      } finally { fs.chmodSync(denied, 0o600); }
+    }
+    fs.symlinkSync(path.join(root, "b/missions/release-x/slices/01-story"), path.join(root, "a/missions/release-x/slices/escape"), process.platform === "win32" ? "junction" : "dir");
     expect(() => projectMission(project, "release-x")).toThrow("outside selected project");
     expect((await get("/api/views/execution?project=a&mission=release-x")).status).toBe(409);
   });

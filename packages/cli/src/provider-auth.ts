@@ -1,11 +1,15 @@
 import path from "node:path";
+import { existsSync } from "node:fs";
 import { parse as parseToml } from "smol-toml";
 import { resolveCodexHome } from "./lib/codex-auth.js";
+import { windowsVariable } from "./herdr-launch-config.js";
 
 export interface ProviderAuthDeps {
   exec: (cmd: string) => string;
   readFile: (path: string) => string | null;
   env?: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
+  exists?: (path: string) => boolean;
 }
 
 export interface ProviderCheck {
@@ -78,7 +82,7 @@ export function checkClaudeAuth(deps: ProviderAuthDeps, installed: boolean): Pro
 export function checkCodexAuth(deps: ProviderAuthDeps, installed: boolean): ProviderCheck {
   if (installed) {
     const env = deps.env ?? process.env;
-    const codexAuth = selectCodexProviderAuth(deps.readFile(path.join(resolveCodexHome(env).codexHome, "config.toml")));
+    const codexAuth = selectCodexProviderAuth(deps.readFile(path.join(resolveCodexHome(env, deps.platform).codexHome, "config.toml")));
     if (codexAuth.kind === "env-key") {
       if (env[codexAuth.envKey]?.trim()) {
         return {
@@ -120,6 +124,28 @@ export function checkCodexAuth(deps: ProviderAuthDeps, installed: boolean): Prov
   }
 }
 
+/** Native Windows: the daemon launches Claude seats only from a claude.exe on PATH. `claude --version`
+ *  through cmd.exe also reaches npm's claude.cmd launcher, which leaves no claude.exe on PATH. */
+export function checkWindowsClaudeInstall(deps: ProviderAuthDeps, exists: (path: string) => boolean): ProviderCheck {
+  const searchPath = windowsVariable(deps.env ?? process.env, "PATH") ?? "";
+  const executable = searchPath.split(";").filter(Boolean).map((dir) => path.win32.join(dir, "claude.exe")).find(exists);
+  if (executable) return { name: "claude_install", status: "pass", message: `Claude Code available (${executable}).` };
+  let launcher = false;
+  try {
+    deps.exec("claude --version");
+    launcher = true;
+  } catch { /* Nothing named claude is on PATH. */ }
+  return {
+    name: "claude_install",
+    status: "fail",
+    message: launcher
+      ? "The claude command on PATH is a launcher such as npm's claude.cmd, not native Claude Code's claude.exe."
+      : "Native Claude Code (claude.exe) not found on PATH.",
+    reason: "On native Windows the daemon launches Claude Code seats only from a claude.exe on PATH.",
+    fix: "Install native Claude Code from Windows PowerShell with irm https://claude.ai/install.ps1 | iex, put the directory holding its claude.exe (normally %USERPROFILE%\\.local\\bin) on PATH, then reopen your terminal and rerun rig setup.",
+  };
+}
+
 /** Read-only checks: neither installs a CLI nor starts a login or agent session. */
 export function checkProviderReadiness(deps: ProviderAuthDeps): ProviderCheck[] {
   const checks: ProviderCheck[] = [];
@@ -127,6 +153,11 @@ export function checkProviderReadiness(deps: ProviderAuthDeps): ProviderCheck[] 
     ["claude", "Claude Code", checkClaudeAuth],
     ["codex", "Codex", checkCodexAuth],
   ] as const) {
+    if (command === "claude" && (deps.platform ?? process.platform) === "win32") {
+      const install = checkWindowsClaudeInstall(deps, deps.exists ?? existsSync);
+      checks.push(install, auth(deps, install.status === "pass"));
+      continue;
+    }
     let installed = false;
     try {
       deps.exec(`${command} --version`);

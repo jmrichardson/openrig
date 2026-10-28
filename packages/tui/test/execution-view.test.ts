@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { executionContentLines, executionSliceStripLines } from "../src/execution/execution-model.js";
+import { workflowDetail } from "../src/execution/workflow-model.js";
 import { demoSnapshot } from "../src/demo-data.js";
 import { renderScreen } from "../src/render.js";
 import { createViewState } from "../src/state.js";
@@ -338,7 +339,8 @@ describe("mission execution story — readable rows over the shipped projections
     expect(body).toContain("does not establish acceptance");
   });
 
-  it("keeps a typed acceptance action usable at every production terminal width", () => {
+  // Parses the wrapped action with /bin/sh; Windows renders the PowerShell form tested below.
+  it.skipIf(process.platform === "win32")("keeps a typed acceptance action usable at every production terminal width", () => {
     const fixture = executionFixture();
     const candidate = "0123456789abcdef0123456789abcdef01234567";
     const evidence = "missions/release-0.5.9/slices/06-project-release-lifecycle/proof/review50-r2-CLEAR-27354de779a9a7d4311b910e56115df33d26295e.md";
@@ -406,6 +408,74 @@ describe("mission execution story — readable rows over the shipped projections
       ]);
       expect(action, `${size.cols}x${size.rows}`).not.toContain("…");
     }
+  });
+
+  it("renders a typed acceptance action as one Windows PowerShell command at every production width", () => {
+    const fixture = executionFixture();
+    const candidate = "0123456789abcdef0123456789abcdef01234567";
+    const verdict = "Bob\u2019s 'CLEAR'";
+    const evidence = "missions/release-0.5.9/slices/06-project-release-lifecycle/proof/review50-r2-CLEAR-27354de779a9a7d4311b910e56115df33d26295e.md";
+    fixture.lifecycle_instances = [{
+      instance_id: "WF-ACCEPTANCE",
+      status: "active",
+      operation_key: "release-acceptance",
+      frontier_packets: [{
+        packet_id: "qitem-acceptance-packet",
+        step_id: "accept",
+        owner: "review50-r2@v-openrig-build",
+        queue_state: "in-progress",
+        blocked_on: null,
+        // Quoted as the daemon's shellQuote does.
+        targeted_action: `rig workflow project --instance WF-ACCEPTANCE --current-packet qitem-acceptance-packet --exit done --actor-session review50-r2@v-openrig-build --acceptance-candidate '${candidate}' --acceptance-verdict 'Bob\u2019s '"'"'CLEAR'"'"'' --acceptance-evidence-ref '${evidence}'`,
+      }],
+      failure_occurrences: [],
+      unknowns: [],
+    }];
+    const key = "packet:qitem-acceptance-packet";
+    expect(workflowDetail(fixture, key, 56, undefined, "linux")!.some((line) => line.text.endsWith(" \\"))).toBe(true);
+    const actions = [56, 92, 132].map((width) => {
+      const lines = workflowDetail(fixture, key, width, undefined, "win32")!.map((line) => line.text);
+      const start = lines.findIndex((line) => line.startsWith("      action rig workflow project"));
+      let end = start;
+      while (/ `$| \+$/.test(lines[end]!)) end++;
+      const action = lines.slice(start, end + 1);
+      expect(action.length, `width ${width}`).toBeGreaterThan(1);
+      expect(action.every((line) => line.length <= width && !line.endsWith("\\")), `width ${width}`).toBe(true);
+      expect(action.join("\n"), `width ${width}`).toContain("'Bob\u2019\u2019s ''CLEAR'''");
+      return action.join("\n").replace(/^\s*action /, "");
+    });
+    if (process.platform !== "win32") return;
+    const script = [
+      "[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)",
+      "function rig { [Console]::Out.Write((@($args) -join [char]0) + \"`n\") }",
+      ...actions,
+    ].join("\n");
+    const output = execFileSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")],
+      { encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "pipe"], timeout: 30_000 });
+    expect(output.split("\n").filter(Boolean).map((argv) => argv.split("\0"))).toEqual(actions.map(() => [
+      "workflow", "project",
+      "--instance", "WF-ACCEPTANCE",
+      "--current-packet", "qitem-acceptance-packet",
+      "--exit", "done",
+      "--actor-session", "review50-r2@v-openrig-build",
+      "--acceptance-candidate", candidate,
+      "--acceptance-verdict", verdict,
+      "--acceptance-evidence-ref", evidence,
+    ]));
+  }, 40_000);
+
+  it.each([
+    "/work/missions/release-0.5.9/slices/06-project-release-lifecycle/slice.yaml",
+    "C:\\work\\missions\\release-0.5.9\\slices\\06-project-release-lifecycle\\slice.yaml",
+    "\\\\host\\share\\missions\\release-0.5.9\\slices\\06-project-release-lifecycle\\slice.yaml",
+  ])("links a bound slice source to its slice: %s", (path) => {
+    const fixture = executionFixture();
+    fixture.lifecycle_instances = [{
+      instance_id: "WF-SOURCES", status: "active", operation_key: "release", frontier_packets: [],
+      sources: [{ kind: "slice", path, sha256: "abc123" }], failure_occurrences: [], unknowns: [],
+    }];
+    const link = workflowDetail(fixture, "workflow:WF-SOURCES", 120)!.find((line) => line.text.includes("Slice 06-project-release-lifecycle"));
+    expect(link?.action).toEqual({ type: "scopes-open", mission: fixture.mission, slice: "06-project-release-lifecycle" });
   });
 
   it("keeps terminal failure history visible without rendering an impossible resume command", () => {

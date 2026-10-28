@@ -271,7 +271,7 @@ export async function defaultProbeRuntimes(): Promise<RuntimeProbeResult> {
 
   async function tryProbe(cmd: string): Promise<RuntimeAuthStatus> {
     try {
-      const { stdout, stderr } = await execAsync(cmd, { timeout: 5000 });
+      const { stdout, stderr } = await execAsync(cmd, { timeout: 5000, windowsHide: true });
       const out = `${stdout}\n${stderr}`.toLowerCase();
       // Conservative parse: any indicator the CLI considers itself
       // unauthenticated marks the runtime unavailable. Tighter parsing

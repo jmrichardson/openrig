@@ -15,8 +15,9 @@ import { adaptQueueTransitionEvidence, boundHealthEvidence, deriveHealthSourceFr
 import { HealthCheckpointSource, type HealthCheckpoint } from "../src/domain/health-checkpoints.js";
 import { Hono } from "hono";
 import { healthDiagnosisRoutes } from "../src/routes/health-diagnosis.js";
-import { healthAuthority } from "../src/domain/health-context.js";
+import { healthAuthority, healthSelectedContext } from "../src/domain/health-context.js";
 import { healthRoutes } from "../src/routes/health.js";
+import { canCreateFileSymlinks } from "../../../test/symlink-capability.mjs";
 
 const cleanup: Array<() => void> = [];
 afterEach(() => { vi.useRealTimers(); cleanup.splice(0).reverse().forEach((f) => f()); });
@@ -386,7 +387,7 @@ it("keeps unresolved checkpoint evidence indeterminate and never admits a diagno
   }
 });
 
-it("embeds only canonical authority files with contained real paths", async () => {
+it.skipIf(!canCreateFileSymlinks)("embeds only canonical authority files with contained real paths", async () => {
   const t = await checkpointSetup(); const workspace = join(t.home, "workspace");
   mkdirSync(workspace, { recursive: true });
   const outside = join(t.home, "outside.yaml"); writeFileSync(outside, "outside-marker");
@@ -406,6 +407,55 @@ it("embeds only canonical authority files with contained real paths", async () =
   expect(JSON.stringify(authority)).not.toContain("arbitrary-marker");
 });
 
+// A junction needs no symlink privilege on Windows.
+it.runIf(process.platform === "win32")("embeds no authority file reached through a junction out of the workspace", async () => {
+  const t = await checkpointSetup(); const workspace = join(t.home, "workspace");
+  const outsideMission = join(t.home, "outside-mission"); mkdirSync(outsideMission);
+  writeFileSync(join(outsideMission, "SPEC.md"), "outside-marker");
+  const mission = join(workspace, "missions", "release-0.5.9"); mkdirSync(join(workspace, "missions"));
+  symlinkSync(outsideMission, mission, "junction");
+  t.source.submit({ ...t.cp, authorityPaths: { project: [], mission: [join(mission, "SPEC.md")], slice: [] } }, "author@rig");
+  const authority = healthAuthority(workspace, t.source, t.projection.list().records[0]!);
+  expect(authority.find((a) => a.path === join(mission, "SPEC.md"))).toMatchObject({ state: "unavailable" });
+  expect(JSON.stringify(authority)).not.toContain("outside-marker");
+});
+
+it("recognizes slice authority under native mission directory separators", async () => {
+  const t = await checkpointSetup();
+  const workspace = join(t.home, "workspace");
+  const sliceDir = join(workspace, "missions", "native-mission", "slices", "slice directory");
+  mkdirSync(sliceDir, { recursive: true });
+  const spec = join(sliceDir, "SPEC.md");
+  writeFileSync(spec, "---\nid: slice-id\nmission: native-mission\n---\n# Slice authority");
+  t.source.submit({
+    ...t.cp,
+    scope: { type: "slice", projectId: "project", missionId: "native-mission", sliceId: "slice-id" },
+    authorityPaths: { project: [], mission: [], slice: [spec] },
+  }, "author@rig");
+  const record = t.projection.list().records[0]!;
+  expect(healthAuthority(workspace, t.source, record).find(entry => entry.path === spec))
+    .toMatchObject({ level: "slice", state: "available", content: expect.stringContaining("# Slice authority") });
+});
+
+it("reads native absolute selected context paths without accepting transports or escaped files", () => {
+  const home = mkdtempSync(join(tmpdir(), "health-native-context-"));
+  cleanup.push(() => rmSync(home, { recursive: true, force: true }));
+  const workspace = join(home, "project space");
+  mkdirSync(workspace);
+  const selected = join(workspace, "selected notes.md");
+  const outside = join(home, "outside.md");
+  writeFileSync(selected, "# Selected\n\nLocal authority");
+  writeFileSync(outside, "outside-marker");
+  writeFileSync(join(workspace, "project.yaml"), JSON.stringify({
+    lifecycle: { profiles: { active: { workflow: { context_refs: [selected, outside, "https://example.com/context"] } } }, profile: "active" },
+  }));
+  const authority = healthSelectedContext(workspace);
+  expect(authority.find(entry => entry.path === selected)).toMatchObject({ state: "available", content: "# Selected\n\nLocal authority" });
+  expect(authority.find(entry => entry.path === outside)).toMatchObject({ state: "unavailable" });
+  expect(authority.find(entry => entry.path === "https://example.com/context")).toMatchObject({ state: "unavailable" });
+  expect(JSON.stringify(authority)).not.toContain("outside-marker");
+});
+
 
 it("rechecks evidence availability after submission and refuses empty, non-file and escaped evidence", async () => {
   const t = await checkpointSetup(); const p = t.policy.read().policy;
@@ -413,7 +463,7 @@ it("rechecks evidence availability after submission and refuses empty, non-file 
   t.source.submit(t.cp, "author@rig");
   expect(t.projection.list().records[0]!.status).toBe("active");
   const evidence = t.cp.productCensusRef;
-  for (const state of ["empty", "directory", "symlink", "missing"]) {
+  for (const state of ["empty", "directory", ...(canCreateFileSymlinks ? ["symlink"] : []), "missing"]) {
     rmSync(evidence, { force: true, recursive: true });
     if (state === "empty") writeFileSync(evidence, "");
     if (state === "directory") mkdirSync(evidence);
@@ -422,6 +472,22 @@ it("rechecks evidence availability after submission and refuses empty, non-file 
     expect((await t.service.evaluate("actor@rig", true)).actions).toHaveLength(0);
     expect(t.service.list()).toHaveLength(0);
   }
+});
+
+it.runIf(process.platform === "win32")("refuses evidence reached through a junction out of the workspace", async () => {
+  const t = await checkpointSetup(); const p = t.policy.read().policy;
+  t.policy.apply({ ...p, diagnosis: { ...p.diagnosis, enabled: true, owner: "owner@rig" } }, "actor@rig");
+  const evidenceDir = join(t.home, "workspace", "evidence"); mkdirSync(evidenceDir);
+  const evidence = join(evidenceDir, "census.json"); writeFileSync(evidence, readFileSync(t.cp.productCensusRef));
+  t.source.submit({ ...t.cp, productCensusRef: evidence }, "author@rig");
+  expect(t.projection.list().records[0]!.status).toBe("active");
+  const outside = join(t.home, "outside-evidence"); mkdirSync(outside);
+  writeFileSync(join(outside, "census.json"), readFileSync(evidence));
+  rmSync(evidenceDir, { recursive: true });
+  symlinkSync(outside, evidenceDir, "junction");
+  expect(t.projection.list().records[0]!.status).toBe("indeterminate");
+  expect((await t.service.evaluate("actor@rig", true)).actions).toHaveLength(0);
+  expect(t.service.list()).toHaveLength(0);
 });
 
 

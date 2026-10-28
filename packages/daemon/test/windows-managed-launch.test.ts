@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import Database from "better-sqlite3";
 import { ClaudeManagedLaunch } from "../src/domain/claude-managed-launch.js";
+import { windowsSeatCli } from "../src/domain/seat-launch-environment.js";
 import { renderWindowsManagedLaunch } from "../src/adapters/windows-launch.js";
 import { parseWindowsCommandLine, windowsArguments } from "../src/adapters/windows-argv.js";
 
@@ -12,20 +13,13 @@ vi.mock("node:child_process", () => ({ execFile: vi.fn() }));
 const cleanups: (() => void)[] = [];
 afterEach(() => { for (const cleanup of cleanups.splice(0).reverse()) cleanup(); vi.clearAllMocks(); });
 
-function fixture(selected?: string, seat?: { rigEnv: Record<string, string>; memberEnv: Record<string, string>; sessionMarker: string; corePlugin?: boolean }) {
+function fixture(selected?: string, seat?: { rigEnv: Record<string, string>; memberEnv: Record<string, string>; sessionMarker: string }) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "rig-win-managed-"));
   cleanups.push(() => fs.rmSync(home, { recursive: true }));
   const cwd = path.join(home, "中文 space"); fs.mkdirSync(cwd);
   const executable = path.join(home, "claude.exe"); fs.writeFileSync(executable, "inert fixture", { mode: 0o700 });
+  const cli = path.join(home, "paired rig.cjs"); fs.writeFileSync(cli, "// inert paired CLI fixture", { mode: 0o700 });
   const db = new Database(":memory:"); cleanups.push(() => db.close());
-  const pluginsDir = path.join(home, "plugins");
-  if (seat?.corePlugin) {
-    const plugin = path.join(pluginsDir, "openrig-core");
-    fs.mkdirSync(path.join(plugin, ".claude-plugin"), { recursive: true });
-    fs.writeFileSync(path.join(plugin, ".claude-plugin", "plugin.json"), "{}");
-    db.exec("CREATE TABLE node_startup_context(node_id TEXT, projection_entries_json TEXT)");
-    db.prepare("INSERT INTO node_startup_context VALUES ('node', ?)").run(JSON.stringify([{ category: "plugin", absolutePath: plugin }]));
-  }
   db.exec("CREATE TABLE nodes(id TEXT, runtime TEXT, cwd TEXT); CREATE TABLE bindings(id TEXT,node_id TEXT,tmux_session TEXT,tmux_pane TEXT); CREATE TABLE occupant_tenures(node_id TEXT,generation_uuid TEXT,generation_ordinal INTEGER)");
   db.prepare("INSERT INTO nodes VALUES ('node','claude-code',?)").run(cwd);
   db.exec("INSERT INTO bindings VALUES ('binding','node','seat','%1'); INSERT INTO occupant_tenures VALUES ('node','generation',1)");
@@ -37,31 +31,28 @@ function fixture(selected?: string, seat?: { rigEnv: Record<string, string>; mem
   const env: Record<string, string> = { HOME: home, PATH: home, OPENRIG_HOME: home, ANTHROPIC_API_KEY: "synthetic-only-never-in-script" };
   if (selected !== undefined) env.CLAUDE_CONFIG_DIR = selected;
   vi.mocked(execFile).mockImplementation(((_file: string, _args: string[], _opts: unknown, done: (error: null, help: string) => void) => done(null, '--permission-mode <mode> (choices: "auto", "default")')) as never);
-  return { home, cwd, executable, db, env, managed: new ClaudeManagedLaunch(db, env, {}, seat ? async () => seat.sessionMarker : undefined, pluginsDir, "win32") };
+  return { home, cwd, executable, cli, db, env, managed: new ClaudeManagedLaunch(db, env, {}, seat ? async () => seat.sessionMarker : undefined, undefined, "win32", cli) };
 }
 
 describe("managed Windows launch", () => {
   it.runIf(process.platform === "win32")("forwards rig, member and one-off env through the managed child without exposing pane-only variables", async () => {
-    const f = fixture(undefined, { rigEnv: { RIG_FLAG: "declared-rig", HOME: "wrong-home", DECLARED_UNSET: "not-in-pane" }, memberEnv: { MEMBER_FLAG: "declared-member" }, sessionMarker: "ONCE_FLAG", corePlugin: true });
+    const f = fixture(undefined, { rigEnv: { RIG_FLAG: "declared-rig", HOME: "wrong-home", DECLARED_UNSET: "not-in-pane" }, memberEnv: { MEMBER_FLAG: "declared-member" }, sessionMarker: "ONCE_FLAG" });
     fs.copyFileSync(process.execPath, f.executable);
     const launch = await f.managed.prepare({ nodeId: "node", session: "seat", pane: "%1" }, "auto");
-    const source = "console.log(JSON.stringify({rig:process.env.RIG_FLAG,member:process.env.MEMBER_FLAG,once:process.env.ONCE_FLAG,unset:process.env.DECLARED_UNSET,leaked:process.env.PANE_ONLY,home:process.env.HOME,plugin:process.env.CLAUDE_CODE_PLUGIN_DIRS,project:process.env.OPENRIG_SEAT_PROJECT_DIR,terminal:process.env.TERM_PROGRAM,version:process.env.TERM_PROGRAM_VERSION}))";
+    const source = "console.log(JSON.stringify({rig:process.env.RIG_FLAG,member:process.env.MEMBER_FLAG,once:process.env.ONCE_FLAG,unset:process.env.DECLARED_UNSET,leaked:process.env.PANE_ONLY,home:process.env.HOME,cliEntry:process.env.OPENRIG_CLI_ENTRY,firstPath:process.env.PATH.split(';')[0]}))";
     const command = launch.command(["-e", source]);
     expect(command).not.toContain("pane-rig-value");
     const native = await vi.importActual<typeof import("node:child_process")>("node:child_process");
     const paneEnv: NodeJS.ProcessEnv = { ...process.env, RIG_FLAG: "pane-rig-value", MEMBER_FLAG: "pane-member-value", ONCE_FLAG: "pane-once-value", PANE_ONLY: "must-not-forward" };
-    paneEnv.CLAUDE_CODE_PLUGIN_DIRS = path.join(f.home, "plugins", "openrig-core");
-    paneEnv.OPENRIG_SEAT_PROJECT_DIR = f.cwd;
-    paneEnv.TERM_PROGRAM = "tmux";
-    paneEnv.TERM_PROGRAM_VERSION = "test-terminal-version";
     delete paneEnv.DECLARED_UNSET;
     const output = await new Promise<string>((resolve, reject) => {
       native.execFile("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(command, "utf16le").toString("base64")], {
         encoding: "utf8", timeout: 30000, windowsHide: true, env: paneEnv,
       }, (error, out, stderr) => error ? reject(new Error(`Native seat-env fixture failed: ${error.message}; stderr=${stderr}`)) : resolve(out));
     });
-    expect(JSON.parse(output.trim())).toEqual({ rig: "pane-rig-value", member: "pane-member-value", once: "pane-once-value", home: f.home,
-      plugin: paneEnv.CLAUDE_CODE_PLUGIN_DIRS, project: f.cwd, terminal: "tmux", version: "test-terminal-version" });
+    // Seat hooks run rig through this Node entry, and agent shells find the paired rig first on PATH.
+    const { bin, entry } = windowsSeatCli(f.home, process.cwd(), f.cli);
+    expect(JSON.parse(output.trim())).toEqual({ rig: "pane-rig-value", member: "pane-member-value", once: "pane-once-value", home: f.home, cliEntry: entry, firstPath: bin });
   }, 40000);
 
   it.each([undefined, "", "./config", "./config space"])("preserves native config selection %s and forwards auth by name", async selected => {
@@ -78,8 +69,30 @@ describe("managed Windows launch", () => {
     expect(command).toContain("'ANTHROPIC_API_KEY'");
     expect(command).toContain("EnvironmentVariables.Clear()");
     expect(command).not.toContain("/usr/bin/env");
+    const { bin, entry } = windowsSeatCli(f.home, process.cwd(), f.cli);
+    expect(entry).toBe(fs.realpathSync(f.cli));
+    expect(command).toContain(`'OPENRIG_CLI_ENTRY'='${entry.replace(/'/g, "''")}'`);
+    expect(command).toContain(`'PATH'='${`${bin}${path.delimiter}${path.resolve(f.cwd, f.home)}`.replace(/'/g, "''")}'`);
+    // The capability query keeps the managed PATH alone.
+    expect((query[2] as { env: Record<string, string> }).env.PATH).toBe(path.resolve(f.cwd, f.home));
     f.db.exec("UPDATE occupant_tenures SET generation_uuid='successor'");
     expect(() => launch.command([])).toThrow(/context changed/);
+  });
+
+  it("never selects or exports the seat cwd through an empty PATH entry, and reads a quoted one as its directory", async () => {
+    const f = fixture();
+    // A decoy committed in the seat's repository.
+    fs.writeFileSync(path.join(f.cwd, "claude.exe"), "decoy fixture", { mode: 0o700 });
+    f.env.PATH = ["", ` "${f.home}" `, ""].join(path.delimiter);
+    const launch = await f.managed.prepare({ nodeId: "node", session: "seat", pane: "%1" }, "auto");
+    expect(launch.executable).toBe(fs.realpathSync(f.executable));
+    const query = vi.mocked(execFile).mock.calls[0]!;
+    expect((query[2] as { env: Record<string, string> }).env.PATH).toBe(f.home);
+    const command = launch.command([]);
+    expect(command).toContain(`'PATH'='${`${windowsSeatCli(f.home, process.cwd(), f.cli).bin}${path.delimiter}${f.home}`.replace(/'/g, "''")}'`);
+    fs.rmSync(f.executable);
+    f.env.PATH = path.delimiter;
+    await expect(f.managed.prepare({ nodeId: "node", session: "seat", pane: "%1" }, "auto")).rejects.toThrow("executable is unavailable");
   });
 
   it("parses OS command lines including paths with spaces and opaque settings arguments", () => {

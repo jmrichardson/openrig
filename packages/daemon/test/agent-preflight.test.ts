@@ -1,12 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { agentPreflight } from "../src/domain/agent-preflight.js";
 import type { AgentResolverFsOps } from "../src/domain/agent-resolver.js";
+import { fixtureFs } from "./helpers/fixture-path.js";
 
 function mockFs(files: Record<string, string>): AgentResolverFsOps {
-  return {
-    readFile: (p: string) => { if (p in files) return files[p]!; throw new Error(`Not found: ${p}`); },
-    exists: (p: string) => p in files,
-  };
+  return fixtureFs(files);
 }
 
 function validAgentYaml(name: string): string {

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, normalize } from "node:path";
 import { createDb } from "../src/db/connection.js";
 import { migrate } from "../src/db/migrate.js";
 import { ALL_MIGRATIONS } from "../src/db/all-migrations.js";
@@ -150,7 +150,7 @@ composition: { mission: ../../mission.yaml }
     const result = subject.runtime.compileLifecycle(missionDir, "release-op");
     expect(result.eligible).toBe(false);
     expect(result.workflowSpec).toBeNull();
-    expect(result.unknowns).toContain("slices/01-build/slice.yaml: execution contract missing");
+    expect(result.unknowns).toContain(`${normalize("slices/01-build/slice.yaml")}: execution contract missing`);
     subject.db.close();
   });
 

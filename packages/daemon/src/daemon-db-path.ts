@@ -22,9 +22,13 @@ function resolveForContainment(path: string, seen = new Set<string>()): string {
         throw realpathError;
       }
       const parent = dirname(absolute);
-      return parent === absolute
-        ? absolute
-        : join(resolveForContainment(parent, seen), basename(absolute));
+      if (parent === absolute) return absolute;
+      const resolvedParent = resolveForContainment(parent, seen);
+      // Windows reports ENOENT rather than ENOTDIR beneath a file; refuse it as POSIX does.
+      if (process.platform === "win32" && statSync(resolvedParent, { throwIfNoEntry: false })?.isDirectory() === false) {
+        throw realpathError;
+      }
+      return join(resolvedParent, basename(absolute));
     }
     if (stat.isSymbolicLink()) {
       const target = readlinkSync(absolute);

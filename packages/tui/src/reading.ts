@@ -13,6 +13,11 @@ export interface FileRead {
 }
 export type FileReadResult = FileRead | { error: string; message?: string };
 
+/** A drive or UNC path, as a Windows daemon reports it. */
+export function isWindowsAbsolute(p: string): boolean {
+  return /^(?:[a-z]:[\\/]|\\\\)/i.test(p);
+}
+
 /** Map only against explicitly served roots, never search another installation. */
 export function fileTargetForPath(source: string, roots: FileRoot[]): FileTarget | null {
   for (const root of [...roots].sort((a, b) => b.path.length - a.path.length)) {

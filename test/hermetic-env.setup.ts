@@ -89,6 +89,8 @@ const fixtureHome =
         if (process.env["OPENRIG_TEST_KEEP_TMPDIR"] !== "1") {
           createdTmp = fs.mkdtempSync(path.join(os.tmpdir(), "o-"));
           process.env["TMPDIR"] = createdTmp;
+          // os.tmpdir() reads TEMP/TMP rather than TMPDIR on Windows.
+          if (process.platform === "win32") process.env["TEMP"] = process.env["TMP"] = createdTmp;
         }
         return h;
       })();

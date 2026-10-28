@@ -61,7 +61,8 @@ const LISTERS = [
 
 describe.each(LISTERS)("%s under an inherited non-English locale", (_name, list) => {
   for (const locale of INHERITED_LOCALES) {
-    it(`keeps every row under ${locale.name}, with a child-only C locale`, async () => {
+    // `ps` and its LC_TIME-formatted lstart are POSIX; Windows reads CIM with an invariant ISO-8601 start time.
+    it.skipIf(process.platform === "win32")(`keeps every row under ${locale.name}, with a child-only C locale`, async () => {
       const envLog = installLocaleAwarePs();
       vi.stubEnv("LC_ALL", locale.LC_ALL);
       vi.stubEnv("LC_TIME", locale.LC_TIME);

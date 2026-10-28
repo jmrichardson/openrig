@@ -21,6 +21,8 @@ function accountHome(): string {
 }
 import fs from "node:fs";
 import { spawnSync } from "node:child_process";
+import { resolveWindowsCodexCommand } from "../adapters/windows-codex-command.js";
+const POSIX_MODES = process.platform !== "win32";
 
 /** Strict profile-name whitelist: alnum-led, then [A-Za-z0-9._-], 1..64 chars. Excludes /, \, ~,
  *  leading dot, whitespace, control, and shell metacharacters. Fail closed. */
@@ -42,14 +44,14 @@ export interface CodexAuthPaths {
 }
 
 /** Resolve the Codex paths from an env map (default process.env). CODEX_HOME wins; else $HOME/.codex. */
-export function resolveCodexHome(env: NodeJS.ProcessEnv = process.env): CodexAuthPaths {
+export function resolveCodexHome(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): CodexAuthPaths {
   const home = typeof env.HOME === "string" && env.HOME.length > 0 ? env.HOME : accountHome();
   const codexHome =
     typeof env.CODEX_HOME === "string" && env.CODEX_HOME.length > 0
       ? env.CODEX_HOME
       // HOME unset/empty (cron, systemd, some CI/container shells) must not yield a
       // cwd-relative ".codex" — auth files stay under the account's home.
-      : path.join(home, ".codex");
+      : path.join(platform === "win32" ? env.USERPROFILE || accountHome() : home, ".codex");
   return {
     codexHome,
     profileDir: path.join(codexHome, "auth-profiles"),
@@ -234,7 +236,11 @@ export interface CodexAuthDeps {
 
 /** Default login-state probe: exit code only, output never captured (stdio: ignore = no leak path). */
 function defaultLoginStatus(codexHome: string): "logged_in" | "not_logged_in" | "unavailable" {
-  const r = spawnSync("codex", ["login", "status"], {
+  let command: { command: string; args: string[] };
+  try { command = process.platform === "win32" ? resolveWindowsCodexCommand(process.env.PATH ?? "", process.execPath) : { command: "codex", args: [] }; }
+  catch { return "unavailable"; }
+  const r = spawnSync(command.command, [...command.args, "login", "status"], {
+    windowsHide: true,
     stdio: "ignore",
     env: { ...process.env, CODEX_HOME: codexHome },
   });
@@ -263,7 +269,7 @@ export function authStatus(paths: CodexAuthPaths, deps: CodexAuthDeps = {}): Aut
     profileDirPresent: isDir(paths.profileDir),
     activeAuthPresent,
     activeAuthMode,
-    activeAuthModeSafe: activeAuthMode === null ? "unknown" : activeAuthMode === "600",
+    activeAuthModeSafe: activeAuthMode === null || !POSIX_MODES ? "unknown" : activeAuthMode === "600",
     profileCount: countProfiles(paths.profileDir),
     loginStatus: (deps.loginStatus ?? defaultLoginStatus)(paths.codexHome),
   };
@@ -287,7 +293,7 @@ export function authValidate(paths: CodexAuthPaths, name: string): AuthValidateR
   if (!isSafeProfileFile(target, paths.profileDir) || !realDirContained(paths.profileDir, paths.codexHome)) {
     return { ok: false, reason: "unsafe_path" };
   }
-  if (fileModeOctal(target) !== "600") return { ok: false, reason: "unsafe_permissions" };
+  if (POSIX_MODES && fileModeOctal(target) !== "600") return { ok: false, reason: "unsafe_permissions" };
   let content: string;
   try {
     content = fs.readFileSync(target, "utf8");
@@ -300,7 +306,7 @@ export function authValidate(paths: CodexAuthPaths, name: string): AuthValidateR
     // Intentionally ignore the error object — its message can echo file content (a secret).
     return { ok: false, reason: "malformed_json" };
   }
-  return { ok: true, name, path: target, mode: "600" };
+  return { ok: true, name, path: target, mode: POSIX_MODES ? "600" : "unknown" };
 }
 
 export type AuthSaveResult =
@@ -332,7 +338,7 @@ export function authSave(paths: CodexAuthPaths, name: string): AuthSaveResult {
   // Thread the earlier lstat so copyOntoFresh can confirm the opened fd is still the same inode
   // (dev/ino) it was checked as — a swap of the active auth in the check-then-use window fails safe.
   if (!copyOntoFresh(paths.activeAuth, target, { dev: srcStat.dev, ino: srcStat.ino })) return { ok: false, reason: "io_error" };
-  return { ok: true, name, path: target, mode: "600" };
+  return { ok: true, name, path: target, mode: POSIX_MODES ? "600" : "unknown" };
 }
 
 export type AuthSwitchResult =
@@ -351,7 +357,7 @@ export function authSwitch(paths: CodexAuthPaths, name: string): AuthSwitchResul
   // write the selected profile's SECRET bytes THROUGH an inode living outside CODEX_HOME. Refuse it
   // (isFile() is false for a symlink, so the old isFile-gated check silently missed both cases).
   if (!destReplaceable(paths.activeAuth)) return { ok: false, reason: "unsafe_path" };
-  if (isFile(paths.activeAuth)) {
+  if (POSIX_MODES && isFile(paths.activeAuth)) {
     const m = fileModeOctal(paths.activeAuth);
     if (m !== null && m !== "600") return { ok: false, reason: "unsafe_permissions" };
   }
@@ -367,7 +373,7 @@ export function authSwitch(paths: CodexAuthPaths, name: string): AuthSwitchResul
     ok: true,
     name,
     activePath: paths.activeAuth,
-    mode: "600",
+    mode: POSIX_MODES ? "600" : "unknown",
     note: "live Codex sessions do not switch accounts in place; restart the affected seats to pick up the new profile.",
   };
 }
@@ -508,7 +514,7 @@ export function authSeatSet(
     }
     return { ok: false, reason: "io_error" };
   }
-  return { ok: true, seat: fields.seat, registryPath: paths.registryPath, mode: "600", disclaimer: SEAT_REGISTRY_DISCLAIMER };
+  return { ok: true, seat: fields.seat, registryPath: paths.registryPath, mode: POSIX_MODES ? "600" : "unknown", disclaimer: SEAT_REGISTRY_DISCLAIMER };
 }
 
 /** List well-formed seat rows (malformed rows skipped). */
@@ -559,7 +565,7 @@ export function authSeatsReport(paths: CodexAuthPaths): SeatsReport {
   return {
     registryPresent: present,
     registryMode: mode,
-    registryModeSafe: mode === null ? "unknown" : mode === "600",
+    registryModeSafe: mode === null || !POSIX_MODES ? "unknown" : mode === "600",
     total,
     known,
     unknown,

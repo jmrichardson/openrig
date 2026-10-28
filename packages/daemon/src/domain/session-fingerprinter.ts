@@ -1,7 +1,9 @@
+import { win32 } from "node:path";
 import type { CmuxAdapter } from "../adapters/cmux.js";
 import type { TmuxAdapter } from "../adapters/tmux.js";
 import type { ScannedPane } from "./tmux-discovery-scanner.js";
 import type { RuntimeHint, Confidence } from "./discovery-types.js";
+import { isShellForeground } from "./shell-classifier.js";
 
 /** Evidence collected during fingerprinting */
 export interface FingerprintEvidence {
@@ -55,12 +57,14 @@ export class SessionFingerprinter {
   private cmux: CmuxAdapter;
   private tmux: TmuxAdapter;
   private fsExists: (path: string) => boolean;
+  private platform: NodeJS.Platform;
   private cachedAgentPIDs: Map<number, { runtime: string; pid: number }> | null = null;
 
-  constructor(deps: { cmuxAdapter: CmuxAdapter; tmuxAdapter: TmuxAdapter; fsExists: (path: string) => boolean }) {
+  constructor(deps: { cmuxAdapter: CmuxAdapter; tmuxAdapter: TmuxAdapter; fsExists: (path: string) => boolean; platform?: NodeJS.Platform }) {
     this.cmux = deps.cmuxAdapter;
     this.tmux = deps.tmuxAdapter;
     this.fsExists = deps.fsExists;
+    this.platform = deps.platform ?? process.platform;
   }
 
   /** Pre-fetch cmux agent PIDs for batch use. Call before fingerprinting multiple panes. */
@@ -93,7 +97,11 @@ export class SessionFingerprinter {
 
     // --- Layer 1: Process tree / active command ---
     if (pane.activeCommand) {
-      const cmd = (pane.activeCommand.split("/").pop() ?? pane.activeCommand).toLowerCase();
+      // psmux may report a native executable as a full path, in any case, with `.exe`.
+      const windows = this.platform === "win32";
+      const cmd = windows
+        ? win32.basename(pane.activeCommand).replace(/\.exe$/i, "").toLowerCase()
+        : (pane.activeCommand.split("/").pop() ?? pane.activeCommand).toLowerCase();
 
       for (const pattern of CLAUDE_PROCESS_PATTERNS) {
         if (processNameIs(cmd, pattern)) {
@@ -111,7 +119,7 @@ export class SessionFingerprinter {
         }
       }
 
-      if (SHELL_NAMES.has(cmd)) {
+      if (windows ? isShellForeground(pane.activeCommand, null, "win32") : SHELL_NAMES.has(cmd)) {
         evidence.layerUsed = 1;
         evidence.processSignal = { command: pane.activeCommand, matched: "shell" };
         return { runtimeHint: "terminal", confidence: "high", evidence };

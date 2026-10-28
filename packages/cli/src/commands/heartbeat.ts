@@ -508,9 +508,17 @@ function printHumanHeartbeat(result: HeartbeatResult): void {
   }
 }
 
+/** On Windows `rig` is an npm .cmd shim, which execFile cannot start; run this CLI's own entry instead. */
+export function heartbeatSendCommand(session: string, text: string, platform: NodeJS.Platform = process.platform): [string, string[]] {
+  return platform === "win32"
+    ? [process.execPath, [nodePath.resolve(import.meta.dirname, "../bin-wrapper.js"), "send", session, text]]
+    : ["rig", ["send", session, text]];
+}
+
 function defaultSend(session: string, text: string): Promise<{ ok: boolean; message: string }> {
+  const [file, args] = heartbeatSendCommand(session, text);
   return new Promise((resolve) => {
-    execFile("rig", ["send", session, text], { timeout: 10_000 }, (error, stdout, stderr) => {
+    execFile(file, args, { timeout: 10_000 }, (error, stdout, stderr) => {
       if (error) {
         resolve({ ok: false, message: (stderr || error.message).trim() });
       } else {

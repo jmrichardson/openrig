@@ -10,6 +10,31 @@
 // do. The Codex version is >= 0.130 so startup skips the `codex_hooks` feature-flag write.
 import fs from "node:fs";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
+
+/**
+ * Compile a C# source beside this file into a native Windows test executable, cached by its content.
+ * The cache is the checkout's node_modules/.cache, not os.tmpdir(): the hermetic setup gives each worker
+ * a TEMP of its own before it writes the stubs, so a temp cache would compile again in every worker.
+ */
+export function compileWindowsTestExecutable(sourceName: string): string {
+  const source = fs.readFileSync(path.join(import.meta.dirname, sourceName), "utf8");
+  const cache = path.join(import.meta.dirname, "..", "node_modules", ".cache", `openrig-test-exe-${createHash("sha256").update(source).digest("hex")}`);
+  fs.mkdirSync(cache, { recursive: true });
+  const executable = path.join(cache, "program.exe");
+  if (fs.existsSync(executable)) return executable;
+  const staged = path.join(cache, `${randomUUID()}.exe`);
+  const script = `$ErrorActionPreference='Stop'; Add-Type -TypeDefinition '${source.replaceAll("'", "''")}' -OutputAssembly '${staged.replaceAll("'", "''")}' -OutputType ConsoleApplication`;
+  try {
+    execFileSync(path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
+      ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")],
+      { windowsHide: true, timeout: 30000, stdio: "pipe" });
+    try { fs.renameSync(staged, executable); }
+    catch (error) { if (!fs.existsSync(executable)) throw error; }
+  } finally { fs.rmSync(staged, { force: true }); }
+  return executable;
+}
 import { fileURLToPath } from "node:url";
 
 const STUBS = {
@@ -49,6 +74,16 @@ export function realRuntimesRequested(
 export function writeRuntimeStubs(parent: string): string {
   const dir = path.join(parent, STUB_NAME);
   fs.mkdirSync(dir, { recursive: true });
+  if (process.platform === "win32") {
+    // One native stub per name, printing the text written beside it.
+    const executable = compileWindowsTestExecutable("native-runtime-stub.cs");
+    for (const [name, { version, help }] of Object.entries(STUBS)) {
+      fs.copyFileSync(executable, path.join(dir, `${name}.exe`));
+      fs.writeFileSync(path.join(dir, `${name}.version`), `${version}\n`);
+      fs.writeFileSync(path.join(dir, `${name}.help`), `${help.join("\n")}\n`);
+    }
+    return dir;
+  }
   for (const [name, { version, help }] of Object.entries(STUBS)) {
     fs.writeFileSync(
       path.join(dir, name),

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { buildDocsGuardMessage, findBlockedDocsPaths, listTrackedDocsPaths } from "./check-docs-guard.mjs";
 
@@ -87,6 +87,27 @@ test("the real check-docs-guard.mjs exits 0 against the actual repository", () =
   assert.equal(result.trim(), "");
 });
 
+// The entry check must recognise the script when Node is handed its absolute path (C:\... on
+// Windows); a check that never matches would pass every tree without looking.
+test("the real script run by absolute path refuses a blocked tracked docs file", async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const repo = mkdtempSync(join(tmpdir(), "openrig-docs-guard-main-"));
+  try {
+    execFileSync("git", ["init", "--quiet", repo]);
+    mkdirSync(join(repo, "docs/plans"), { recursive: true });
+    writeFileSync(join(repo, "docs/plans/loose.md"), "fixture");
+    execFileSync("git", ["add", "--", "docs"], { cwd: repo });
+    const script = fileURLToPath(new URL("./check-docs-guard.mjs", import.meta.url));
+    const result = spawnSync(process.execPath, [script], { cwd: repo, encoding: "utf8" });
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, /^Blocked tracked docs paths detected[^\n]*\n- docs\/plans\/loose\.md\n/);
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
 // Git quotes non-ASCII, tabs and newlines in its default line-based output.
 test("the real tracked-path reader preserves unusual documentation filenames", async () => {
   const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import("node:fs");
@@ -94,7 +115,9 @@ test("the real tracked-path reader preserves unusual documentation filenames", a
   const { join } = await import("node:path");
   const repo = mkdtempSync(join(tmpdir(), "openrig-docs-guard-"));
   try {
-    const paths = ["docs/notes\nextra.md", "docs/équipe.md", "docs/reference/topic\tname.md"];
+    // A Windows file name cannot hold a newline or a tab; there the non-ASCII name is the quoted one.
+    const windows = process.platform === "win32";
+    const paths = windows ? ["docs/équipe.md"] : ["docs/notes\nextra.md", "docs/équipe.md", "docs/reference/topic\tname.md"];
     execFileSync("git", ["init", "--quiet", repo]);
     mkdirSync(join(repo, "docs/reference"), { recursive: true });
     for (const file of paths) writeFileSync(join(repo, file), "fixture");
@@ -102,7 +125,7 @@ test("the real tracked-path reader preserves unusual documentation filenames", a
     const tracked = listTrackedDocsPaths((command, args, options) =>
       execFileSync(command, args, { ...options, cwd: repo }));
     assert.deepEqual([...tracked].sort(), [...paths].sort());
-    assert.deepEqual(findBlockedDocsPaths(tracked), ["docs/notes\nextra.md", "docs/équipe.md"]);
+    assert.deepEqual(findBlockedDocsPaths(tracked), windows ? ["docs/équipe.md"] : ["docs/notes\nextra.md", "docs/équipe.md"]);
   } finally {
     rmSync(repo, { recursive: true, force: true });
   }

@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -53,5 +55,20 @@ describe("mission composition planning snapshots", () => {
     expect(read(first)).toBe(firstBefore);
     expect(read(second)).toBe(secondBefore);
     for (const dir of [first, second]) expect(fs.readdirSync(dir).some((name) => name.endsWith(".tmp"))).toBe(false);
+  });
+
+  it("replaces a manifest that another process is briefly reading", async () => {
+    const dir = mission("held");
+    const edit = planMissionMembershipAdd(dir, "slices/01-first/slice.yaml", 10)!;
+    // Real process and time: Windows refuses replacement only across another process's open handle,
+    // and that reader must close it on its own clock while the synchronous replace waits.
+    const reader = spawn(process.execPath, ["-e",
+      "const fs=require('fs');const fd=fs.openSync(process.argv[1],'r');process.stdout.write('open');setTimeout(()=>fs.closeSync(fd),200);",
+      path.join(dir, "mission.yaml")], { stdio: ["ignore", "pipe", "inherit"] });
+    await once(reader.stdout!, "data");
+    applyMissionCompositionEdits([edit]);
+    expect(read(dir)).toContain("slices/01-first/slice.yaml");
+    expect(fs.readdirSync(dir).some((name) => name.endsWith(".tmp"))).toBe(false);
+    await once(reader, "exit");
   });
 });

@@ -1,10 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
 import type { DaemonClient } from "../src/client.js";
 import { STATE_FILE, type DaemonState, type LifecycleDeps } from "../src/daemon-lifecycle.js";
 import { createProgram } from "../src/index.js";
 import type { StatusDeps } from "../src/commands/status.js";
 import type { RigDeps } from "../src/commands/rig.js";
+
+// The CLI resolves --cwd /work; Windows prefixes the current drive.
+const WORK = resolve("/work");
 
 function lifecycleDeps(): LifecycleDeps {
   const state: DaemonState = {
@@ -95,7 +99,7 @@ describe("rig create", () => {
       "/api/rigs/import",
       expect.any(String),
       "text/yaml",
-      { "X-Rig-Root": "/work", "X-Cwd-Override": "/work" },
+      { "X-Rig-Root": WORK, "X-Cwd-Override": WORK },
       { timeoutMs: 120_000 },
     );
     const spec = parseYaml(sentYaml);
@@ -110,13 +114,13 @@ describe("rig create", () => {
           agent_ref: "path:/opt/openrig/specs/agents/orchestration/orchestrator",
           runtime: "claude-code",
           profile: "default",
-          cwd: "/work",
+          cwd: WORK,
         }],
         edges: [],
       }],
       edges: [],
     });
-    expect(sentHeaders).toEqual({ "X-Rig-Root": "/work", "X-Cwd-Override": "/work" });
+    expect(sentHeaders).toEqual({ "X-Rig-Root": WORK, "X-Cwd-Override": WORK });
     expect(JSON.parse(logs.join("\n"))).toMatchObject({
       ok: true,
       rigId: "rig-1",
@@ -205,9 +209,9 @@ describe("rig grow", () => {
           agent_ref: "path:/opt/openrig/specs/agents/orchestration/orchestrator",
           runtime: "claude-code",
           profile: "default",
-          cwd: "/work",
+          cwd: WORK,
         },
-        rigRoot: "/work",
+        rigRoot: WORK,
       },
       { timeoutMs: 120_000 },
     );
@@ -347,7 +351,7 @@ describe("rig grow", () => {
           ],
           edges: [],
         },
-        rigRoot: "/work",
+        rigRoot: WORK,
       }),
       { timeoutMs: 120_000 },
     );

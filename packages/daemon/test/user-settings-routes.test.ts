@@ -179,18 +179,18 @@ describe("config routes (User Settings v0)", () => {
 
   it("GET /api/config rebases persisted legacy workspace defaults", async () => {
     store.set("workspace.root", "/custom/ws");
-    store.set("workspace.slices_root", "/custom/ws/slices");
-    store.set("workspace.steering_path", "/custom/ws/steering/STEERING.md");
+    store.set("workspace.slices_root", join("/custom/ws", "slices"));
+    store.set("workspace.steering_path", join("/custom/ws", "steering", "STEERING.md"));
     const app = buildApp();
     const res = await app.request("/api/config");
     expect(res.status).toBe(200);
     const body = await res.json() as { settings: Record<string, { value: unknown; source: string }> };
     expect(body.settings["workspace.slices_root"]).toMatchObject({
-      value: "/custom/ws/missions",
+      value: join("/custom/ws", "missions"),
       source: "default",
     });
     expect(body.settings["workspace.steering_path"]).toMatchObject({
-      value: "/custom/ws/STEERING.md",
+      value: join("/custom/ws", "STEERING.md"),
       source: "default",
     });
   });

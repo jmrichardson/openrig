@@ -81,7 +81,7 @@ describe("configuredSeatAccounts — each state", () => {
   it("default login: a Codex seat with no row, and every Claude seat, name the daemon's home", () => {
     const rows = configuredSeatAccounts(input({ seats: [seat("dev-qa@r", "codex"), seat("dev-build@r", "claude-code")] }));
     expect(rows[0]!.configured).toEqual({ source: "default_login", home: "/h/.codex", homeNote: "the login active in the daemon's CODEX_HOME when this seat launched" });
-    expect(rows[1]!.configured).toEqual({ source: "default_login", home: "/h/.claude", homeNote: "the login in the daemon's Claude config dir, shared by every Claude seat on this daemon" });
+    expect(rows[1]!.configured).toEqual({ source: "default_login", home: path.join("/h", ".claude"), homeNote: "the login in the daemon's Claude config dir, shared by every Claude seat on this daemon" });
     for (const row of rows) expect(row.allowance).toEqual({ linked: false, reason: expect.stringContaining("active when it launched") });
   });
 
@@ -309,7 +309,7 @@ describe("seatAccounts through the provider service", () => {
     expect([...bySeat.keys()].sort()).toEqual(["dev-build@r", "dev-cx@r", "dev-old@r", "dev-qa@r"]);
     expect(bySeat.get("dev-qa@r")!.configured).toEqual({ source: "registry", profileRef: "work-a", recordedAt: "2026-10-12T10:00:00Z", profileSaved: true });
     expect(bySeat.get("dev-cx@r")!.configured).toMatchObject({ source: "default_login", home: fake.codexHome });
-    expect(bySeat.get("dev-build@r")!.configured).toMatchObject({ source: "default_login", home: expect.stringMatching(/seat-accounts-home-.*\/\.claude$/) });
+    expect(bySeat.get("dev-build@r")!.configured).toMatchObject({ source: "default_login", home: expect.stringMatching(/seat-accounts-home-.*[\\/]\.claude$/) });
     expect(bySeat.get("dev-old@r")!.registryNotes![0]).toMatch(/^stale registry row: names profile work-a .* this seat now runs claude-code$/);
     // The existing blocks are as before: bindings[] as main, usage rows still seats: "unknown".
     expect(model.bindings).toEqual((await mainSvc.getReadModel()).bindings);
@@ -415,7 +415,8 @@ describe("seatAccounts on the production path (samples, registry reads, config d
   const HEADER = "seat\trig\truntime\tcwd\tauth_profile\tupdated_ts\n";
   const ROW = "dev-cx@r\tr\tcodex\t/w\tsaved-work\t2026-10-12T10:00:00Z\n";
 
-  it.skipIf(process.getuid?.() === 0)("F3: an unreadable registry: each Codex seat without a parsed row is unknown, with the error code", async () => {
+  // POSIX mode bits; Windows uses ACLs
+  it.skipIf(process.getuid?.() === 0 || process.platform === "win32")("F3: an unreadable registry: each Codex seat without a parsed row is unknown, with the error code", async () => {
     const p = prod({ seats: codexSeats, registry: { body: HEADER + ROW, mode: 0o000 } });
     const rows = await p.bySeat();
     for (const seat of ["dev-qa@r", "dev-cx@r"]) {
@@ -430,7 +431,8 @@ describe("seatAccounts on the production path (samples, registry reads, config d
     expect(rows.get("dev-cx@r")!.configured).toMatchObject({ source: "registry", profileRef: "saved-work" });
   });
 
-  it.skipIf(process.getuid?.() === 0)("an unreadable profile folder: whether the profile is saved can't be told (null), never 'not saved'", async () => {
+  // POSIX mode bits; Windows uses ACLs
+  it.skipIf(process.getuid?.() === 0 || process.platform === "win32")("an unreadable profile folder: whether the profile is saved can't be told (null), never 'not saved'", async () => {
     const p = prod({ seats: codexSeats, registry: { body: HEADER + ROW, mode: 0o600 }, profiles: { names: ["saved-work"], folderMode: 0o000 } });
     try {
       const model = await p.svc.getReadModel();

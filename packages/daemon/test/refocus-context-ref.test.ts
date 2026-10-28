@@ -2,9 +2,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { deriveCurrentWork } from "../src/domain/current-work.js";
+import { fakePythonEnv, hasPython3, writeFakeRig } from "./helpers/refocus-hook-fakes.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const HOOK = resolve(HERE, "../assets/plugins/openrig-core/hooks/scripts/refocus.cjs");
@@ -62,7 +63,6 @@ function runHook(options: {
     writeFileSync(transcript, options.transcriptContent, "utf8");
   }
 
-  const rig = join(bin, "rig");
   // The fake answers two verbs. `queue whoami` is dispatched first and returns its own
   // stdout/status, so a whoami failure can be exercised without disturbing the context-get
   // contract below, which stays byte-identical to keep the existing suites unaffected.
@@ -90,12 +90,7 @@ exit "\${RIG_STATUS:-0}"
   // The hook resolves its interpreter through PYTHON, so a shim there records the exact
   // trace-to-root argv — which is where --work-start is observable as an effect.
   const pythonLog = join(root, "python-argv.log");
-  const python = join(bin, "python-shim");
-  writeFileSync(python, `#!/bin/sh
-printf '%s\\n' "$*" >> "$PYTHON_ARGV_LOG"
-exit 0
-`, "utf8");
-  chmodSync(python, 0o755);
+  const python = fakePythonEnv(root, 'require("node:fs").appendFileSync(process.env.PYTHON_ARGV_LOG, `${process.argv.slice(1).join(" ")}\\n`);\nprocess.exit(0);');
 
   let contentFile: string | undefined;
   if (options.fileContent !== undefined) {
@@ -122,7 +117,7 @@ exit 0
     OPENRIG_REFOCUS_TREES: "work",
     OPENRIG_WORKSPACE_ROOT: home,
     OPENRIG_REFOCUS_WORK_NODE: home,
-    ...(options.capturePython ? { PYTHON: python } : {}),
+    ...(options.capturePython ? python : {}),
     ...options.extraEnv,
   } as NodeJS.ProcessEnv;
 
@@ -180,6 +175,15 @@ describe("openrig-core refocus hook — context library refs", () => {
     expect(JSON.parse(readFileSync(result.argvCapture, "utf8"))).toEqual([
       "context", "get", REF,
     ]);
+  });
+
+  it("reaches rig through the seat's CLI entry on Windows and only through PATH elsewhere", () => {
+    // No rig is on PATH: only the Windows path may reach the fake, through OPENRIG_CLI_ENTRY.
+    const result = runHook({ ref: REF, rigStdout: "entry bytes\n", extraEnv: { PATH: join(tmpdir(), "openrig-no-rig-on-path") } });
+    const context = result.payload?.hookSpecificOutput.additionalContext || "";
+    expect(result.status).toBe(0);
+    if (process.platform === "win32") expect(context.endsWith("entry bytes\n")).toBe(true);
+    else expect(context.startsWith(`REFOCUS CONTENT REF FAILED: ${REF}`)).toBe(true);
   });
 
   it("puts an unresolvable REF failure banner at the payload head and still delivers generic context", () => {
@@ -298,6 +302,7 @@ describe("openrig-core refocus hook — S18 trigger and event contract", () => {
   });
 });
 
+// Every case that runs the shipped trace-to-root.py (directly or through the hook) needs a real python3.
 describe("openrig-core refocusing skill — real dual-tree trace", () => {
   function fixture() {
     root = mkdtempSync(join(tmpdir(), "refocus-trace-"));
@@ -365,7 +370,7 @@ exit 1
   // The work-node cases below must not inherit an ambient work-node variable from the runner.
   const unpinned = (env: NodeJS.ProcessEnv) => ({ ...env, OPENRIG_REFOCUS_WORK_NODE: undefined });
 
-  it("renders both config-rooted, path-only ascents with notes at light depth", () => {
+  it.skipIf(!hasPython3)("renders both config-rooted, path-only ascents with notes at light depth", () => {
     const f = fixture();
     const result = trace([
       "--trees", "both", "--depth", "light",
@@ -384,7 +389,7 @@ exit 1
     expect(result.stdout).not.toContain("observation secret");
   });
 
-  it("makes tree and depth intensity observable and reports a broken chain link", () => {
+  it.skipIf(!hasPython3)("makes tree and depth intensity observable and reports a broken chain link", () => {
     const f = fixture();
     unlinkSync(join(f.topology, "rigs/demo/LEARNED.md"));
     const topologyOnly = trace([
@@ -406,7 +411,7 @@ exit 1
     expect(workFull.stdout).not.toContain("TOPOLOGY TRACE");
   });
 
-  it("falls back to the work root, labelled as broad orientation, for the daemon's exact no-baton basis", () => {
+  it.skipIf(!hasPython3)("falls back to the work root, labelled as broad orientation, for the daemon's exact no-baton basis", () => {
     const f = fixture();
     // cwd sits on a slice to prove the fallback does not quietly re-point to cwd inference.
     const result = trace(["--trees", "work", "--work-basis", NO_BATON], unpinned(f.env), f.workStart);
@@ -419,7 +424,7 @@ exit 1
     expect(result.stdout).not.toContain("TRACE GAP");
   });
 
-  it("keeps the sibling 'resolved to no work node' refusal a named gap, never the fallback", () => {
+  it.skipIf(!hasPython3)("keeps the sibling 'resolved to no work node' refusal a named gap, never the fallback", () => {
     const f = fixture();
     const sibling = "no typed in-progress work resolved to a work node";
     const result = trace(["--trees", "work", "--work-basis", sibling], unpinned(f.env), f.workStart);
@@ -429,7 +434,7 @@ exit 1
     expect(result.stdout).not.toContain("Build useful things");
   });
 
-  it("names an ambiguous basis as the gap even when the working directory is inside the workspace", () => {
+  it.skipIf(!hasPython3)("names an ambiguous basis as the gap even when the working directory is inside the workspace", () => {
     const f = fixture();
     const result = trace(["--trees", "work", "--work-basis", AMBIGUOUS], unpinned(f.env), f.workStart);
     expect(result.status).toBe(0);
@@ -438,7 +443,7 @@ exit 1
     expect(result.stdout).not.toContain("Deliver refocus");
   });
 
-  it("reports an unreadable current-work answer as UNKNOWN even when the working directory is inside the workspace", () => {
+  it.skipIf(!hasPython3)("reports an unreadable current-work answer as UNKNOWN even when the working directory is inside the workspace", () => {
     const f = fixture();
     const reason = "queue whoami answer was not JSON";
     const result = trace(["--trees", "work", "--work-unknown", reason], unpinned(f.env), f.workStart);
@@ -448,7 +453,7 @@ exit 1
     expect(result.stdout).not.toContain("Deliver refocus");
   });
 
-  it("lets an explicit --work-start or OPENRIG_REFOCUS_WORK_NODE win over a daemon basis", () => {
+  it.skipIf(!hasPython3)("lets an explicit --work-start or OPENRIG_REFOCUS_WORK_NODE win over a daemon basis", () => {
     const f = fixture();
     const flag = trace(["--trees", "work", "--work-start", f.workStart, "--work-basis", NO_BATON], unpinned(f.env));
     expect(flag.status).toBe(0);
@@ -462,7 +467,7 @@ exit 1
     expect(env.stdout).not.toContain("TRACE GAP");
   });
 
-  it("keeps standalone cwd inference and names literal-path recovery when unresolved", () => {
+  it.skipIf(!hasPython3)("keeps standalone cwd inference and names literal-path recovery when unresolved", () => {
     const f = fixture();
     const inside = trace(["--trees", "work"], unpinned(f.env), f.workStart);
     expect(inside.status).toBe(0);
@@ -476,7 +481,7 @@ exit 1
     );
   });
 
-  it("keeps the trace script's no-baton text equal to the daemon's refusal", () => {
+  it.skipIf(!hasPython3)("keeps the trace script's no-baton text equal to the daemon's refusal", () => {
     // -B: importing the script must not write __pycache__ into the shipped skill, which the pack build rejects.
     const loaded = spawnSync("python3", ["-B", "-c", [
       "import importlib.util, sys",
@@ -748,11 +753,8 @@ exit 1
 
 describe("openrig-core refocus hook — delivery state", () => {
   // These cases exercise delivery state; the real dual-tree trace is covered above.
-  function successfulTrace(home: string): string {
-    const script = join(home, "trace-success");
-    writeFileSync(script, '#!/bin/sh\nprintf "WORK TRACE: fixture intent\\n"\n');
-    chmodSync(script, 0o755);
-    return script;
+  function successfulTrace(home: string) {
+    return fakePythonEnv(home, 'require("node:fs").writeSync(1, "WORK TRACE: fixture intent\\n");\nprocess.exit(0);');
   }
 
   it("retains due state at Stop, then consumes one context-visible delivery", () => {
@@ -778,7 +780,7 @@ describe("openrig-core refocus hook — delivery state", () => {
         OPENRIG_REFOCUS_TREES: "work",
         OPENRIG_WORKSPACE_ROOT: home,
         OPENRIG_REFOCUS_WORK_NODE: home,
-        PYTHON: python,
+        ...python,
       },
     });
 
@@ -826,7 +828,7 @@ describe("openrig-core refocus hook — delivery state", () => {
         OPENRIG_REFOCUS_WORK_NODE: home,
         OPENRIG_REFOCUS_CONTENT_REF: undefined,
         OPENRIG_REFOCUS_CONTENT_FILE: undefined,
-        PYTHON: python,
+        ...python,
       },
     });
 
@@ -973,7 +975,8 @@ describe("openrig-core refocus hook — current-work binding (OPR.0.5.8.14)", ()
     }
   });
 
-  it("delivers the work-root fallback through the real trace when the daemon reports no baton", () => {
+  // Runs the shipped trace-to-root.py, which needs a real python3.
+  it.skipIf(!hasPython3)("delivers the work-root fallback through the real trace when the daemon reports no baton", () => {
     const result = runHook({
       whoamiStdout: answer(null, NO_BATON),
       extraEnv: { OPENRIG_REFOCUS_WORK_NODE: undefined },

@@ -7,6 +7,7 @@
 //   slices/lifecycle-reboot-recovery-scenario-matrix/
 
 import { describe, it, expect, vi } from "vitest";
+import { CODEX_LAUNCH_DEFAULTS } from "./helpers/codex-state.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -380,7 +381,7 @@ describe("Lifecycle reboot/recovery scenario matrix (Tier 1)", () => {
 
         const r = await adapter.resume("r99-worker", "codex_id", "tok-abc", "/tmp");
 
-        expect(tmux.sendShellCommand).toHaveBeenCalledWith("r99-worker", "codex -s workspace-write '-c' 'check_for_update_on_startup=false' resume 'tok-abc'");
+        expect(tmux.sendShellCommand).toHaveBeenCalledWith("r99-worker", `codex -s workspace-write ${CODEX_LAUNCH_DEFAULTS} resume 'tok-abc'`);
         expect(tmux.sendText).not.toHaveBeenCalled();
         expect(r).toEqual({
           ok: true,

@@ -50,14 +50,18 @@ function assertGrant(command: string, runtime: string) {
     expect(command).toContain(args.map(arg => ` ${shellQuote(arg)}`).join(""));
     const settings = JSON.parse(args[1]);
     expect(Object.keys(settings)).toEqual(["permissions", "hooks"]);
-    expect(Object.keys(settings.permissions)).toEqual(["allow"]); // no reset of user ask/deny
+    expect(Object.keys(settings.permissions)).toEqual(["allow"]); // no reset of user ask/deny, and no lifecycle asks
     expect(settings.permissions.allow).toEqual(expect.arrayContaining([
       "Read(~/**)", "WebFetch", "Bash(claude auth status:*)", "Bash(codex login status:*)",
       "Bash(command -v:*)", "Bash(python3:*)", "Bash(cd:*)", "Bash(sort:*)", "Bash(wc:*)",
     ]));
     expect(settings.permissions.allow).not.toContain("Bash");
-    expect(settings.hooks.PreToolUse[0].matcher).toBe("Bash");
+    // Native Windows: Claude's PowerShell tool gets the same command families, and the hook sees both tools.
+    const win32 = process.platform === "win32";
+    expect(settings.permissions.allow.includes("PowerShell(rig:*)")).toBe(win32);
+    expect(settings.hooks.PreToolUse.map((entry: { matcher: string }) => entry.matcher)).toEqual(win32 ? ["Bash", "PowerShell"] : ["Bash"]);
     expect(settings.hooks.PreToolUse[0].hooks[0].command).toContain("claude-team-permissions.cjs");
+    if (win32) expect(settings.hooks.PreToolUse[1].hooks[0].args[0]).toContain("claude-team-permissions.cjs");
   } else {
     expect(command).toContain("-s danger-full-access -a never");
     expect(command).toContain("notice.hide_full_access_warning=true");
@@ -168,6 +172,13 @@ describe("kernel operational launch default", () => {
       expect(await observeClaudePaneProcess({ ...input, listProcesses: async () => [{ ...root, command }] })).not.toBeNull();
       expect(await observeClaudePaneProcess({ ...input, listProcesses: async () => [{ ...root, command: command + " --unknown" }] })).toBeNull();
       expect(await observeClaudePaneProcess({ ...input, expectedToken: "other", listProcesses: async () => [{ ...root, command }] })).toBeNull();
+    }
+  });
+  it("kernel seats get no native ask rule on any platform; native Windows adds only PowerShell allowances", () => {
+    for (const platform of ["linux", "darwin", "win32"] as const) {
+      const { permissions } = JSON.parse(operationalLaunchArgs("claude-code", { kernelAuthority: true, managedCompaction: false }, platform)[1]);
+      expect(Object.keys(permissions), platform).toEqual(["allow"]);
+      expect(permissions.allow.includes("PowerShell(rig:*)"), platform).toBe(platform === "win32");
     }
   });
 });

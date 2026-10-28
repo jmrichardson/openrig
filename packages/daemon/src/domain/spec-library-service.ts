@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { join, relative, dirname, extname } from "node:path";
+import { join, relative, dirname, extname, sep } from "node:path";
 import { createHash } from "node:crypto";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { SpecReviewService } from "./spec-review-service.js";
@@ -131,7 +131,8 @@ export class SpecLibraryService {
       }
 
       for (const absPath of files) {
-        const relPath = relative(root.path, absPath);
+        // relativePath and the id derived from it are platform-independent: always '/'-separated.
+        const relPath = relative(root.path, absPath).split(sep).join("/");
         if (!shouldIndexRelativePath(root.sourceType, relPath)) {
           continue;
         }

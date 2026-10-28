@@ -58,7 +58,7 @@ function runningDeps(port: number): StatusDeps {
 }
 
 function healthyPreflightExec(cmd: string): Promise<string> {
-  if (cmd === "tmux -V") return Promise.resolve("tmux 3.6a");
+  if (cmd === "tmux -V") return Promise.resolve(process.platform === "win32" ? "tmux 3.4.0\npsmux 3.4.0" : "tmux 3.6a");
   if (cmd === "tmux list-sessions") return Promise.resolve("");
   return Promise.resolve("");
 }
@@ -310,11 +310,39 @@ describe("Up CLI", () => {
     });
 
     // sourceRef must be an absolute path, not the raw relative input
-    expect(lastBody.sourceRef).toMatch(/^\//);
-    expect((lastBody.sourceRef as string).endsWith("relative/spec.yaml")).toBe(true);
+    expect(lastBody.sourceRef).toBe(nodePath.resolve("relative/spec.yaml"));
 
     server.removeAllListeners("request");
     for (const l of origListeners) server.on("request", l as (...args: unknown[]) => void);
+  });
+
+  it("treats an extensionless source with the platform separator as a path, not a rig name", async () => {
+    let lastBody: Record<string, unknown> = {};
+    const origListeners = server.listeners("request");
+    server.removeAllListeners("request");
+    server.on("request", async (req: http.IncomingMessage, res: http.ServerResponse) => {
+      let body = "";
+      for await (const chunk of req) body += chunk;
+      if (req.url === "/api/up") {
+        lastBody = JSON.parse(body);
+        res.writeHead(201, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ status: "completed", runId: "r", rigId: "g", stages: [], errors: [] }));
+        return;
+      }
+      res.writeHead(404).end();
+    });
+
+    // "specdir\myrig" on Windows, "specdir/myrig" on POSIX.
+    const source = ["specdir", "myrig"].join(nodePath.sep);
+    try {
+      await captureLogs(async () => {
+        await makeCmd().parseAsync(["node", "rig", "up", source]);
+      });
+      expect(lastBody.sourceRef).toBe(nodePath.resolve(source));
+    } finally {
+      server.removeAllListeners("request");
+      for (const l of origListeners) server.on("request", l as (...args: unknown[]) => void);
+    }
   });
 
   it("up from .rigbundle defaults targetRoot to current working directory", async () => {
@@ -335,7 +363,7 @@ describe("Up CLI", () => {
       await makeCmd().parseAsync(["node", "rig", "up", "/tmp/demo.rigbundle"]);
     });
 
-    expect(lastBody.sourceRef).toBe("/tmp/demo.rigbundle");
+    expect(lastBody.sourceRef).toBe(nodePath.resolve("/tmp/demo.rigbundle"));
     expect(lastBody.targetRoot).toBe(process.cwd());
 
     server.removeAllListeners("request");
@@ -360,7 +388,7 @@ describe("Up CLI", () => {
       await makeCmd().parseAsync(["node", "rig", "up", "/tmp/demo.rigbundle", "--target", "/tmp/custom-root"]);
     });
 
-    expect(lastBody.targetRoot).toBe("/tmp/custom-root");
+    expect(lastBody.targetRoot).toBe(nodePath.resolve("/tmp/custom-root"));
 
     server.removeAllListeners("request");
     for (const l of origListeners) server.on("request", l as (...args: unknown[]) => void);
@@ -384,7 +412,7 @@ describe("Up CLI", () => {
       await makeCmd().parseAsync(["node", "rig", "up", "/tmp/demo.rigbundle", "--target", "rel/target-root"]);
     });
 
-    expect(lastBody.targetRoot).toBe(`${process.cwd()}/rel/target-root`);
+    expect(lastBody.targetRoot).toBe(nodePath.resolve("rel/target-root"));
 
     server.removeAllListeners("request");
     for (const l of origListeners) server.on("request", l as (...args: unknown[]) => void);
@@ -409,7 +437,7 @@ describe("Up CLI", () => {
     });
 
     expect(lastBody.targetRoot).toBe(process.cwd());
-    expect(lastBody.cwdOverride).toBe(`${process.cwd()}/rel/launch-dir`);
+    expect(lastBody.cwdOverride).toBe(nodePath.resolve("rel/launch-dir"));
 
     server.removeAllListeners("request");
     for (const l of origListeners) server.on("request", l as (...args: unknown[]) => void);
@@ -491,12 +519,13 @@ describe("Up CLI", () => {
       if (req.url === "/api/up") { lastBody = JSON.parse(body); return reply(201, { status: "completed", runId: "r", rigId: "g", stages: [], errors: [] }); }
       reply(404, { error: "not found" });
     });
-    const cwd = vi.spyOn(process, "cwd").mockReturnValue("/");
+    const root = nodePath.resolve("/"); // "/" on POSIX, the drive root on Windows
+    const cwd = vi.spyOn(process, "cwd").mockReturnValue(root);
     try {
       const { logs, exitCode } = await captureLogs(async () => {
         await makeCmd().parseAsync(["node", "rig", "up", ...args]);
       });
-      expect(lastBody.cwdOverride).toBe("/");
+      expect(lastBody.cwdOverride).toBe(root);
       expect(exitCode).toBeUndefined();
       expect(logs.some((l) => l.includes("warning:") && l.includes("--cwd <project dir>"))).toBe(warns);
     } finally {
@@ -524,8 +553,7 @@ describe("Up CLI", () => {
       await makeCmd().parseAsync(["node", "rig", "up", "/tmp/rig.yaml", "--cwd", "relative/project"]);
     });
 
-    expect(lastBody.cwdOverride).toMatch(/^\//);
-    expect((lastBody.cwdOverride as string).endsWith("relative/project")).toBe(true);
+    expect(lastBody.cwdOverride).toBe(nodePath.resolve("relative/project"));
 
     server.removeAllListeners("request");
     for (const l of origListeners) server.on("request", l as (...args: unknown[]) => void);

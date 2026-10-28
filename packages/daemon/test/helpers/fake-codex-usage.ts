@@ -4,6 +4,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { installWindowsNpmCodex } from "./windows-npm-codex.js";
 
 export interface FakeCodexPlan {
   /** ok: answer both reads; rpc_error: error on account/rateLimits/read; hang: never answer it;
@@ -61,6 +62,7 @@ export function makeFakeCodex(): FakeCodex {
   fs.mkdirSync(binDir);
   fs.mkdirSync(codexHome);
   fs.writeFileSync(path.join(binDir, "codex"), SCRIPT, { mode: 0o755 });
+  if (process.platform === "win32") installWindowsNpmCodex(binDir, SCRIPT);
   return {
     binDir,
     codexHome,

@@ -22,8 +22,8 @@ function mockFs(initialFiles: Record<string, string> = {}): SkillsRouterFsOps & 
   };
 }
 
-const BUNDLE_ROOT = "/bundle/root";
-const TARGET = "/operator/.openrig/skills";
+const BUNDLE_ROOT = nodePath.resolve("/bundle/root");
+const TARGET = nodePath.resolve("/operator/.openrig/skills");
 
 function makeInput(overrides?: Partial<RouteSkillsInput>): RouteSkillsInput {
   return {
@@ -48,31 +48,31 @@ describe("routeSkills", () => {
   // R2: routes one skill end-to-end
   it("routes one skill: source file copied to target with installedAt populated", () => {
     const fs = mockFs({
-      [`${BUNDLE_ROOT}/skills/foo/SKILL.md`]: "# foo skill body",
+      [nodePath.join(BUNDLE_ROOT, "skills/foo/SKILL.md")]: "# foo skill body",
     });
     const result = routeSkills(makeInput({ declaredSkills: ["skills/foo/SKILL.md"] }), fs);
     expect(result.routedCount).toBe(1);
     expect(result.rejectedCount).toBe(0);
     expect(result.records[0]!.status).toBe("routed");
-    expect(result.records[0]!.installedAt).toBe(`${TARGET}/foo/SKILL.md`);
-    expect(fs._written.get(`${TARGET}/foo/SKILL.md`)).toBe("# foo skill body");
+    expect(result.records[0]!.installedAt).toBe(nodePath.join(TARGET, "foo/SKILL.md"));
+    expect(fs._written.get(nodePath.join(TARGET, "foo/SKILL.md"))).toBe("# foo skill body");
   });
 
   // R3: routes multiple skills; preserves directory layout
   it("routes multiple skills preserving the per-skill directory layout under target", () => {
     const fs = mockFs({
-      [`${BUNDLE_ROOT}/skills/foo/SKILL.md`]: "foo",
-      [`${BUNDLE_ROOT}/skills/bar/SKILL.md`]: "bar",
-      [`${BUNDLE_ROOT}/skills/bar/helper.md`]: "bar-helper",
+      [nodePath.join(BUNDLE_ROOT, "skills/foo/SKILL.md")]: "foo",
+      [nodePath.join(BUNDLE_ROOT, "skills/bar/SKILL.md")]: "bar",
+      [nodePath.join(BUNDLE_ROOT, "skills/bar/helper.md")]: "bar-helper",
     });
     const result = routeSkills(
       makeInput({ declaredSkills: ["skills/foo/SKILL.md", "skills/bar/SKILL.md", "skills/bar/helper.md"] }),
       fs,
     );
     expect(result.routedCount).toBe(3);
-    expect(fs._written.get(`${TARGET}/foo/SKILL.md`)).toBe("foo");
-    expect(fs._written.get(`${TARGET}/bar/SKILL.md`)).toBe("bar");
-    expect(fs._written.get(`${TARGET}/bar/helper.md`)).toBe("bar-helper");
+    expect(fs._written.get(nodePath.join(TARGET, "foo/SKILL.md"))).toBe("foo");
+    expect(fs._written.get(nodePath.join(TARGET, "bar/SKILL.md"))).toBe("bar");
+    expect(fs._written.get(nodePath.join(TARGET, "bar/helper.md"))).toBe("bar-helper");
   });
 
   // R4: missing source file produces "missing" record (skipped, not error)
@@ -104,7 +104,7 @@ describe("routeSkills", () => {
   // R6: mixed list — routed + missing + unsafe in one call
   it("mixed declared list aggregates correctly across routed/missing/unsafe", () => {
     const fs = mockFs({
-      [`${BUNDLE_ROOT}/skills/ok/SKILL.md`]: "ok",
+      [nodePath.join(BUNDLE_ROOT, "skills/ok/SKILL.md")]: "ok",
     });
     const result = routeSkills(
       makeInput({ declaredSkills: ["skills/ok/SKILL.md", "skills/absent/SKILL.md", "../escape/SKILL.md"] }),
@@ -130,7 +130,7 @@ describe("routeSkills", () => {
     const fs = mockFs({
       // Source is reachable from bundleRoot via "skills/../outside/SKILL.md"
       // which resolves to "<bundleRoot>/outside/SKILL.md".
-      [`${BUNDLE_ROOT}/outside/SKILL.md`]: "would-escape-target",
+      [nodePath.join(BUNDLE_ROOT, "outside/SKILL.md")]: "would-escape-target",
     });
     const result = routeSkills(
       makeInput({ declaredSkills: ["skills/../outside/SKILL.md"] }),
@@ -148,19 +148,19 @@ describe("routeSkills", () => {
   // R8: non-"skills/" prefixed declared path is honored as-is (no leading strip)
   it("declared path without leading skills/ prefix routes verbatim", () => {
     const fs = mockFs({
-      [`${BUNDLE_ROOT}/custom/path/X.md`]: "x",
+      [nodePath.join(BUNDLE_ROOT, "custom/path/X.md")]: "x",
     });
     const result = routeSkills(
       makeInput({ declaredSkills: ["custom/path/X.md"] }),
       fs,
     );
     expect(result.routedCount).toBe(1);
-    expect(result.records[0]!.installedAt).toBe(`${TARGET}/custom/path/X.md`);
+    expect(result.records[0]!.installedAt).toBe(nodePath.join(TARGET, "custom/path/X.md"));
   });
 
   it("can keep package-shaped bundle payloads outside the managed catalog without changing source lookup", () => {
-    const packageRoot = "/operator/.openrig/packages";
-    const source = `${BUNDLE_ROOT}/packages/test-pkg/skills/DUAL.md`;
+    const packageRoot = nodePath.resolve("/operator/.openrig/packages");
+    const source = nodePath.join(BUNDLE_ROOT, "packages/test-pkg/skills/DUAL.md");
     const fs = mockFs({ [source]: "dual" });
 
     const result = routeSkills(makeInput({
@@ -170,8 +170,8 @@ describe("routeSkills", () => {
     }), fs);
 
     expect(result).toMatchObject({ routedCount: 1, rejectedCount: 0 });
-    expect(result.records[0]!.installedAt).toBe(`${packageRoot}/test-pkg/skills/DUAL.md`);
-    expect(fs._written.get(`${packageRoot}/test-pkg/skills/DUAL.md`)).toBe("dual");
+    expect(result.records[0]!.installedAt).toBe(nodePath.join(packageRoot, "test-pkg/skills/DUAL.md"));
+    expect(fs._written.get(nodePath.join(packageRoot, "test-pkg/skills/DUAL.md"))).toBe("dual");
   });
 });
 

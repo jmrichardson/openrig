@@ -356,8 +356,10 @@ describe("rig add", () => {
       expect(capturedUrl).toBeNull();
       const output = logs.join("\n");
       expect(output).toContain("'dupe' matches 2 rigs");
-      expect(output).toContain(`rig add ${DUPE_ID_1} infra ${fragmentPath}`);
-      expect(output).toContain(`rig add ${DUPE_ID_2} infra ${fragmentPath}`);
+      // A Windows path carries backslashes, so the suggestion quotes it.
+      const shown = process.platform === "win32" ? `'${fragmentPath}'` : fragmentPath;
+      expect(output).toContain(`rig add ${DUPE_ID_1} infra ${shown}`);
+      expect(output).toContain(`rig add ${DUPE_ID_2} infra ${shown}`);
     });
 
     it("suggested re-run commands quote a fragment path with spaces and keep --rig-root", async () => {

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { parseLiteralLaunchWords, powershellQuote, renderWindowsLaunch, hasOnlyWindowsTerminalResponseDraft } from "../src/adapters/windows-launch.js";
+import path from "node:path";
+import { parseLiteralLaunchWords, powershellQuote, renderWindowsLaunch, hasOnlyWindowsTerminalResponseDraft, windowsPathEntries } from "../src/adapters/windows-launch.js";
 import { TmuxAdapter } from "../src/adapters/tmux.js";
 
 describe("literal Windows launch rendering", () => {
@@ -20,11 +21,25 @@ describe("literal Windows launch rendering", () => {
     expect(launch).toContain("$openrigStart.FileName = 'node'");
     expect(launch).toContain('$openrigStart.Arguments = \'"C:\\project space\\runner.js" "x;y"\'');
     expect(powershellQuote("a'b")).toBe("'a''b'");
+    expect(powershellQuote("C:\\Users\\O\u2019Neil\u2018\u201a\u201b")).toBe("'C:\\Users\\O\u2019\u2019Neil\u2018\u2018\u201a\u201a\u201b\u201b'");
+  });
+  it.runIf(process.platform === "win32")("round-trips Unicode single quotes through Windows PowerShell", async () => {
+    const { execFileSync } = await import("node:child_process");
+    const value = "O\u2019Neil \u2018a\u2019 \u201ab\u201b 'c'";
+    const out = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `[Console]::OutputEncoding = [Text.Encoding]::UTF8; Write-Output ${powershellQuote(value)}`], { encoding: "utf8", windowsHide: true });
+    expect(out.trim()).toBe(value);
   });
   it("does not interpret shell syntax as native argv", () => {
     for (const command of ["node x; whoami", "node $(whoami)", 'node "$HOME"', "node x | whoami", "node 'unterminated", ""])
       expect(() => parseLiteralLaunchWords(command)).toThrow();
     expect(() => renderWindowsLaunch("node x", { "BAD;KEY": "x" })).toThrow();
+  });
+  it("reads Windows PATH entries trimmed and unquoted, skipping empty ones", () => {
+    // Split on the host delimiter, as the resolvers that use it are tested on every host.
+    const search = (...entries: string[]) => entries.join(path.delimiter);
+    expect(windowsPathEntries(search("", " \\a ", '"\\Program Files\\b"', ' "\\c" ', "  ", '""', "rel", "")))
+      .toEqual(["\\a", "\\Program Files\\b", "\\c", "rel"]);
+    expect(windowsPathEntries("")).toEqual([]);
   });
 });
 

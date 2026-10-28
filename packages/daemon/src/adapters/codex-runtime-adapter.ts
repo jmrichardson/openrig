@@ -1,3 +1,4 @@
+import { parseWindowsCommandLine } from "./windows-argv.js";
 import { codexEnvelopeArgs } from "../domain/codex-rebuild-permissions.js";
 import { codexMemberEnvelope, observeCodexEnvelope, readProfileFingerprint, type CodexProfileObservation, type ProfileFingerprint } from "../domain/codex-member-permissions.js";
 import { operationalLaunchArg } from "./kernel-authority.js";
@@ -34,12 +35,18 @@ import {
 import { assessNativeResumeProbe, buildCodexResumeCore, hasCodexUpdateHeader, type NativeResumeProbeResult } from "../domain/native-resume-probe.js";
 import { unknownDaemonSupportMessage, type CodexDaemonSupportDetector } from "../domain/codex-daemon-support.js";
 import { CODEX_NETWORK_DEFAULT_OVERRIDE, codexNetworkDefaultArg, type CodexNetworkDefaultReader } from "../domain/codex-network-default.js";
+import {
+  CODEX_WINDOWS_EXECUTION_POLICY_OVERRIDE, CODEX_WINDOWS_SANDBOX_OVERRIDE, codexWindowsExecutionPolicyChosen,
+  codexWindowsSandboxChosen, codexWindowsSandboxConfigFiles, codexWindowsSandboxElevated,
+} from "../domain/codex-windows-sandbox.js";
 import { resolveCodexGitAddDirs, type CodexGitAddDirResolver } from "../domain/codex-git-add-dirs.js";
 import { isPerSeatRoleGuidance, mergeManagedBlock, perSeatRoleSkipWarning } from "../domain/managed-blocks.js";
 import { excludeNewGeneratedFiles } from "../domain/generated-file-hygiene.js";
 import { codexQueueStateRoot, codexTeamWorkspaceArg, type PrepareCodexSeatFolder, type PrepareCodexTeamWorkspace } from "../domain/codex-team-workspace.js";
 import { shellQuote } from "./shell-quote.js";
 import { execRuntimeProbe } from "./runtime-probe-exec.js";
+import { renderWindowsLaunch } from "./windows-launch.js";
+import { execWindowsCodexCommand } from "./windows-codex-command.js";
 import { resolveReadinessTimeoutMs } from "../domain/readiness-timeout.js";
 import type { SettingsStore } from "../domain/user-settings/settings-store.js";
 import {
@@ -66,10 +73,11 @@ const codexHookTrust = createRequire(import.meta.url)("../../assets/plugins/open
   codexHookHash(eventLabel: string, handler: { command: string; timeoutSec: number; matcher?: string | null; statusMessage?: string | null }): string;
 };
 
-import { listNativeProcesses, observeCodexPaneProcess, observeCodexForkProcess, verifyCodexPaneProcess, verifyPaneIdleShell, type NativeProcessRow } from "../domain/native-process-lineage.js";
+import { isWindowsRuntimeProcess, listNativeProcesses, observeCodexPaneProcess, observeCodexForkProcess, verifyCodexPaneProcess, verifyPaneIdleShell, type NativeProcessRow } from "../domain/native-process-lineage.js";
 import { recordSeatSkillWrite, seatPluginSkillsLossNote, seatProjectionComplete, seatSkillWriteRefusal } from "../domain/seat-skill-storage.js";
 import { codexPluginContentHash, planOwnedCodexContentApproval, recordOwnedCodexApproval } from "../domain/codex-owned-plugin-trust.js";
 import { findTomlTable, opensTomlTable, parseTomlRoot, tomlArrayTableHeaderPath, tomlDefines, tomlTableHeaderPath } from "../domain/toml-tables.js";
+import { projectionResourceDirectory, projectionResourceId } from "../domain/projection-resource-path.js";
 
 // Shared by all probes of ONE launch, never reset by a delayed screen or an
 // ambiguous transport result. A separately requested launch gets a new attempt.
@@ -87,10 +95,13 @@ interface UpdatePromptAttempt {
 type CodexProcess = NativeProcessRow;
 
 /** What a running Codex was launched with that a launch would otherwise decide by probing (the network
- *  reader, the --no-daemon support probe) or by preparing directories (add-dirs). A relaunch that must keep the
- *  running Codex's effective settings takes these from its argv instead. */
+ *  reader, the --no-daemon support probe), by reading Codex config (the Windows sandbox) or by preparing
+ *  directories (add-dirs). A relaunch that must keep the running Codex's effective settings takes these from
+ *  its argv instead. */
 export interface RunningCodexLaunch {
   networkOverride: boolean;
+  windowsSandboxOverride?: boolean;
+  windowsExecutionPolicyOverride?: boolean;
   daemonOptOut: boolean;
   addDirs: string[];
 }
@@ -112,6 +123,8 @@ interface PreparedCodexLaunch {
   daemonOptOut: boolean;
   daemonArg: string;
   networkArg: string;
+  /** Native Windows only: Codex runs this launch in its elevated sandbox. */
+  windowsElevatedSandbox: boolean;
 }
 
 export interface CodexAdapterFsOps {
@@ -592,7 +605,7 @@ export class CodexRuntimeAdapter implements RuntimeAdapter {
       return;
     }
     const withHooks = upsertCodexActivityHooks(existing, relay);
-    if (!changesOnlyOpenRigActivityHooks(existing, withHooks, `node "${relay}"`)) {
+    if (!changesOnlyOpenRigActivityHooks(existing, withHooks, codexActivityHookCommand(relay))) {
       console.error(`[openrig] codex activity hooks skipped: ${configPath} can't be read as TOML, or writing OpenRig's hooks would change anything else; left untouched`);
       return;
     }
@@ -629,7 +642,7 @@ export class CodexRuntimeAdapter implements RuntimeAdapter {
       console.error(`[openrig] codex activity hooks skipped: ${hooksPath} can't be read as hooks (${(err as Error).message}); left untouched`);
       return;
     }
-    const command = `node "${relay}"`;
+    const command = codexActivityHookCommand(relay);
     const keySource = canonicalCodexHookSource(hooksPath);
     const stripped = upsertCodexFeaturesHooksEnabled(stripCodexActivityHooks(existing, command));
     let before: unknown = null;
@@ -688,11 +701,12 @@ export class CodexRuntimeAdapter implements RuntimeAdapter {
     let keySource = configPath;
     try {
       keySource = fs.realpathSync.native(configPath);
+      // Codex keys trust by the canonical path without the Windows extended-length prefix (observed: 0.163.0).
     } catch {
       // config.toml not on the real filesystem (first write / unit-test mock fs) — the plain
       // absolute path is the honest best guess; a canonicalization delta is fail-safe (gate reappears).
     }
-    const command = `node "${relay}"`;
+    const command = codexActivityHookCommand(relay);
     // upsertCodexActivityHooks has just written our marked block. Codex keys by the
     // group's position among this event's groups, not its position inside our block.
     // Count only the groups before the marker: a person's groups after it do not
@@ -723,7 +737,7 @@ export class CodexRuntimeAdapter implements RuntimeAdapter {
     const configPath = this.resolveCodexConfigPath(home);
     const hooksPath = nodePath.join(nodePath.dirname(configPath), "hooks.json");
     const existing = this.fs.exists(configPath) ? this.fs.readFile(configPath) : null;
-    const current = this.activityRelayPath ? `node "${this.activityRelayPath}"` : undefined;
+    const current = this.activityRelayPath ? codexActivityHookCommand(this.activityRelayPath) : undefined;
     let updated = existing === null ? null : stripCodexActivityHooks(existing, current);
     if (existing !== null && updated !== existing && !changesOnlyOpenRigActivityHooks(existing, updated!, current)) {
       console.error(`[openrig] codex activity hook removal skipped for ${configPath}: it can't be read as TOML, or removing OpenRig's hooks would change anything else; left untouched`);
@@ -769,7 +783,7 @@ export class CodexRuntimeAdapter implements RuntimeAdapter {
     const skillsDir = binding.seatSkillsRoot ?? nodePath.join(binding.cwd, ".agents", "skills");
     if (this.fs.exists(skillsDir) && this.fs.listFiles) {
       for (const file of this.fs.listFiles(skillsDir)) {
-        results.push({ effectiveId: file, category: "skill", installedPath: nodePath.join(skillsDir, file) });
+        results.push({ effectiveId: file.split(nodePath.sep).map(part => projectionResourceId(part)).join(nodePath.sep), category: "skill", installedPath: nodePath.join(skillsDir, file) });
       }
     }
     return results;
@@ -895,7 +909,7 @@ export class CodexRuntimeAdapter implements RuntimeAdapter {
       // The git dirs and the seat folder follow the parent id: ps flattens argv, so a path with a space placed before the
       // id would be read as the id when the fork is verified.
       const cmd = `codex${daemonArg}${postureArg}${networkArg}${modelArg}${effortArg} fork${queueStateDirArg} ${shellQuote(parentId)}${gitDirArg}${seatFolderArg}`;
-      const textResult = await this.tmux.sendShellCommand(binding.tmuxSession, await this.seatCommand(binding, cmd));
+      const textResult = await this.tmux.sendShellCommand(binding.tmuxSession, await this.seatCommand(binding, cmd, prepared.windowsElevatedSandbox));
       if (!textResult.ok) {
         return { ok: false, error: `Failed to send launch command: ${textResult.message}` };
       }
@@ -935,7 +949,7 @@ export class CodexRuntimeAdapter implements RuntimeAdapter {
       ? this.resumeCore(prepared, opts.resumeToken, binding)
       : `codex${daemonArg}${postureArg}${networkArg} -C ${shellQuote(binding.cwd)}${gitDirArg}${seatFolderArg}${queueStateDirArg}${modelArg}${effortArg}`;
 
-    const staged = await this.seatCommand(binding, cmd);
+    const staged = await this.seatCommand(binding, cmd, prepared.windowsElevatedSandbox);
     if (opts.beforeNativeDispatch && !opts.beforeNativeDispatch()) return { ok: false, error: "Selected history changed during Codex launch preparation; no native command was sent.", recovery: "attention_required" };
     const textResult = opts.beforeNativeDispatch
       ? await this.tmux.sendShellCommand(binding.tmuxSession, staged, () => { if (!opts.beforeNativeDispatch!()) throw new Error("Selected history changed before Codex input"); })
@@ -978,7 +992,7 @@ export class CodexRuntimeAdapter implements RuntimeAdapter {
     const prepared = await this.prepareLaunch(binding, opts.name, opts.running, { installCorePlugin: false });
     if (!prepared.ok) return prepared;
     const core = this.resumeCore(prepared, opts.resumeToken, binding);
-    return { ok: true, command: await this.seatCommand(binding, core), core, appliedLaunch: prepared.appliedLaunch };
+    return { ok: true, command: await this.seatCommand(binding, core, prepared.windowsElevatedSandbox), core, appliedLaunch: prepared.appliedLaunch };
   }
 
   /** Type a command buildResumeCommand built into the pane's shell, then verify the resume as launchHarness
@@ -1055,7 +1069,21 @@ export class CodexRuntimeAdapter implements RuntimeAdapter {
       : codexPostureArg(profileArg, process.env, binding.launchPosture);
     const appliedLaunch: AppliedLaunchObservation = envelope ? observeCodexEnvelope(envelope) : observeCodexSandbox(posture);
     // The seat's envelope is not full access, so a policy's full_bypass extras don't follow it.
-    const postureArg = posture + operationalLaunchArg(this.runtime, memberEnvelope ? { ...binding, kernelAuthority: false, launchPosture: undefined } : binding);
+    const layers = process.platform === "win32"
+      ? codexWindowsSandboxConfigFiles(nodePath.dirname(this.resolveCodexConfigPath()), profile).map((file) => {
+        try { return this.fs.exists(file) ? this.fs.readFile(file) : null; } catch { return null; /* no readable config chooses nothing */ }
+      })
+      : [];
+    const windowsSandboxOverride = process.platform === "win32" && (running ? running.windowsSandboxOverride
+      : !codexWindowsSandboxChosen(layers));
+    const windowsExecutionPolicyOverride = process.platform === "win32" && (running ? running.windowsExecutionPolicyOverride
+      : !codexWindowsExecutionPolicyChosen(layers));
+    // Not a launch setting: which Node the seat's rig shims run, so it is read from config even for a relaunch.
+    // OpenRig's MXC preference does not rule it out: where MXC is unavailable, Codex runs the elevated sandbox.
+    const windowsElevatedSandbox = process.platform === "win32" && codexWindowsSandboxElevated(layers);
+    const postureArg = posture + operationalLaunchArg(this.runtime, memberEnvelope ? { ...binding, kernelAuthority: false, launchPosture: undefined } : binding)
+      + (windowsSandboxOverride ? ` -c ${shellQuote(CODEX_WINDOWS_SANDBOX_OVERRIDE)}` : "")
+      + (windowsExecutionPolicyOverride ? ` -c ${shellQuote(CODEX_WINDOWS_EXECUTION_POLICY_OVERRIDE)}` : "");
 
     if (running) {
       // The running Codex already loaded its profile; drift in -p is the caller's to compare.
@@ -1066,7 +1094,7 @@ export class CodexRuntimeAdapter implements RuntimeAdapter {
         gitDirArg: running.addDirs.map((dir) => ` --add-dir ${shellQuote(dir)}`).join(""),
         seatFolderArg: "",
         daemonOptOut: running.daemonOptOut, daemonArg: running.daemonOptOut ? " --no-daemon" : "",
-        networkArg: running.networkOverride ? ` -c ${shellQuote(CODEX_NETWORK_DEFAULT_OVERRIDE)}` : "" };
+        networkArg: running.networkOverride ? ` -c ${shellQuote(CODEX_NETWORK_DEFAULT_OVERRIDE)}` : "", windowsElevatedSandbox };
     }
 
     // OPR.0.3.4.7 — profile-LOAD probe before launch/resume. A legacy
@@ -1113,7 +1141,7 @@ export class CodexRuntimeAdapter implements RuntimeAdapter {
 
     // The launch facts keep the probed daemon choice, so a printed recovery command can repeat it; no probe, no fact.
     const launchFacts = daemonSupport ? { ...appliedLaunch, daemonOptOut } : appliedLaunch;
-    return { ok: true, model, modelArg, effort, effortArg, profile, appliedLaunch: launchFacts, postureArg, queueStateDirArg, gitDirArg, seatFolderArg, daemonOptOut, daemonArg, networkArg };
+    return { ok: true, model, modelArg, effort, effortArg, profile, appliedLaunch: launchFacts, postureArg, queueStateDirArg, gitDirArg, seatFolderArg, daemonOptOut, daemonArg, networkArg, windowsElevatedSandbox };
   }
 
   private resumeCore(prepared: PreparedCodexLaunch, resumeToken: string, binding: NodeBinding): string {
@@ -1124,9 +1152,9 @@ export class CodexRuntimeAdapter implements RuntimeAdapter {
       + gitDirArg + seatFolderArg;
   }
 
-  private async seatCommand(binding: NodeBinding, cmd: string): Promise<string> {
+  private async seatCommand(binding: NodeBinding, cmd: string, elevatedSandbox: boolean): Promise<string> {
     return this.seatLaunchEnvironment
-      ? await this.seatLaunchEnvironment.command(binding.tmuxSession!, cmd, { codexCwd: binding.cwd, nodeId: binding.nodeId, generation: binding.launchGeneration, runtime: this.runtime, ...this.ownHomeCommandOpt(binding) })
+      ? await this.seatLaunchEnvironment.command(binding.tmuxSession!, cmd, { codexCwd: binding.cwd, nodeId: binding.nodeId, generation: binding.launchGeneration, runtime: this.runtime, ...this.ownHomeCommandOpt(binding), ...(elevatedSandbox ? { codexElevatedSandbox: true } : {}) })
       : this.launchCommand(cmd, this.homeFor(binding));
   }
 
@@ -1458,11 +1486,11 @@ export class CodexRuntimeAdapter implements RuntimeAdapter {
 
   private resolveTargetDir(entry: ProjectionEntry, cwd: string, seatSkillsRoot?: string): string | null {
     switch (entry.category) {
-      case "skill": return nodePath.join(seatSkillsRoot ?? nodePath.join(cwd, ".agents", "skills"), entry.effectiveId);
+      case "skill": return nodePath.join(seatSkillsRoot ?? nodePath.join(cwd, ".agents", "skills"), projectionResourceDirectory(entry.effectiveId));
       case "guidance": return null; // handled via merge
       case "subagent": return nodePath.join(cwd, ".agents"); // .agents/{id}.yaml per preserved contract
-      case "plugin": return nodePath.join(cwd, ".codex", "plugins", entry.effectiveId);
-      case "runtime_resource": return nodePath.join(cwd, ".agents", "extensions", entry.effectiveId);
+      case "plugin": return nodePath.join(cwd, ".codex", "plugins", projectionResourceDirectory(entry.effectiveId));
+      case "runtime_resource": return nodePath.join(cwd, ".agents", "extensions", projectionResourceDirectory(entry.effectiveId));
       default: return null;
     }
   }
@@ -2155,6 +2183,20 @@ const OPENRIG_ACTIVITY_STATUS = "OpenRig activity";
 const OPENRIG_ACTIVITY_HOOKS_END = "# END OPENRIG MANAGED ACTIVITY HOOKS";
 const OPENRIG_ACTIVITY_HOOK_EVENTS = ["SessionStart", "UserPromptSubmit", "Stop", "PermissionRequest"] as const;
 
+/** The hook's command. On Windows, Codex runs it through cmd.exe, which must never interpret a hook path
+ *  (percent expansion, embedded quotes): the relay runs from an encoded PowerShell script instead, whose
+ *  command line is base64 alone and so is a plain TOML literal string too. */
+function windowsActivityHookScript(node: string, relay: string): string {
+  return `$ErrorActionPreference = 'Stop'\n${renderWindowsLaunch(`${shellQuote(node)} ${shellQuote(relay)}`)}\nexit $LASTEXITCODE`;
+}
+export function codexActivityHookCommand(relayPath: string, platform: NodeJS.Platform = process.platform): string {
+  if (platform === "win32") {
+    const script = windowsActivityHookScript(process.execPath, relayPath);
+    return `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(script, "utf16le").toString("base64")}`;
+  }
+  return `node "${relayPath}"`;
+}
+
 /**
  * Idempotently write the OpenRig activity hooks into a Codex config.toml: pin
  * `[features].hooks = true` (canonical key) and a sentinel-wrapped managed block of
@@ -2166,7 +2208,7 @@ const OPENRIG_ACTIVITY_HOOK_EVENTS = ["SessionStart", "UserPromptSubmit", "Stop"
  * turn-scope event).
  */
 function upsertCodexActivityHooks(content: string, relayPath: string): string {
-  const command = `'node "${relayPath}"'`;
+  const command = `'${codexActivityHookCommand(relayPath)}'`;
   const stanzas = OPENRIG_ACTIVITY_HOOK_EVENTS
     .map((ev) => `[[hooks.${ev}]]\n[[hooks.${ev}.hooks]]\ntype = "command"\ncommand = ${command}\ntimeout = 5`)
     .join("\n\n");
@@ -2291,7 +2333,16 @@ const OPENRIG_ACTIVITY_RELAY_SUFFIX = "/assets/plugins/openrig-core/hooks/script
 
 /** A hook command that runs OpenRig's own shipped activity relay, not a person's script that shares its name. */
 function isOpenRigRelayCommand(command: unknown): boolean {
-  const relay = typeof command === "string" ? /^node "(.*)"$/.exec(command)?.[1] : undefined;
+  if (typeof command !== "string") return false;
+  let relay = /^node "(.*)"$/.exec(command)?.[1];
+  const encoded = /^powershell.exe -NoProfile -NonInteractive -EncodedCommand ([A-Za-z0-9+/]+={0,2})$/.exec(command)?.[1];
+  if (encoded) {
+    const script = Buffer.from(encoded, "base64").toString("utf16le");
+    const literal = (name: string) => new RegExp("\\$openrigStart\\." + name + " = '((?:[^']|'')*)'\\n").exec(script)?.[1]?.replace(/(['‘’‚‛])\1/g, "$1");
+    const node = literal("FileName"), args = literal("Arguments");
+    const words = args === undefined ? [] : parseWindowsCommandLine(args);
+    if (node && nodePath.win32.basename(node).toLowerCase() === "node.exe" && words.length === 1 && script === windowsActivityHookScript(node, words[0]!)) relay = words[0];
+  }
   return relay !== undefined && relay.replaceAll("\\", "/").endsWith(OPENRIG_ACTIVITY_RELAY_SUFFIX);
 }
 
@@ -2812,9 +2863,9 @@ function escapeRegExp(value: string): string {
 // production, execFn runs the real `codex -p <profile> mcp list` through
 // execRuntimeProbe (utf-8, 10s bound, off the event loop). Injected as the
 // adapter's default verifyProfilePreflight; tests substitute a controlled stub.
-async function defaultProfilePreflight(profile: string, selected?: { cwd: string; codexHome: string; launchPath?: string }): Promise<CodexProfileProbeResult> {
+async function defaultProfilePreflight(profile: string, selected?: { cwd: string; codexHome?: string; launchPath?: string }): Promise<CodexProfileProbeResult> {
   const { verifyCodexProfileLoads } = await import("../domain/codex-profile-preflight.js");
-  const execFn = (cmd: string) => execRuntimeProbe("codex.runtime.profile_preflight", cmd,
+  const execFn = (cmd: string) => process.platform === "win32" ? execWindowsCodexCommand(cmd, selected ? { cwd: selected.cwd, env: { ...process.env, ...(selected.codexHome ? { CODEX_HOME: selected.codexHome } : {}), ...(selected.launchPath ? { PATH: selected.launchPath } : {}) } } : {}) : execRuntimeProbe("codex.runtime.profile_preflight", cmd,
     selected ? { cwd: selected.cwd, env: { ...process.env, CODEX_HOME: selected.codexHome, ...(selected.launchPath ? { PATH: selected.launchPath } : {}) } } : {});
   return verifyCodexProfileLoads(profile, execFn, undefined, selected?.codexHome);
 }
@@ -2827,21 +2878,30 @@ export async function defaultListProcesses(): Promise<CodexProcess[]> {
 }
 
 function findCodexDescendantPids(
-  processes: Array<{ pid: number; ppid: number; command: string }>,
+  processes: NativeProcessRow[],
   parentPid: number
 ): number[] {
-  const childrenByParent = new Map<number, Array<{ pid: number; command: string }>>();
+  const childrenByParent = new Map<number, NativeProcessRow[]>();
   for (const proc of processes) {
     const siblings = childrenByParent.get(proc.ppid) ?? [];
-    siblings.push({ pid: proc.pid, command: proc.command });
+    siblings.push(proc);
     childrenByParent.set(proc.ppid, siblings);
   }
 
   const matches: number[] = [];
+  const byPid = new Map(processes.map(row => [row.pid, row]));
+  const visited = new Set<number>([parentPid]);
   const visit = (pid: number): void => {
     for (const child of childrenByParent.get(pid) ?? []) {
+      // A Windows parent PID can outlive its process and be reused: a child must be born after its parent.
+      if (child.platform === "win32") {
+        const parentBirth = Date.parse(byPid.get(pid)?.startedAt ?? "");
+        const childBirth = Date.parse(child.startedAt ?? "");
+        if (visited.has(child.pid) || !Number.isFinite(parentBirth) || !Number.isFinite(childBirth) || childBirth < parentBirth) continue;
+        visited.add(child.pid);
+      }
       visit(child.pid);
-      if (commandLooksLikeCodex(child.command)) {
+      if (child.platform === "win32" ? isWindowsRuntimeProcess(child, "codex") : commandLooksLikeCodex(child.command)) {
         matches.push(child.pid);
       }
     }

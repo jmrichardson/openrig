@@ -7,6 +7,7 @@ import { acquireDaemonStartLock } from "../daemon-start-lock.js";
 import { formatDaemonHostForUrl } from "../client.js";
 import { execFileSync, spawn } from "node:child_process";
 import { fetchWithTimeout } from "../fetch-with-timeout.js";
+import { replaceFileSync } from "../lib/scope/replace-file.js";
 import {
   startDaemon,
   stopDaemon,
@@ -132,7 +133,8 @@ export function realDeps(): LifecycleDeps {
       const temporary = `${p}.${randomUUID()}.tmp`;
       try {
         fs.writeFileSync(temporary, content, { encoding: "utf-8", flag: "wx" });
-        fs.renameSync(temporary, p);
+        // On Windows a concurrent `rig` reading daemon.json briefly blocks the replace.
+        replaceFileSync(temporary, p);
       } finally {
         try { fs.unlinkSync(temporary); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
       }

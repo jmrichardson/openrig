@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { resolve } from "node:path";
 import { RigSpecSchema, LegacyRigSpecSchema } from "../src/domain/rigspec-schema.js";
 
 const VALID_RIG = {
@@ -37,6 +38,19 @@ const VALID_RIG = {
 };
 
 describe("RigSpec schema (pod-aware)", () => {
+  // Windows path rules; elsewhere these are ordinary relative names (see path-safety.test.ts).
+  it.skipIf(process.platform !== "win32").each(["C:agents\\impl", "C:\\agents\\impl", "\\agents\\impl", "\\\\server\\share\\impl"])("rejects rooted local agent refs: %s", (path) => {
+    const rig = structuredClone(VALID_RIG);
+    rig.pods[0]!.members[0]!.agent_ref = `local:${path}`;
+    expect(RigSpecSchema.validate(rig).errors.some(error => error.includes("local: ref must be a relative path"))).toBe(true);
+  });
+
+  it("accepts native absolute agent refs with spaces", () => {
+    const rig = structuredClone(VALID_RIG);
+    rig.pods[0]!.members[0]!.agent_ref = `path:${resolve("agent specs", "impl")}`;
+    expect(RigSpecSchema.validate(rig).valid).toBe(true);
+  });
+
   // T1: valid rig with embedded pods passes validation
   it("valid rig with embedded pods passes validation", () => {
     const result = RigSpecSchema.validate(VALID_RIG);

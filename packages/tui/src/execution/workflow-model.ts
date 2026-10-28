@@ -1,5 +1,7 @@
+import { powershellQuote } from "@openrig/daemon/windows-launch";
 import { DEFAULT_TIME_ZONE, displayTime } from "../time.js";
 import { fieldLine, listItem, sectionRule, wrapDetailLines, type ContentLine } from "../detail.js";
+import { isWindowsAbsolute } from "../reading.js";
 import type { Action } from "../types.js";
 import type { ExecutionViewSnap } from "./execution-model.js";
 
@@ -31,7 +33,7 @@ export function workflowOverview(execution: ExecutionViewSnap, width: number): C
 }
 
 /** All claims are served state or attributed records. No receipt is adjudicated here. */
-export function workflowDetail(execution: ExecutionViewSnap, key: string, width: number, timeZone = DEFAULT_TIME_ZONE): ContentLine[] | null {
+export function workflowDetail(execution: ExecutionViewSnap, key: string, width: number, timeZone = DEFAULT_TIME_ZONE, platform: NodeJS.Platform = process.platform): ContentLine[] | null {
   const instances = execution.lifecycle_instances ?? [];
   const packetId = key.startsWith("packet:") ? key.slice(7) : null;
   const instance = packetId ? instances.find((i) => packets(i).some((p) => p.packet_id === packetId)) : instances.find((i) => `workflow:${i.instance_id}` === key);
@@ -62,7 +64,7 @@ export function workflowDetail(execution: ExecutionViewSnap, key: string, width:
     if (packet.wake) lines.push(field("wake ref", wake.ref), field("delivery", wake.deliveryStatus));
     if (wake.expiresAt) lines.push(field("due", displayTime(wake.expiresAt, timeZone)));
     if (packet.wake_schedule) lines.push(field("policy", schedule.policy), field("cadence", `${text(schedule.interval_seconds)} seconds (a check, not guaranteed delivery)`), field("last check", lastCheck(schedule.last_evaluation_at, timeZone)));
-    lines.push(sectionRule("Next action", width), ...actionLines(text(packet.targeted_action), width));
+    lines.push(sectionRule("Next action", width), ...actionLines(text(packet.targeted_action), width, platform));
     if (packet.gate) lines.push(field("gate", packet.gate));
     if (packet.acceptance) lines.push(field("decision", packet.acceptance));
     lines.push(field("evidence", packet.evidence_ref), field("packet", packet.packet_id), listItem("Workflow, obligations and bound sources", open(`workflow:${instance.instance_id}`)));
@@ -92,7 +94,8 @@ export function workflowDetail(execution: ExecutionViewSnap, key: string, width:
     lines.push(sectionRule("Bound graph and sources", width), field("workflow", instance.workflow_name), field("version", instance.workflow_version), field("graph", instance.graph_source), { text: instance.reconciliation ? "  Bound source receipts are retained; the authored/running comparison below explains current changes." : "  Sources are bound at compilation. Current source bytes have not been compared." });
     for (const source of rows(instance.sources)) {
       if (source.kind === "slice" && typeof source.path === "string") {
-        const parts = source.path.split("/");
+        // Bound sources are the daemon's native paths, drive/UNC on Windows.
+        const parts = source.path.split(isWindowsAbsolute(source.path) ? /[\\/]/ : "/");
         const slice = parts.at(-2);
         if (slice) lines.push(listItem(`Slice ${slice}`, { type: "scopes-open", mission: execution.mission, slice }));
       }
@@ -105,12 +108,12 @@ export function workflowDetail(execution: ExecutionViewSnap, key: string, width:
         field("composition", row(comparison.composition).explanation));
       if (comparison.status === "source-only") lines.push({ text: "  Source bytes changed; executable steps/policy are unchanged. No completed work needs replay." });
       for (const reason of Array.isArray(comparison.reasons) ? comparison.reasons : []) lines.push(field("reason", reason));
-      lines.push(...actionLines(text(comparison.nextAction), width));
-      if (comparison.applyCommand) lines.push(...actionLines(text(comparison.applyCommand), width));
+      lines.push(...actionLines(text(comparison.nextAction), width, platform));
+      if (comparison.applyCommand) lines.push(...actionLines(text(comparison.applyCommand), width, platform));
       lines.push({ text: "  Inspect first; the plan can change. A lost response is recoverable with rig workflow operation <key>." });
     }
     lines.push(field("input digest", instance.compiled_input_digest));
-    for (const failure of rows(instance.failure_occurrences)) if (failure.status === "unresolved") lines.push(sectionRule("Unresolved failure", width), field("step", failure.step_id), field("reason", failure.failure_reason), field("occurrence", failure.occurrence_id), ...actionLines(text(failure.targeted_action), width));
+    for (const failure of rows(instance.failure_occurrences)) if (failure.status === "unresolved") lines.push(sectionRule("Unresolved failure", width), field("step", failure.step_id), field("reason", failure.failure_reason), field("occurrence", failure.occurrence_id), ...actionLines(text(failure.targeted_action), width, platform));
     for (const unknown of Array.isArray(instance.unknowns) ? instance.unknowns : []) lines.push(field("unknown", unknown));
     lines.push(field("instance", instance.instance_id), field("operation", instance.operation_key));
   }
@@ -153,47 +156,58 @@ function quoteShell(value: string): string {
 /** Split only words emitted by the daemon's shellQuote helper. A continuation directly
  * between adjacent quoted chunks is one shell argument; option-to-option continuations
  * retain a separating space. */
-function splitQuotedWord(word: string, maxWidth: number): string[] | null {
+function splitQuotedWord(word: string, maxWidth: number, quote: (value: string) => string = quoteShell): string[] | null {
   if (!word.startsWith("'") || !word.endsWith("'")) return null;
   const value = word.slice(1, -1).replaceAll(`'"'"'`, "'");
   if (quoteShell(value) !== word) return null;
   const chunks: string[] = [];
   let chunk = "";
   for (const char of value) {
-    if (chunk && quoteShell(chunk + char).length > maxWidth) {
-      chunks.push(quoteShell(chunk));
+    if (chunk && quote(chunk + char).length > maxWidth) {
+      chunks.push(quote(chunk));
       chunk = char;
     } else {
       chunk += char;
     }
   }
-  chunks.push(quoteShell(chunk));
+  chunks.push(quote(chunk));
   return chunks;
 }
 
-function actionLines(action: string, width: number): ContentLine[] {
+/** A daemon-quoted word re-quoted for Windows PowerShell; other words are kept as written. */
+function powershellWord(word: string): string {
+  return splitQuotedWord(word, Infinity, powershellQuote)?.[0] ?? word;
+}
+
+function actionLines(action: string, width: number, platform: NodeJS.Platform): ContentLine[] {
   const firstIndent = "      action ";
   const nextIndent = "        ";
   const room = Math.max(width, 24);
+  // Windows PowerShell continues a line on a trailing backtick and never joins adjacent
+  // quoted chunks, so there a long value wraps as a parenthesized concatenation.
+  const powershell = platform === "win32";
+  const shown = powershell ? powershellWord : (word: string) => word;
+  const continued = powershell ? " `" : " \\";
   const parts = shellWords(action);
   const lines: ContentLine[] = [];
-  let current = `${firstIndent}${parts.shift() ?? ""}`;
+  let current = `${firstIndent}${shown(parts.shift() ?? "")}`;
   for (let index = 0; index < parts.length; index++) {
-    const part = parts[index]!;
+    const word = parts[index]!;
+    const part = shown(word);
     const more = index < parts.length - 1;
-    if (current && `${current} ${part}${more ? " \\" : ""}`.length <= room) {
+    if (current && `${current} ${part}${more ? continued : ""}`.length <= room) {
       current += ` ${part}`;
       continue;
     }
-    if (current) lines.push({ text: `${current} \\` });
-    const chunks = splitQuotedWord(part, room - 2);
-    if (chunks && `${nextIndent}${part}${more ? " \\" : ""}`.length > room) {
+    if (current) lines.push({ text: `${current}${continued}` });
+    const chunks = powershell ? splitQuotedWord(word, room - 3, powershellQuote) : splitQuotedWord(word, room - 2);
+    if (chunks && `${nextIndent}${part}${more ? continued : ""}`.length > room) {
       for (let chunkIndex = 0; chunkIndex < chunks.length - 1; chunkIndex++) {
-        lines.push({ text: `${chunks[chunkIndex]!}\\` });
+        lines.push({ text: powershell ? `${chunkIndex ? "" : "("}${chunks[chunkIndex]!} +` : `${chunks[chunkIndex]!}\\` });
       }
-      const last = chunks[chunks.length - 1]!;
+      const last = powershell && chunks.length > 1 ? `${chunks[chunks.length - 1]!})` : chunks[chunks.length - 1]!;
       if (more) {
-        lines.push({ text: `${last} \\` });
+        lines.push({ text: `${last}${continued}` });
         current = "";
       } else {
         current = last;

@@ -19,6 +19,7 @@ import {
   CodexRuntimeAdapter,
   computeCodexHookTrust,
   upsertCodexHookTrust,
+  codexActivityHookCommand,
   type CodexAdapterFsOps,
 } from "../src/adapters/codex-runtime-adapter.js";
 import type { TmuxAdapter } from "../src/adapters/tmux.js";
@@ -209,7 +210,7 @@ describe("OPR.0.4.3.33 — provisioning-seam coupling (ensureCodexActivityHooks 
   it("emits BOTH the managed hook block AND exactly the 4 [hooks.state] trust records", () => {
     const fs = mockCodexFs({ [RELAY]: "// relay" });
     makeAdapter(fs).ensureCodexActivityHooks();
-    const cfg = fs._store[CONFIG]!;
+    const cfg = fs._store[nodePath.normalize(CONFIG)]!;
     expect(cfg).toBeDefined();
     // the managed hook block is present
     expect(cfg).toContain("# BEGIN OPENRIG MANAGED ACTIVITY HOOKS");
@@ -217,7 +218,10 @@ describe("OPR.0.4.3.33 — provisioning-seam coupling (ensureCodexActivityHooks 
     // and exactly the 4 trust state entries (keySource falls back to the plain config path
     // because the mock fs never lands the file on the real disk for realpathSync)
     for (const ev of EVENTS) {
-      const { key, hash } = PROVISIONAL_FIXTURE[ev];
+      // Windows writes its own config path and hook command, so its records are computed.
+      const { key, hash } = process.platform === "win32"
+        ? computeCodexHookTrust(ev, { keySource: nodePath.normalize(CONFIG), command: codexActivityHookCommand(RELAY), timeoutSec: 5 })
+        : PROVISIONAL_FIXTURE[ev];
       expect(cfg).toContain(`[hooks.state.${JSON.stringify(key)}]`);
       expect(cfg).toContain(`trusted_hash = ${JSON.stringify(hash)}`);
     }
@@ -287,9 +291,9 @@ describe("OPR.0.4.3.33 — provisioning-seam coupling (ensureCodexActivityHooks 
     const fs = mockCodexFs({ [RELAY]: "// relay" });
     const adapter = makeAdapter(fs);
     adapter.ensureCodexActivityHooks();
-    const first = fs._store[CONFIG]!;
+    const first = fs._store[nodePath.normalize(CONFIG)]!;
     adapter.ensureCodexActivityHooks();
-    const second = fs._store[CONFIG]!;
+    const second = fs._store[nodePath.normalize(CONFIG)]!;
     expect(second).toBe(first);
     expect(second.match(/^\[hooks\.state\./gm)?.length).toBe(4);
   });
@@ -297,10 +301,10 @@ describe("OPR.0.4.3.33 — provisioning-seam coupling (ensureCodexActivityHooks 
   it("preserves a pre-existing [projects] trust entry through the hook + trust write", () => {
     const fs = mockCodexFs({
       [RELAY]: "// relay",
-      [CONFIG]: '[projects."/some/project"]\ntrust_level = "trusted"\n',
+      [nodePath.normalize(CONFIG)]: '[projects."/some/project"]\ntrust_level = "trusted"\n',
     });
     makeAdapter(fs).ensureCodexActivityHooks();
-    const cfg = fs._store[CONFIG]!;
+    const cfg = fs._store[nodePath.normalize(CONFIG)]!;
     expect(cfg).toContain('[projects."/some/project"]');
     expect(cfg).toContain('trust_level = "trusted"');
     expect(cfg).toContain("# BEGIN OPENRIG MANAGED ACTIVITY HOOKS");

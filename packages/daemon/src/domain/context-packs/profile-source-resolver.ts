@@ -24,6 +24,7 @@ import { isAbsolute, join, normalize, relative, sep } from "node:path";
 import type { SourceKind } from "./profile-composer.js";
 import { parseAddress } from "../markdown-address.js";
 import { RECAP_FILENAME } from "./seat-recap-store.js";
+import { isRootedPath } from "../path-safety.js";
 
 export class SourceResolutionError extends Error {
   constructor(message: string) {
@@ -77,8 +78,9 @@ export function parseSourceRef(ref: string): ParsedSourceRef {
   if (rel.length === 0) {
     throw new SourceResolutionError(`source ref '${ref}' has an empty path after its kind prefix.`);
   }
+  // Off Windows, rooted is exactly isAbsolute; on Windows it also covers drive-relative refs.
   const unsafe =
-    isAbsolute(rel) ||
+    isRootedPath(rel) ||
     rel.split(/[\\/]/).some((segment) => segment === ".." || segment === "");
   if (unsafe) {
     throw new SourceResolutionError(

@@ -30,7 +30,8 @@ export async function terminatePaneInPlace(
   if (!remain.ok) failures.push(`remain-on-exit: ${remain.message}`);
   const term = await tmux.signalPaneProcess(paneId, "TERM");
   if (!term.ok) failures.push(`TERM: ${term.message}`);
-  if (await waitPaneDead(tmux, paneId, timing)) return { ok: true, path: "graceful" };
+  // psmux has no graceful signal for a Windows console process and signals nothing, so there is nothing to wait for.
+  if ((term.ok || term.code !== "graceful_unsupported") && await waitPaneDead(tmux, paneId, timing)) return { ok: true, path: "graceful" };
   // Graceful window elapsed — force-kill (the pinned degraded path).
   const kill = await tmux.signalPaneProcess(paneId, "KILL");
   if (!kill.ok) failures.push(`KILL: ${kill.message}`);
