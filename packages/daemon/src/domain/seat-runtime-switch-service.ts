@@ -208,7 +208,8 @@ export class SeatRuntimeSwitchService {
     }
     const predecessorGeneration = sessionRegistry.currentOccupantTenure(node.id)?.generationUuid;
     const running = sessionRegistry.getSessionsForRig(node.rigId).filter((session) => session.nodeId === node.id && session.status === "running");
-    const unsupported = !sessionName || !binding?.tmuxPane ? "it has no bound tmux pane"
+    const unsupported = tmux.terminalKind === "psmux" ? "psmux cannot exchange panes across runtime servers; use separate Claude Code and Codex seats"
+      : !sessionName || !binding?.tmuxPane ? "it has no bound tmux pane"
       : binding.attachmentType && binding.attachmentType !== "tmux" ? `it's attached through ${binding.attachmentType}, not tmux`
       : !predecessorGeneration ? "its current occupant generation isn't recorded"
       : running.length !== 1 || running[0]!.sessionName !== sessionName ? "it doesn't have exactly one running session at its address"

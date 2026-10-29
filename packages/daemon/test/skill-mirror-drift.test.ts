@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { checkMirrorDriftSafe } from "../src/domain/skill-mirror-drift.js";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,8 +13,10 @@ describe("skill-mirror-drift safe wrapper", () => {
     const result = await checkMirrorDriftSafe();
     const sourceExists = existsSync(resolve(REPO_ROOT, "packages/daemon/specs/agents/shared/skills"));
     const targetExists = existsSync(resolve(REPO_ROOT, "skills/_canonical"));
+    // The checkout's mirror script compares trees with rsync (absent on stock Windows).
+    const rsyncAvailable = !spawnSync("rsync", ["--version"]).error;
 
-    if (sourceExists && targetExists) {
+    if (sourceExists && targetExists && rsyncAvailable) {
       expect(result.ok).toBe(true);
     } else {
       expect(result.ok).toBe(false);

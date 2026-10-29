@@ -363,12 +363,15 @@ export function buildPostCompactRestorePrompt(input: {
   else if (input.noMapRequired) pieces.push("No restore map was required for this compaction (--skip-map); restore from the marker or transcript below.");
   const overflow = input.overflowCompactInstruction?.trim().replace(/\s+/g, " ");
   if (overflow) pieces.push(`Operator compaction instruction (too long for the /compact command, so it travels here): ${overflow}`);
+  // The folder the shipped precompact hook writes packets to. Git for Windows mounts /tmp at %TEMP%
+  // (os.tmpdir()); a literal /tmp would name C:\tmp to Claude's native file tools.
+  const packetFolder = process.platform === "win32" ? `${path.join(os.tmpdir(), "claude-compaction-restore")}${path.sep}` : "/tmp/claude-compaction-restore/";
   if (input.transcriptPath) {
     pieces.push(`If the marker is missing and you have no restore map, rebuild a packet from this Claude JSONL transcript: ${input.transcriptPath}.`);
   } else if (input.sessionId) {
-    pieces.push(`If the marker is missing and you have no restore map, inspect the newest matching packet under /tmp/claude-compaction-restore/ for session id ${input.sessionId}.`);
+    pieces.push(`If the marker is missing and you have no restore map, inspect the newest matching packet under ${packetFolder} for session id ${input.sessionId}.`);
   } else {
-    pieces.push("If the marker is missing and you have no restore map, inspect the newest matching packet under /tmp/claude-compaction-restore/ for this Claude session.");
+    pieces.push(`If the marker is missing and you have no restore map, inspect the newest matching packet under ${packetFolder} for this Claude session.`);
   }
   const inlineInstruction = input.postCompactInstruction?.trim();
   const instructionFilePath = input.postCompactInstructionFilePath?.trim();
@@ -1221,10 +1224,13 @@ export class ClaudeCompactionEnforcer {
           if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
           // Reuse only our equivalent, owned regular file; never rewrite it.
           // NONBLOCK also prevents an unexpected FIFO from stalling preparation.
+          // Windows has neither O_NOFOLLOW nor a POSIX uid: refuse a link explicitly and skip only the uid comparison.
+          const win32 = process.platform === "win32";
+          if (win32 && fs.lstatSync(ignorePath).isSymbolicLink()) throw new Error("Existing compaction ignore file is not owned and equivalent");
           const fd = fs.openSync(ignorePath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
           try {
             const stat = fs.fstatSync(fd);
-            if (!stat.isFile() || stat.uid !== process.getuid?.() || stat.size !== 2 || fs.readFileSync(fd, "utf8") !== "*\n") {
+            if (!stat.isFile() || (!win32 && stat.uid !== process.getuid?.()) || stat.size !== 2 || fs.readFileSync(fd, "utf8") !== "*\n") {
               throw new Error("Existing compaction ignore file is not owned and equivalent");
             }
           } finally { fs.closeSync(fd); }

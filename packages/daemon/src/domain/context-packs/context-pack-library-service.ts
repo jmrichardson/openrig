@@ -23,6 +23,7 @@ import { stringify as stringifyYaml } from "yaml";
 import { assemblePlainFiles, type PlainFileAssembly } from "./bundle-assembler.js";
 import { assertSafePackRef } from "./ref-safety.js";
 import { parseManifest } from "./manifest-parser.js";
+import { isRootedPath, ROOTED_PATH_RULE } from "../path-safety.js";
 import { estimateTokensFromBytes } from "./token-estimate.js";
 import {
   ContextPackError,
@@ -422,15 +423,15 @@ export class ContextPackLibraryService {
    *  containment check that prevents path-traversal escaping the pack
    *  directory. */
   resolveFileWithinPack(packEntry: ContextPackEntry, relPath: string): string {
-    if (relPath.split(/[\\/]/).includes("..") || relPath.startsWith("/")) {
+    if (relPath.split(/[\\/]/).includes("..") || isRootedPath(relPath)) {
       throw new ContextPackError(
         "file_outside_pack",
-        `relative path '${relPath}' must be inside the pack directory (no '..' segments, no leading '/')`,
+        `relative path '${relPath}' must be inside the pack directory (no '..' segments, no ${ROOTED_PATH_RULE})`,
         { packId: packEntry.id, relPath },
       );
     }
     const abs = join(packEntry.sourcePath, relPath);
-    if (!abs.startsWith(packEntry.sourcePath + "/") && abs !== packEntry.sourcePath) {
+    if (!abs.startsWith(packEntry.sourcePath + sep) && abs !== packEntry.sourcePath) {
       throw new ContextPackError(
         "file_outside_pack",
         `resolved path '${abs}' falls outside pack '${packEntry.sourcePath}'`,

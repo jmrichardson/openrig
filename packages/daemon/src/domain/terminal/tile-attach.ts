@@ -1,10 +1,13 @@
+import { powershellQuote } from "../../adapters/windows-launch.js";
+
 // A tile owns its attach process; no daemon watcher or steady-state polling.
 // Session names survive fresh launch, handover and restart. The node identity
 // must survive too: never follow a same-name session belonging to another seat.
 export function tileAttachArgv(
   tmux: string, server: readonly string[], session: string, readOnly: boolean,
-  retrySeconds = 30,
+  retrySeconds = 30, platform?: NodeJS.Platform,
 ): string[] {
+  if (platform === "win32") return windowsTileAttachArgv(tmux, server, session, readOnly, retrySeconds);
   const ro = readOnly ? "-r " : "-f ignore-size ";
   // No apostrophes or control characters in the script: Herdr also stores this
   // argv as its restart command. All external values stay positional arguments.
@@ -41,4 +44,49 @@ export function tileAttachArgv(
     'done',
   ].join(" ");
   return ["/bin/sh", "-c", script, "openrig-tile", session, tmux, ...server];
+}
+
+/** Native equivalent of the POSIX tile: observe only after attach exits, and follow
+ * a replacement only while its stable OpenRig node identity still matches. */
+function windowsTileAttachArgv(tmux: string, server: readonly string[], session: string, readOnly: boolean, retrySeconds: number): string[] {
+  const script = [
+    // Older Herdr releases ignore pane.env; the attach itself carries the daemon's namespace.
+    "$env:TMUX = $null; $env:PSMUX_SESSION = $null; $env:PSMUX_TARGET_SESSION = $null",
+    `[Environment]::SetEnvironmentVariable('PSMUX_DATA_DIR', ${process.env.PSMUX_DATA_DIR === undefined ? "$null" : powershellQuote(process.env.PSMUX_DATA_DIR)}, 'Process')`,
+    `$tmux = ${powershellQuote(tmux)}`,
+    `$server = @(${server.map(powershellQuote).join(", ")})`,
+    `$target = ${powershellQuote(session)}`,
+    '$selector = "=$target"',
+    'function Read-Snapshot {',
+    '  $value = & $tmux @server -t $selector display-message -p -t "$selector`:" "#{pid} #{session_id}:#{session_name}" 2>$null',
+    '  if ($LASTEXITCODE -ne 0) { return $null }',
+    '  $value = ($value -join "").Trim()',
+    '  if ($value -notmatch "^([0-9]+ [^:]+):(.*)$" -or $Matches[2] -cne $target) { return $null }',
+    '  return $Matches[1]',
+    '}',
+    'function Read-Node {',
+    '  $value = & $tmux @server -t $selector show-environment -t $selector OPENRIG_NODE_ID 2>$null',
+    '  if ($LASTEXITCODE -ne 0) { return $null }',
+    '  $nodes = @($value | Where-Object { $_ -cmatch "^OPENRIG_NODE_ID=.+$" })',
+    '  if ($nodes.Count -eq 1) { return $nodes[0] }',
+    '}',
+    '$snapshot = Read-Snapshot',
+    '$node = Read-Node',
+    'while ($true) {',
+    `  & $tmux @server -t $selector attach ${readOnly ? "-r " : ""}-t $selector`,
+    '  if (-not $snapshot -or -not $node) { exit $LASTEXITCODE }',
+    '  $same = 0; $replaced = $false',
+    `  for ($left = ${Math.max(1, Math.floor(retrySeconds))}; $left -gt 0; $left--) {`,
+    '    $next = Read-Snapshot; $identity = Read-Node',
+    '    if ($next -and $identity) {',
+    '      if ($identity -cne $node) { Write-Host "Seat identity changed; reopen its view."; exit 1 }',
+    '      if ($next -cne $snapshot) { $snapshot = $next; $replaced = $true; break }',
+    '      $same++; if ($same -ge 3) { exit 0 }',
+    '    } else { $same = 0 }',
+    '    Start-Sleep -Seconds 1',
+    '  }',
+    '  if (-not $replaced) { Write-Host "No replacement; reopen the view with rig terminal open."; exit 0 }',
+    '}',
+  ].join("\n");
+  return ["powershell.exe", "-NoLogo", "-NoProfile", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")];
 }

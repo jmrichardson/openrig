@@ -185,7 +185,7 @@ persisted rig named `kernel` operational launch arguments when the seat has no
 explicit permission choice, its member and rig declare no permission policy,
 and (for Codex) it has no `-p` profile (`launchDefault`, `:28`). Fresh start,
 continue, restore and handover all take this decision per launch.
-`operationalLaunchArgs()` (`packages/daemon/src/adapters/kernel-authority.ts:56`)
+`operationalLaunchArgs()` (`packages/daemon/src/adapters/kernel-authority.ts:111`)
 then replaces the non-interruptive arguments for that seat:
 
 - Claude Code keeps the floor, `--permission-mode acceptEdits`, and gets
@@ -220,11 +220,22 @@ working context). Other `rig` commands fall under the `Bash(rig:*)` allowance. T
 42 before: 15 commands were removed and 2 added (`seat restart` and `policy permissions
 apply`), 13 fewer prompts. The settings carry the allow list and a
 `PreToolUse` Bash hook, `packages/daemon/assets/claude-team-permissions.cjs`, that applies
-both lists (`kernel-authority.ts:43–53`): it asks before a lifecycle command unless the
+both lists (`kernel-authority.ts:86–108`): it asks before a lifecycle command unless the
 command only asks for `--help` or `-h`, allows a simple literal command that matches an
-allow rule, and otherwise leaves the decision to Claude (`claude-team-permissions.cjs:234`,
-`:240`). Without the hook file, the settings carry both lists as plain `allow` and `ask`
-rules (`kernel-authority.ts:46`). A Codex seat launching at
+allow rule, and otherwise leaves the decision to Claude (`claude-team-permissions.cjs:251`,
+`:257`). Without the hook file, the settings carry both lists as plain `allow` and `ask`
+rules (`kernel-authority.ts:90`). On native Windows each `Bash(x:*)` rule is followed
+by `PowerShell(x:*)` for Claude's PowerShell tool, in the allow list and, without the hook
+file, in the ask list too. With the hook, a team seat there also gets the lifecycle asks as
+native `PowerShell(rig <command>:*)` ask rules (`kernel-authority.ts:96`), so Claude's own
+PowerShell parser is the primary gate and `rig <lifecycle> --help` prompts under PowerShell;
+Bash asks stay hook-only. A second `PreToolUse` entry sends PowerShell commands to the same
+hook in exec form, which starts node with no shell, so it does not depend on Git Bash
+(`kernel-authority.ts:103`). For a PowerShell command the hook only asks, as a second check
+(`decidePowerShell`, `claude-team-permissions.cjs:402`), reading the command as
+PowerShell's tokenizer does: comments, redirections, expressions, backtick escapes,
+assignments, computed command names after `&` or `.`, and the batch-file command line
+cmd.exe re-reads. It asks without reading a command over 16 KiB or one holding a NUL. A Codex seat launching at
 `-s workspace-write` gets `--add-dir` for the workspace root (`workspace.root`)
 and its pod's state directory, each created first and skipped with a warning if
 it is the home directory or an ancestor of it
@@ -333,7 +344,7 @@ resume launches (`codex-runtime-adapter.ts:378`, `codex-resume.ts:103`).
   fresh launch whose thread id is not captured returns `{ ok: true }` with its
   applied launch but no token (`:466`). Every Codex launch, fresh, fork or resume,
   also carries `-c check_for_update_on_startup=false`, so a managed seat leaves Codex
-  upgrades to the operator (`kernel-authority.ts:60`, added to the posture at
+  upgrades to the operator (`kernel-authority.ts:115`, added to the posture at
   `codex-runtime-adapter.ts:363`).
 - **Network default.** On the plain `-s workspace-write` floor,
   `domain/codex-network-default.ts` asks a one-shot `codex app-server` for the

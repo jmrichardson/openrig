@@ -1,20 +1,29 @@
-import { spawn } from "node:child_process";
-import { isAbsolute } from "node:path";
 import { helperCwd } from "../helper-cwd.js";
+import { spawn } from "node:child_process";
+import { posix, win32 } from "node:path";
+import { powershellQuote } from "@openrig/daemon/windows-launch";
 import type { CopyTerminal } from "../print-for-copy.js";
 import { ALT_SCREEN_OFF, ALT_SCREEN_ON, MOUSE_DISABLE, MOUSE_ENABLE, PASTE_DISABLE, PASTE_ENABLE } from "../input.js";
 
 export interface SpecLaunch { source: string; folder: string; host: string }
 
-export function launchArgs(launch: SpecLaunch): string[] {
-  if (!launch.folder || !isAbsolute(launch.folder)) throw new Error("Choose an absolute working folder with launch-folder /path first.");
+export function launchArgs(launch: SpecLaunch, platform: NodeJS.Platform = process.platform): string[] {
+  // This host's rig up resolves --cwd, so the folder follows this host's path rules.
+  if (!launch.folder || !(platform === "win32" ? win32 : posix).isAbsolute(launch.folder)) throw new Error("Choose an absolute working folder with launch-folder /path first.");
   // Name-form input deliberately retains rig up's library/existing-rig collision handling.
   // No --yes, --existing, fresh, provider adaptation or retry is introduced here.
   return ["up", "--cwd", launch.folder, ...(launch.host && launch.host !== "local" ? ["--host", launch.host] : []), "--", launch.source];
 }
 
-export function launchCommand(launch: SpecLaunch): string {
-  return (launch.host === "local" ? "OPENRIG_HOST_SELECTED=local " : "") + ["rig", ...launchArgs(launch)].map(s => /^[\w/.:=-]+$/.test(s) ? s : `'${s.replaceAll("'", "'\\''")}'`).join(" ");
+export function launchCommand(launch: SpecLaunch, platform: NodeJS.Platform = process.platform): string {
+  if (platform === "win32") {
+    const command = "& " + ["rig", ...launchArgs(launch, platform)].map(powershellQuote).join(" ");
+    // $env: outlives the command, so restore the session's prior host selection afterwards.
+    return launch.host === "local"
+      ? `& { $prior = $env:OPENRIG_HOST_SELECTED; $env:OPENRIG_HOST_SELECTED = 'local'; try { ${command} } finally { $env:OPENRIG_HOST_SELECTED = $prior } }`
+      : command;
+  }
+  return (launch.host === "local" ? "OPENRIG_HOST_SELECTED=local " : "") + ["rig", ...launchArgs(launch, platform)].map(s => /^[\w/.:=-]+$/.test(s) ? s : `'${s.replaceAll("'", "'\\''")}'`).join(" ");
 }
 
 export interface LaunchProcess { executable: string; args: string[]; env: NodeJS.ProcessEnv }

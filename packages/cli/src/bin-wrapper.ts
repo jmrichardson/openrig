@@ -162,6 +162,25 @@ export async function run(argv = process.argv, io: RunProgramIo = {}): Promise<v
 }
 
 if (isDirectRun()) {
+  if (process.platform === "win32") {
+    // Resolve setup's managed tool before loading commands: child executors can
+    // capture their environment during module initialization. Existing desktop
+    // applications may still carry the PATH from before setup.
+    const local = process.env.LOCALAPPDATA ?? path.join(process.env.USERPROFILE ?? "", "AppData", "Local");
+    const managed = path.join(local, "OpenRig", "tools", "psmux-3.4.0");
+    if (existsSync(path.join(managed, "tmux.exe"))) {
+      process.env.PATH = managed + path.delimiter + (process.env.PATH ?? "");
+    }
+    // npm's Codex shim is not an executable for native process spawning. Reuse
+    // the native binary from its installed platform package when available.
+    if (process.arch === "x64" || process.arch === "arm64") {
+      const triple = process.arch === "arm64" ? "aarch64-pc-windows-msvc" : "x86_64-pc-windows-msvc";
+      const codex = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../@openai/codex/node_modules/@openai", `codex-win32-${process.arch}`, "vendor", triple, "bin");
+      if (existsSync(path.join(codex, "codex.exe"))) process.env.PATH = codex + path.delimiter + (process.env.PATH ?? "");
+    }
+    // Windows PowerShell constructs its own compatible module path.
+    delete process.env.PSModulePath;
+  }
   maybeReexecWithSiblingNode(process.argv);
   await run(process.argv);
 }

@@ -97,7 +97,7 @@ interface QueueRowLite {
 const execFileAsync = promisify(execFile);
 
 async function defaultExec(cmd: string, args: string[]): Promise<string> {
-  const { stdout } = await execFileAsync(cmd, args, { encoding: "utf8", timeout: 5000 });
+  const { stdout } = await execFileAsync(cmd, args, { encoding: "utf8", timeout: 5000, windowsHide: true });
   return stdout.trim();
 }
 
@@ -250,7 +250,8 @@ function readMissionSlices(missionsRoot: string, mission: string): SliceFacts[] 
       specPath,
       id: typeof fm["id"] === "string" ? (fm["id"] as string) : INDETERMINATE,
       frontmatter: fm,
-      body: raw.replace(/^---\n[\s\S]*?\n---\n?/, ""),
+      // Windows editors and checkouts may write CRLF; other platforms keep the LF-only match.
+      body: raw.replace(process.platform === "win32" ? /^---\r?\n[\s\S]*?\r?\n---(?:\r?\n)?/ : /^---\n[\s\S]*?\n---\n?/, ""),
     });
   }
   return out;

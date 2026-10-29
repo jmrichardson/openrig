@@ -2,10 +2,12 @@ import { Command } from "commander";
 import fs from "node:fs";
 import { createServer } from "node:net";
 import { randomUUID } from "node:crypto";
+import { requestWindowsDaemonStop } from "@openrig/daemon/daemon-shutdown";
 import { acquireDaemonStartLock } from "../daemon-start-lock.js";
 import { formatDaemonHostForUrl } from "../client.js";
 import { execFileSync, spawn } from "node:child_process";
 import { fetchWithTimeout } from "../fetch-with-timeout.js";
+import { replaceFileSync } from "../lib/scope/replace-file.js";
 import {
   startDaemon,
   stopDaemon,
@@ -91,6 +93,7 @@ export function realDeps(): LifecycleDeps {
   });
 
   return {
+    requestStop: process.platform === "win32" ? state => requestWindowsDaemonStop(OPENRIG_DIR, state) : undefined,
     processLiveness,
     acquireStartLock: () => acquireDaemonStartLock(OPENRIG_DIR),
     spawn: (cmd, args, opts) => spawn(cmd, args, opts as Parameters<typeof spawn>[2]),
@@ -130,7 +133,8 @@ export function realDeps(): LifecycleDeps {
       const temporary = `${p}.${randomUUID()}.tmp`;
       try {
         fs.writeFileSync(temporary, content, { encoding: "utf-8", flag: "wx" });
-        fs.renameSync(temporary, p);
+        // On Windows a concurrent `rig` reading daemon.json briefly blocks the replace.
+        replaceFileSync(temporary, p);
       } finally {
         try { fs.unlinkSync(temporary); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
       }
@@ -184,6 +188,16 @@ export function daemonCommand(depsOverride?: LifecycleDeps): Command {
     .option("--wait-for-kernel-ms <ms>", "Override --wait-for-kernel timeout in milliseconds")
     .action(async (opts: { port?: string; host?: string; db?: string; allowDbConflict?: boolean; kernel?: boolean; waitForKernel?: boolean; waitForKernelMs?: string }) => {
       try {
+        // Starting an already healthy default instance is a successful no-op.
+        // Installation probes are relevant when launching a process, not when
+        // the verified process is already serving this instance.
+        if (!opts.port && !opts.host && !opts.db && !opts.waitForKernel && opts.kernel !== false && !opts.allowDbConflict) {
+          const current = await getDaemonStatus(getDeps());
+          if (current.state === "running" && current.healthy === true) {
+            console.log(`Daemon already running (pid ${current.pid} on port ${current.port}). No restart needed.`);
+            return;
+          }
+        }
         const { ConfigStore } = await import("../config-store.js");
         const { SystemPreflight, quietPreflightExec } = await import("../system-preflight.js");
         const configStore = new ConfigStore();

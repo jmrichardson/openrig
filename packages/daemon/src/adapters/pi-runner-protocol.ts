@@ -199,7 +199,7 @@ export function providerFromModel(model: string | undefined): string | null {
  *  the runner's own env; only allowlisted names cross the boundary. */
 export function buildPiChildEnv(
   source: Record<string, string | undefined>,
-  opts: { agentDir: string; sessionsDir: string; model?: string; runtime?: RunnerRuntime; sessionName?: string; nodeId?: string; openrigHome?: string; openrigUrl?: string },
+  opts: { agentDir: string; sessionsDir: string; model?: string; runtime?: RunnerRuntime; sessionName?: string; nodeId?: string; openrigHome?: string; openrigUrl?: string; platform?: NodeJS.Platform },
 ): Record<string, string> {
   const env: Record<string, string> = {};
   for (const name of [...PI_ENV_BASELINE_VARS, ...PI_ENV_OPENRIG_VARS]) {
@@ -207,6 +207,14 @@ export function buildPiChildEnv(
     if (value !== undefined) env[name] = value;
   }
   env.PI_CODING_AGENT_DIR = opts.agentDir;
+  if ((opts.platform ?? process.platform) === "win32") {
+    // OS process/runtime locations, not provider credentials. Node and native
+    // dependencies require SystemRoot; gh uses APPDATA to locate the existing
+    // Windows login configuration. The Pi directory remains explicitly pinned.
+    for (const name of ["SystemRoot", "SYSTEMROOT", "WINDIR", "ComSpec", "COMSPEC", "PATHEXT", "TEMP", "TMP", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "ProgramData", "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"]) {
+      if (source[name] !== undefined) env[name] = source[name]!;
+    }
+  }
   env.PI_CODING_AGENT_SESSION_DIR = opts.sessionsDir;
   const provider = providerFromModel(opts.model);
   const providerVar = provider ? (opts.runtime === "omp" ? OMP_PROVIDER_ENV_VARS : PI_PROVIDER_ENV_VARS)[provider] : undefined;
@@ -225,6 +233,9 @@ export function buildPiChildEnv(
     // and ~/.env. Project cwd/.env remains an OMP discovery surface. The
     // runner resolves the OMP binary before this HOME applies.
     env.HOME = nodePath.dirname(opts.agentDir);
+    // Windows runtimes resolve os.homedir() from USERPROFILE, not HOME.
+    // Keep both pointing at the seat so the operator's ~/.omp cannot leak in.
+    if ((opts.platform ?? process.platform) === "win32") env.USERPROFILE = env.HOME;
     // OMP seats also pin their managed identity and daemon locator from the
     // runner's own arguments (never the hook token, which belongs to the
     // runner's POST client).

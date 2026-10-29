@@ -1,4 +1,5 @@
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
+import { validateSafePath } from "./path-safety.js";
 
 // --- Types ---
 
@@ -115,10 +116,20 @@ function hasPathTraversal(source: string): boolean {
   return source.includes("../") || source === ".." || source.endsWith("/..");
 }
 
+/** The final path segment; Windows sources may also separate with "\". */
+function lastSegment(source: string, platform: NodeJS.Platform): string {
+  return source.split(platform === "win32" ? /[\\/]/ : "/").pop()!;
+}
+
 const PACKAGE_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
 
-export function validateManifest(raw: unknown): ValidationResult {
+export function validateManifest(raw: unknown, platform: NodeJS.Platform = process.platform): ValidationResult {
   const errors: string[] = [];
+  // Windows sources may also use "\" traversal and drive or UNC roots, which would resolve outside the package.
+  const unsafeSource = platform === "win32"
+    ? (source: string) => validateSafePath(source, "source", platform) !== null
+    : hasPathTraversal;
+  const unsafeRule = platform === "win32" ? "path traversal or rooted paths" : "path traversal";
 
   if (!raw || typeof raw !== "object") {
     return { valid: false, errors: ["Manifest must be an object"] };
@@ -176,8 +187,8 @@ export function validateManifest(raw: unknown): ValidationResult {
       for (const skill of exports["skills"] as Record<string, unknown>[]) {
         if (!skill["source"] || typeof skill["source"] !== "string") {
           errors.push("Skill export: source is required");
-        } else if (hasPathTraversal(skill["source"] as string)) {
-          errors.push(`Skill export source must not contain path traversal: '${skill["source"]}'`);
+        } else if (unsafeSource(skill["source"] as string)) {
+          errors.push(`Skill export source must not contain ${unsafeRule}: '${skill["source"]}'`);
         }
         if (!skill["name"] || typeof skill["name"] !== "string") {
           errors.push("Skill export: name is required");
@@ -207,8 +218,8 @@ export function validateManifest(raw: unknown): ValidationResult {
       for (const g of exports["guidance"] as Record<string, unknown>[]) {
         if (!g["source"] || typeof g["source"] !== "string") {
           errors.push("Guidance export: source is required");
-        } else if (hasPathTraversal(g["source"] as string)) {
-          errors.push(`Guidance export source must not contain path traversal: '${g["source"]}'`);
+        } else if (unsafeSource(g["source"] as string)) {
+          errors.push(`Guidance export source must not contain ${unsafeRule}: '${g["source"]}'`);
         }
         if (g["kind"] && !KNOWN_GUIDANCE_KINDS.has(g["kind"] as string)) {
           errors.push(`Unknown guidance kind: '${g["kind"]}'`);
@@ -225,7 +236,7 @@ export function validateManifest(raw: unknown): ValidationResult {
 
         // Derive name for uniqueness check
         const name = (g["name"] as string | undefined) ??
-          (g["source"] ? (g["source"] as string).split("/").pop()! : "");
+          (g["source"] ? lastSegment(g["source"] as string, platform) : "");
         if (name && guidanceNames.has(name)) {
           errors.push(`Duplicate guidance name: '${name}'`);
         }
@@ -250,11 +261,11 @@ export function validateManifest(raw: unknown): ValidationResult {
       for (const a of exports["agents"] as Record<string, unknown>[]) {
         if (!a["source"] || typeof a["source"] !== "string") {
           errors.push("Agent export: source is required");
-        } else if (hasPathTraversal(a["source"] as string)) {
-          errors.push(`Agent export source must not contain path traversal: '${a["source"]}'`);
+        } else if (unsafeSource(a["source"] as string)) {
+          errors.push(`Agent export source must not contain ${unsafeRule}: '${a["source"]}'`);
         }
         const agentName = (a["name"] as string | undefined) ??
-          (a["source"] ? (a["source"] as string).replace(/\.[^.]+$/, "").split("/").pop()! : "");
+          (a["source"] ? lastSegment((a["source"] as string).replace(/\.[^.]+$/, ""), platform) : "");
         if (agentName && agentNames.has(agentName)) {
           errors.push(`Duplicate agent name: '${agentName}'`);
         }
@@ -267,8 +278,8 @@ export function validateManifest(raw: unknown): ValidationResult {
       for (const h of exports["hooks"] as Record<string, unknown>[]) {
         if (!h["source"] || typeof h["source"] !== "string") {
           errors.push("Hook export: source is required");
-        } else if (hasPathTraversal(h["source"] as string)) {
-          errors.push(`Hook export source must not contain path traversal: '${h["source"]}'`);
+        } else if (unsafeSource(h["source"] as string)) {
+          errors.push(`Hook export source must not contain ${unsafeRule}: '${h["source"]}'`);
         }
       }
     }
@@ -277,8 +288,8 @@ export function validateManifest(raw: unknown): ValidationResult {
       for (const mc of exports["mcp"] as Record<string, unknown>[]) {
         if (!mc["source"] || typeof mc["source"] !== "string") {
           errors.push("MCP export: source is required");
-        } else if (hasPathTraversal(mc["source"] as string)) {
-          errors.push(`MCP export source must not contain path traversal: '${mc["source"]}'`);
+        } else if (unsafeSource(mc["source"] as string)) {
+          errors.push(`MCP export source must not contain ${unsafeRule}: '${mc["source"]}'`);
         }
       }
     }
@@ -353,7 +364,7 @@ function normalizeVerification(raw: unknown): VerificationConfig | undefined {
 
 // --- Normalize ---
 
-export function normalizeManifest(raw: unknown): PackageManifest {
+export function normalizeManifest(raw: unknown, platform: NodeJS.Platform = process.platform): PackageManifest {
   const m = raw as Record<string, unknown>;
   const exportsRaw = (m["exports"] ?? {}) as Record<string, unknown>;
 
@@ -366,7 +377,7 @@ export function normalizeManifest(raw: unknown): PackageManifest {
 
   const guidance: GuidanceExport[] = (Array.isArray(exportsRaw["guidance"]) ? exportsRaw["guidance"] : []).map((g: Record<string, unknown>) => ({
     source: g["source"] as string,
-    name: (g["name"] as string | undefined) ?? (g["source"] as string).split("/").pop()!,
+    name: (g["name"] as string | undefined) ?? lastSegment(g["source"] as string, platform),
     kind: g["kind"] as string,
     supportedScopes: (g["supported_scopes"] as string[] | undefined) ?? ["project_shared"],
     defaultScope: (g["default_scope"] as string | undefined) ?? "project_shared",

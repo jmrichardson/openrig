@@ -13,6 +13,7 @@ import { LegacyBundleSourceResolver } from "../src/domain/bundle-source-resolver
 import type { FsOps } from "../src/domain/package-resolver.js";
 import * as tar from "tar";
 import { createHash } from "node:crypto";
+import { canCreateFileSymlinks } from "../../../test/symlink-capability.mjs";
 
 
 const VALID_SPEC = `
@@ -450,7 +451,11 @@ describe("Bundle API routes", () => {
     expect(body.digestValid).toBe(false);
   });
 
-  it.each([false, true].flatMap(imported => ["missing", "dangling", "unreadable", "unreadable-file"].map(kind => ({ imported, kind }))))("saves a recovery bundle with durable unresolved-skill warnings (imported=$imported, kind=$kind)", async ({ imported, kind }) => {
+  it.for([false, true].flatMap(imported => ["missing", "dangling", "unreadable", "unreadable-file"].map(kind => ({ imported, kind }))))("saves a recovery bundle with durable unresolved-skill warnings (imported=$imported, kind=$kind)", async ({ imported, kind }, { skip }) => {
+    // A dangling link to an absent target is a file symlink, which Windows allows only with SeCreateSymbolicLinkPrivilege.
+    skip(kind === "dangling" && !canCreateFileSymlinks);
+    // POSIX mode bits (chmod 0o000 denies reads); Windows uses ACLs
+    skip(kind.startsWith("unreadable") && process.platform === "win32");
     const agentDir = path.join(tmpDir, "agents", "impl");
     const skillAgentDir = imported ? path.join(agentDir, "shared") : agentDir;
     fs.mkdirSync(skillAgentDir, { recursive: true });
@@ -541,16 +546,19 @@ describe("Bundle API routes", () => {
     const previousArchive = fs.readFileSync(outputPath);
     const previousDigest = fs.readFileSync(`${outputPath}.sha256`);
     // The missing-data exception is scoped to declared skills, never unrelated files.
-    fs.unlinkSync(path.join(skillAgentDir, "README.md"));
-    fs.symlinkSync("absent-readme", path.join(skillAgentDir, "README.md"));
-    const unrelated = await app.request("/api/bundles/create", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ specPath, bundleName: "unrelated-error", bundleVersion: "0.1.0", outputPath }),
-    });
-    expect(unrelated.status).toBe(500);
-    expect(fs.readFileSync(outputPath)).toEqual(previousArchive);
-    expect(fs.readFileSync(`${outputPath}.sha256`)).toEqual(previousDigest);
-    fs.unlinkSync(path.join(skillAgentDir, "README.md"));
+    // Needs a dangling file symlink, which Windows allows only with SeCreateSymbolicLinkPrivilege.
+    if (canCreateFileSymlinks) {
+      fs.unlinkSync(path.join(skillAgentDir, "README.md"));
+      fs.symlinkSync("absent-readme", path.join(skillAgentDir, "README.md"));
+      const unrelated = await app.request("/api/bundles/create", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ specPath, bundleName: "unrelated-error", bundleVersion: "0.1.0", outputPath }),
+      });
+      expect(unrelated.status).toBe(500);
+      expect(fs.readFileSync(outputPath)).toEqual(previousArchive);
+      expect(fs.readFileSync(`${outputPath}.sha256`)).toEqual(previousDigest);
+      fs.unlinkSync(path.join(skillAgentDir, "README.md"));
+    }
     fs.writeFileSync(path.join(skillAgentDir, "README.md"), "# Surviving recovery context");
     fs.writeFileSync(path.join(agentDir, "agent.yaml"), "invalid: agent");
     const invalid = await app.request("/api/bundles/create", {
@@ -1154,7 +1162,8 @@ describe("Bundle API routes", () => {
   // (without unpack's verifyArchiveDigest + tar.list unsafe-entry prescan) must
   // make this test fail — the unsafe symlink would be silently extracted and
   // bootstrap would see an attacker-controlled link target.
-  it("POST /api/bundles/install rejects an archive containing a symlink entry via the safe path (B1 repair)", async () => {
+  // Creates a file symlink, which Windows allows only with SeCreateSymbolicLinkPrivilege.
+  it.skipIf(!canCreateFileSymlinks)("POST /api/bundles/install rejects an archive containing a symlink entry via the safe path (B1 repair)", async () => {
     const stagingDir = fs.mkdtempSync(path.join(os.tmpdir(), "bundle-unsafe-staging-"));
     const bundlePath = path.join(tmpDir, "unsafe-symlink.rigbundle");
     try {
@@ -2229,7 +2238,8 @@ describe("Bundle API routes", () => {
   // that looks lexically contained but symlinks to an outside file must
   // be rejected. Without realpath validation, dereference at vendor
   // time would copy outside content into the archive as a regular file.
-  it("POST /api/bundles/create rejects author bundle.yaml skill that is a symlink targeting outside sourceRoot", async () => {
+  // Creates a file symlink, which Windows allows only with SeCreateSymbolicLinkPrivilege.
+  it.skipIf(!canCreateFileSymlinks)("POST /api/bundles/create rejects author bundle.yaml skill that is a symlink targeting outside sourceRoot", async () => {
     const sourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "create-symlink-escape-file-src-"));
     const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), "create-symlink-escape-file-outside-"));
     const outputPath = path.join(tmpDir, "symlink-escape-file.rigbundle");
@@ -2313,7 +2323,7 @@ describe("Bundle API routes", () => {
 
       // Symlink inside sourceRoot/plugins → outside dir
       fs.mkdirSync(path.join(sourceRoot, "plugins"), { recursive: true });
-      fs.symlinkSync(outsideDir, path.join(sourceRoot, "plugins/escape"));
+      fs.symlinkSync(outsideDir, path.join(sourceRoot, "plugins/escape"), process.platform === "win32" ? "junction" : "dir");
 
       fs.writeFileSync(path.join(sourceRoot, "bundle.yaml"), [
         'plugins:',

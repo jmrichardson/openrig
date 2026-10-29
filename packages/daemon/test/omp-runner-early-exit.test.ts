@@ -8,20 +8,24 @@ import fs from "node:fs";
 import os from "node:os";
 import nodePath from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { installNativeNodeFake } from "../../../test/native-node-fake.js";
 
 const RUNNER = nodePath.join(__dirname, "..", "src", "adapters", "pi-runner.ts");
 
 let root: string | null = null;
 afterEach(() => { if (root) fs.rmSync(root, { recursive: true, force: true }); root = null; });
 
-/** Run the real runner with a fake `<runtime>` that runs `before`, prints
- *  `stderr`, and ends with `ending`. */
-function runWithFake(runtime: "omp" | "pi", stderr: string[], ending = "exit 1", before = "") {
+/** Run the real runner with a fake `<runtime>` (a Node script) that first reads one input line if
+ *  `readsFirstLine`, prints `stderr`, and ends with the `ending` statement once its output is written. */
+function runWithFake(runtime: "omp" | "pi", stderr: string[], ending = "process.exit(1)", readsFirstLine = false) {
   root = fs.mkdtempSync(nodePath.join(os.tmpdir(), `openrig-${runtime}-early-exit-`));
   const bin = nodePath.join(root, "bin");
   fs.mkdirSync(bin);
-  const lines = stderr.map((line) => `printf '%s\\n' '${line}' >&2`).join("\n");
-  fs.writeFileSync(nodePath.join(bin, runtime), `#!/bin/sh\n${before}\n${lines}\n${ending}\n`, { mode: 0o755 });
+  const end = `const end = () => process.stderr.write(${JSON.stringify(stderr.map((line) => `${line}\n`).join(""))}, () => { ${ending}; });`;
+  const script = `#!${process.execPath}\n${end}\n${readsFirstLine ? 'require("node:readline").createInterface({ input: process.stdin }).once("line", end);' : "end();"}\n`;
+  fs.writeFileSync(nodePath.join(bin, runtime), script, { mode: 0o755 });
+  // The runner starts Windows OMP and Pi only from a native executable.
+  if (process.platform === "win32") installNativeNodeFake(bin, runtime, script);
   const args = [
     "--import", "tsx", RUNNER,
     "--session-name", "dev@rig", "--state-root", nodePath.join(root, "state", runtime), "--cwd", root,
@@ -29,7 +33,7 @@ function runWithFake(runtime: "omp" | "pi", stderr: string[], ending = "exit 1",
   ];
   args.push(...(runtime === "omp" ? ["--runtime", "omp", "--approval-mode", "always-ask"] : ["--no-approve"]));
   const result = spawnSync(process.execPath, args, {
-    env: { PATH: `${bin}:/usr/bin:/bin`, HOME: root, TMPDIR: os.tmpdir() },
+    env: { PATH: process.platform === "win32" ? bin : `${bin}:/usr/bin:/bin`, HOME: root, TMPDIR: os.tmpdir() },
     input: "",
     encoding: "utf8",
     timeout: 30_000,
@@ -57,7 +61,7 @@ describe("OMP exits during startup, before its RPC transport", () => {
   }, 40_000);
 
   it("control: an unrelated crash gets the same honest wording", () => {
-    const { output } = runWithFake("omp", ["TypeError: Cannot read properties of undefined (reading model)", "    at main (cli.js:12:3)"], "exit 7");
+    const { output } = runWithFake("omp", ["TypeError: Cannot read properties of undefined (reading model)", "    at main (cli.js:12:3)"], "process.exit(7)");
     expect(output).not.toContain("credential");
     const error = errorLine(output);
     expect(error).toContain("OMP exited during startup, before its RPC transport started");
@@ -65,8 +69,9 @@ describe("OMP exits during startup, before its RPC transport", () => {
     expect(error).toContain("Its last output: TypeError: Cannot read properties of undefined (reading model) |     at main (cli.js:12:3)");
   }, 40_000);
 
-  it("a signal and silent stderr are reported as such", () => {
-    const { output } = runWithFake("omp", [], "kill -TERM $$");
+  // Death by signal is POSIX; a Windows process only exits with a code.
+  it.skipIf(process.platform === "win32")("a signal and silent stderr are reported as such", () => {
+    const { output } = runWithFake("omp", [], 'process.kill(process.pid, "SIGTERM")');
     const error = errorLine(output);
     expect(error).toContain("signal SIGTERM");
     expect(error).toContain("It printed nothing on stderr.");
@@ -88,14 +93,21 @@ describe("OMP exit record with a child holding OMP's stderr", () => {
     const bin = nodePath.join(root, "bin");
     fs.mkdirSync(bin);
     const pidFile = nodePath.join(root, "sleeper.pid");
-    // Like an LSP or MCP server OMP started: inherits OMP's stdio and outlives it.
-    fs.writeFileSync(nodePath.join(bin, "omp"), `#!/bin/sh\nsleep 30 &\necho $! > '${pidFile}'\nprintf '%s\\n' 'fatal: startup failed' >&2\nexit 1\n`, { mode: 0o755 });
+    // Like an LSP or MCP server OMP started: inherits OMP's stdio and outlives it. (On Windows a Node parent's
+    // attached children end with it, so the sleeper detaches there.)
+    const script = `#!${process.execPath}
+const sleeper = require("node:child_process").spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], { stdio: ["ignore", "inherit", "inherit"], detached: process.platform === "win32" });
+require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(sleeper.pid));
+process.stderr.write("fatal: startup failed\\n", () => process.exit(1));
+`;
+    fs.writeFileSync(nodePath.join(bin, "omp"), script, { mode: 0o755 });
+    if (process.platform === "win32") installNativeNodeFake(bin, "omp", script);
     let output = "";
     const runner = spawn(process.execPath, [
       "--import", "tsx", RUNNER,
       "--session-name", "dev@rig", "--state-root", nodePath.join(root, "state", "omp"), "--cwd", root,
       "--launch-id", "launch-1", "--runtime", "omp", "--approval-mode", "always-ask",
-    ], { env: { PATH: `${bin}:/usr/bin:/bin`, HOME: root, TMPDIR: os.tmpdir() }, stdio: ["pipe", "pipe", "pipe"] });
+    ], { env: { PATH: process.platform === "win32" ? bin : `${bin}:/usr/bin:/bin`, HOME: root, TMPDIR: os.tmpdir() }, stdio: ["pipe", "pipe", "pipe"] });
     runner.stdout.on("data", (chunk) => { output += String(chunk); });
     runner.stderr.on("data", (chunk) => { output += String(chunk); });
     try {
@@ -105,8 +117,12 @@ describe("OMP exit record with a child holding OMP's stderr", () => {
       expect(errorLine(output)).toContain("Its last output: fatal: startup failed");
       expect(Date.now() - started).toBeLessThan(8_000);
     } finally {
+      // Wait for the runner to be gone, so the cleanup does not race its exit (Windows keeps its files busy until then).
+      const closed = Promise.withResolvers<void>();
+      if (runner.exitCode === null && runner.signalCode === null) runner.once("exit", () => closed.resolve()); else closed.resolve();
       runner.kill("SIGKILL");
       try { process.kill(Number(fs.readFileSync(pidFile, "utf8").trim()), "SIGKILL"); } catch { /* already gone */ }
+      await closed.promise;
     }
   }, 20_000);
 });
@@ -116,7 +132,7 @@ describe("Pi is unchanged", () => {
     // The fake Pi reads the runner's initial RPC line before it fails, so the
     // runner's first stdin write never races the child's exit (an EPIPE on
     // that write would otherwise come before the lines asserted below).
-    const { output } = runWithFake("pi", ["pi: fatal: bad config"], "exit 1", "IFS= read -r first_rpc_line");
+    const { output } = runWithFake("pi", ["pi: fatal: bad config"], "process.exit(1)", true);
     expect(output).toContain("[pi:err] pi: fatal: bad config");
     expect(output).toContain("[pi-runner] EXITED pi exited (code 1)");
     expect(output).not.toContain("[omp-runner]");

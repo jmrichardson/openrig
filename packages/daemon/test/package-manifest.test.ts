@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { join } from "node:path";
 import {
   parseManifest,
   validateManifest,
@@ -34,6 +35,48 @@ function validRaw() {
 }
 
 describe("PackageManifest", () => {
+  const everyExport = (source: string) => ({
+    skills: [{ source, name: "skill" }],
+    guidance: [{ source, kind: "agents_md", merge_strategy: "managed_block" }],
+    agents: [{ source }],
+    hooks: [{ source }],
+    mcp: [{ source }],
+  });
+
+  it.each(["C:notes.md", "C:\\notes.md", "\\notes.md", "\\\\server\\share\\notes.md", "nested\\..\\notes.md"])("rejects unsafe Windows package exports: %s", (source) => {
+    const raw = validRaw() as Record<string, unknown>;
+    raw.exports = everyExport(source);
+    const errors = validateManifest(raw, "win32").errors.filter(error => error.includes("export source"));
+    expect(errors).toEqual(["Skill", "Guidance", "Agent", "Hook", "MCP"].map(kind => `${kind} export source must not contain path traversal or rooted paths: '${source}'`));
+  });
+
+  it("keeps the POSIX export source rules and wording: only '/' traversal is refused", () => {
+    const raw = validRaw() as Record<string, unknown>;
+    for (const source of ["/skills/notes.md", "C:notes.md", "nested\\..\\notes.md"]) {
+      raw.exports = everyExport(source);
+      expect(validateManifest(raw, "linux").errors.filter(error => error.includes("export source"))).toEqual([]);
+    }
+    raw.exports = everyExport("nested/../notes.md");
+    expect(validateManifest(raw, "linux").errors.filter(error => error.includes("export source")))
+      .toEqual(["Skill", "Guidance", "Agent", "Hook", "MCP"].map(kind => `${kind} export source must not contain path traversal: 'nested/../notes.md'`));
+  });
+
+  it("derives guidance and agent names from native source paths", () => {
+    const raw = validRaw() as Record<string, unknown>;
+    raw.exports = { guidance: [{ source: join("nested space", "AGENTS.md"), kind: "agents_md", merge_strategy: "managed_block" }] };
+    expect(validateManifest(raw).valid).toBe(true);
+    expect(normalizeManifest(raw).exports.guidance[0]!.name).toBe("AGENTS.md");
+    raw.exports = {
+      guidance: [{ source: "one\\AGENTS.md", kind: "agents_md", merge_strategy: "managed_block" }, { source: "two\\AGENTS.md", kind: "agents_md", merge_strategy: "managed_block" }],
+      agents: [{ source: "agents\\reviewer.yaml" }, { source: "other\\reviewer.yaml" }],
+    };
+    expect(validateManifest(raw, "win32").errors).toEqual(["Duplicate guidance name: 'AGENTS.md'", "Duplicate agent name: 'reviewer'"]);
+    expect(normalizeManifest(raw, "win32").exports.guidance[0]!.name).toBe("AGENTS.md");
+    // Off Windows "\" is part of a file name.
+    expect(validateManifest(raw, "linux").errors).toEqual([]);
+    expect(normalizeManifest(raw, "linux").exports.guidance[0]!.name).toBe("one\\AGENTS.md");
+  });
+
   it("accepts a deferred role hook absent from exports without a warning", () => {
     const raw = validRaw() as Record<string, unknown>;
     const exports = raw.exports as Record<string, unknown>;

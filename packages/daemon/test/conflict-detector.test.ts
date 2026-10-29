@@ -2,14 +2,16 @@ import { describe, it, expect, vi } from "vitest";
 import { detectConflicts, type GuidanceConflictMeta } from "../src/domain/conflict-detector.js";
 import { InstallPlanner, type InstallPlanEntry } from "../src/domain/install-planner.js";
 import { PackageResolver, type FsOps } from "../src/domain/package-resolver.js";
+import { fixtureKey } from "./helpers/fixture-path.js";
 
 function mockFs(files: Record<string, string>): FsOps {
   return {
     readFile: vi.fn((p: string) => {
-      if (files[p] !== undefined) return files[p]!;
+      const k = fixtureKey(files, p);
+      if (k !== undefined) return files[k]!;
       throw new Error(`ENOENT: ${p}`);
     }),
-    exists: vi.fn((p: string) => p in files),
+    exists: vi.fn((p: string) => fixtureKey(files, p) !== undefined),
   };
 }
 

@@ -81,6 +81,18 @@ describe("verifyCodexProfileLoads", () => {
     await verifyCodexProfileLoads("my profile", exec);
     expect(exec).toHaveBeenCalledWith("codex -p 'my profile' mcp list");
   });
+
+  it("quotes an apostrophe for the POSIX shell, and in literal words on Windows", async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    const exec = vi.fn(async () => "");
+    try {
+      Object.defineProperty(process, "platform", { ...platform, value: "linux" });
+      await verifyCodexProfileLoads("team O'Brien", exec);
+      Object.defineProperty(process, "platform", { ...platform, value: "win32" });
+      await verifyCodexProfileLoads("team O'Brien", exec);
+    } finally { Object.defineProperty(process, "platform", platform); }
+    expect(exec.mock.calls).toEqual([["codex -p 'team O'\\''Brien' mcp list"], ["codex -p 'team O'\"'\"'Brien' mcp list"]]);
+  });
 });
 
 describe("verifyCodexProfiles (rigspec integration)", () => {

@@ -18,6 +18,13 @@ export function isTmuxNoServerMessage(message: string): boolean {
 }
 
 export function buildTmuxControlFailure(message: string): { message: string; reason: string; fix: string } {
+  if (message.startsWith("Native Windows requires")) {
+    return {
+      message,
+      reason: "Older psmux releases discard pane history on respawn; a POSIX tmux cannot provide the native Windows transport.",
+      fix: "Install portable psmux 3.4.0 or newer and put its tmux.exe first on PATH. Existing sessions are not stopped automatically.",
+    };
+  }
   return {
     message: "tmux installed, but the default control socket is unhealthy.",
     reason: `OpenRig uses tmux control commands to launch, inspect, and manage agent sessions. The default tmux socket is returning: ${message}`,
@@ -38,7 +45,17 @@ export const TMUX_CAPTURE_PROBE_TIMEOUT_MS = 5_000;
  * timed out (it may have started anyway). A throwaway server that won't start is reported as not checked, not a failure.
  */
 export function probeTmuxCapture(exec: (cmd: string, opts: { timeoutMs: number }) => string,
-  socket = `openrig-check-${process.pid}`): TmuxCaptureResult {
+  socket = `openrig-check-${process.pid}`, platform: NodeJS.Platform = process.platform): TmuxCaptureResult {
+  if (platform === "win32") {
+    const session = `openrig-check-${process.pid}-${Date.now()}`;
+    const run = (args: string) => exec(`tmux -t =${session} ${args}`, { timeoutMs: TMUX_CAPTURE_PROBE_TIMEOUT_MS });
+    try {
+      run(`new-session -d -s ${session} powershell.exe -NoLogo -NoProfile`);
+      run(`capture-pane -p -t =${session}`);
+      return { status: "pass" };
+    } catch (error) { return { status: "fail", detail: errorMessage(error).trim() }; }
+    finally { try { run(`kill-session -t =${session}`); } catch { /* only our probe session */ } }
+  }
   const run = (args: string) => exec(`tmux -L ${socket} -f /dev/null ${args}`, { timeoutMs: TMUX_CAPTURE_PROBE_TIMEOUT_MS });
   try {
     try { run("new-session -d -s check"); }
@@ -64,7 +81,16 @@ export function buildTmuxCaptureFailure(version: string | null, detail: string):
   };
 }
 
-export function probeTmuxControl(exec: (cmd: string) => string): TmuxProbeResult {
+function nativeVersionFailure(version: string, platform: NodeJS.Platform): TmuxProbeResult | undefined {
+  if (platform !== "win32") return undefined;
+  const match = /\bpsmux\s+(\d+)\.(\d+)\.(\d+)/i.exec(version);
+  if (match && (Number(match[1]) > 3 || Number(match[1]) === 3 && Number(match[2]) >= 4)) return undefined;
+  return { installed: true, available: false, version, code: "unhealthy",
+    detail: "Native Windows requires psmux 3.4.0 or newer on PATH as tmux.exe." };
+}
+
+export function probeTmuxControl(exec: (cmd: string) => string, platform: NodeJS.Platform = process.platform): TmuxProbeResult {
+
   let version: string;
   try {
     version = exec("tmux -V").trim();
@@ -77,6 +103,8 @@ export function probeTmuxControl(exec: (cmd: string) => string): TmuxProbeResult
       code: "not_installed",
     };
   }
+  const unsupported = nativeVersionFailure(version, platform);
+  if (unsupported) return unsupported;
 
   try {
     exec("tmux list-sessions");
@@ -108,7 +136,7 @@ export function probeTmuxControl(exec: (cmd: string) => string): TmuxProbeResult
   }
 }
 
-export async function probeTmuxControlAsync(exec: (cmd: string) => Promise<string>): Promise<TmuxProbeResult> {
+export async function probeTmuxControlAsync(exec: (cmd: string) => Promise<string>, platform: NodeJS.Platform = process.platform): Promise<TmuxProbeResult> {
   let version: string;
   try {
     version = (await exec("tmux -V")).trim();
@@ -121,6 +149,8 @@ export async function probeTmuxControlAsync(exec: (cmd: string) => Promise<strin
       code: "not_installed",
     };
   }
+  const unsupported = nativeVersionFailure(version, platform);
+  if (unsupported) return unsupported;
 
   try {
     await exec("tmux list-sessions");

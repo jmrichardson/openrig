@@ -1,3 +1,4 @@
+import { renderWindowsLaunch } from "../src/adapters/windows-launch.js";
 // OPR.0.7.0.5 — in-place restart of one Codex seat: every gate and every outcome, driven through the
 // public SeatLifecycleService surface against a fake tmux, process table, Codex launcher and OS reads.
 import { spawn } from "node:child_process";
@@ -79,6 +80,10 @@ interface WorldOptions {
   holdFails?: "write" | "readback";
   /** The pane disappears when its process is signalled, and tmux doesn't report it dead (review-r2's case). */
   paneVanishes?: boolean;
+  /** Native Windows: TERM is reported unsupported and stops nothing; KILL stops Codex. */
+  nativeTerm?: boolean;
+  /** Native Windows: the relaunch is the PowerShell launch that carries this CODEX_HOME. */
+  nativeRelaunchHome?: string;
 }
 
 const dbs: Database.Database[] = [];
@@ -126,6 +131,7 @@ function world(options: WorldOptions = {}) {
   let relaunched = false;
   let replacementReads = 0;
   const replacementYields: number[] = [];
+  const stopYields: number[] = [];
   let thrown = false;
   const maybeThrow = (at: WorldOptions["throwAt"]) => {
     if (options.throwAt === at && !thrown) { thrown = true; throw new Error(`injected failure at ${at}`); }
@@ -150,6 +156,7 @@ function world(options: WorldOptions = {}) {
     signalPid: async (pid: number, signal: string): Promise<TmuxResult> => {
       calls.push(`signalPid ${pid} ${signal}`);
       maybeThrow("signalPid");
+      if (options.nativeTerm && signal === "TERM") return { ok: false, code: "graceful_unsupported", message: "no graceful signal" };
       // The launch script ends with Codex, so its sh exits too.
       if (!options.codexIgnoresSignals) { rows = rows.filter((row) => row.executableName !== "codex" && row.pid !== 150); paneCommand = "bash"; }
       return { ok: true };
@@ -196,7 +203,8 @@ function world(options: WorldOptions = {}) {
         + `${binding.effort ? ` -c 'model_reasoning_effort="${binding.effort}"'` : ""} -s workspace-write`
         + `${running?.networkOverride ? " -c 'sandbox_workspace_write.network_access=true'" : ""} resume`
         + `${(running?.addDirs ?? []).map((dir) => ` --add-dir '${dir}'`).join("")} '${opts.resumeToken}'`;
-      return { ok: true as const, core, command: `env CODEX_HOME='${HOME}' ${core}` };
+      return { ok: true as const, core, command: options.nativeRelaunchHome !== undefined
+        ? renderWindowsLaunch(core, { CODEX_HOME: options.nativeRelaunchHome }) : `env CODEX_HOME='${HOME}' ${core}` };
     },
     async sendResumeCommand(_session: string, command: string, resumeToken: string, _nodeId?: string, home?: string): Promise<HarnessLaunchResult> {
       launches.push({ command, resumeToken });
@@ -249,13 +257,13 @@ function world(options: WorldOptions = {}) {
       if (relaunched) {
         replacementYields.push(ms);
         await options.afterReplacementYield?.(ms);
-      }
+      } else stopYields.push(ms);
     } },
     inPlaceRestartDaemonStartedAt: options.daemonStartedAt ?? new Date("2000-01-01T00:00:00Z"),
   });
   const events = () => (db.prepare("SELECT type, payload FROM events WHERE type LIKE 'seat.restart_in_place%' ORDER BY seq").all() as Array<{ type: string; payload: string }>)
     .map((row) => ({ type: row.type, ...JSON.parse(row.payload) }));
-  return { db, service, node, session, calls, launches, proofHomes, builds, events, sessionRegistry, tmux,
+  return { db, service, node, session, calls, launches, stopYields, proofHomes, builds, events, sessionRegistry, tmux,
     replacementYields, get replacementReads() { return replacementReads; }, get relaunched() { return relaunched; },
     setRows: (next: NativeProcessRow[]) => { rows = next; },
     print: (text: string) => { paneLines.push(...text.split("\n").filter(Boolean)); },
@@ -268,6 +276,13 @@ function world(options: WorldOptions = {}) {
 function state(activity: string, needs = 0): ArbitratedSeatState {
   return { seatNodeId: "n", activity: activity as never, needsInput: { count: needs, reason: needs ? "approval prompt" : null },
     needsInputEvidence: null, decidedBy: "hook" as never, seq: 1, changedAt: LSTART, rungs: [], lastSwap: null };
+}
+
+// The restart service and the Codex adapter read process.platform when called.
+async function onPlatform<T>(os: NodeJS.Platform, fn: () => Promise<T>): Promise<T> {
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  Object.defineProperty(process, "platform", { ...platform, value: os });
+  try { return await fn(); } finally { Object.defineProperty(process, "platform", platform); }
 }
 
 describe("rig seat restart --keep-conversation: gates before any signal", () => {
@@ -285,6 +300,51 @@ describe("rig seat restart --keep-conversation: gates before any signal", () => 
     expect(JSON.stringify(plan)).not.toContain("--token=x"); // argv of children is never reported
     expect(w.calls).toEqual([]);
     expect(w.events()).toEqual([]);
+  });
+
+  it("reports a POSIX child's process name as ps gives it, and a Windows one without .exe", async () => {
+    const w = world();
+    w.setRows([shellRow(100, 200), codexRow(200, 100, `-m gpt-5.5 -s workspace-write resume ${TOKEN}`),
+      { pid: 210, ppid: 200, pgid: 210, tpgid: 200, executableName: "Python", command: "/Library/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python", startedAt: LSTART }]);
+    expect(await w.service.restartInPlace({ seatRef: SEAT, plan: true })).toMatchObject({ childProcesses: [{ pid: 210, name: "Python" }] });
+    const powershell = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
+    w.setRows([
+      { platform: "win32", pid: 100, ppid: 1, executableName: "powershell.exe", executablePath: powershell, command: `"${powershell}" -NoLogo -NoProfile`, startedAt: "2026-01-01T00:00:00.000Z" },
+      { platform: "win32", pid: 200, ppid: 100, executableName: "codex.exe", executablePath: "C:\\tools\\codex.exe", command: `"C:\\tools\\codex.exe" -m gpt-5.5 -s workspace-write resume ${TOKEN}`, startedAt: "2026-01-01T00:00:01.000Z" },
+      { platform: "win32", pid: 210, ppid: 200, executableName: "Node.EXE", executablePath: "C:\\node\\node.exe", command: "\"C:\\node\\node.exe\" mcp.js", startedAt: "2026-01-01T00:00:02.000Z" },
+    ]);
+    expect(await w.service.restartInPlace({ seatRef: SEAT, plan: true })).toMatchObject({ childProcesses: [{ pid: 210, name: "node" }] });
+  });
+
+  it("ties a native Windows Codex under the pane's PowerShell to the stored conversation", async () => {
+    const w = world();
+    const powershell = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
+    const codexExe = "C:\\tools\\codex\\codex.exe";
+    w.setRows([
+      { platform: "win32", pid: 100, ppid: 1, executableName: "powershell.exe", executablePath: powershell,
+        command: `"${powershell}" -NoLogo -NoProfile`, startedAt: "2026-01-01T00:00:00.000Z" },
+      { platform: "win32", pid: 200, ppid: 100, executableName: "codex.exe", executablePath: codexExe,
+        command: `"${codexExe}" -m gpt-5.5 -s workspace-write resume ${TOKEN}`, startedAt: "2026-01-01T00:00:01.000Z" },
+    ]);
+    const plan = await w.service.restartInPlace({ seatRef: SEAT, plan: true });
+    expect(plan).toMatchObject({ ok: true, planOnly: true, conversationId: TOKEN, conversationProof: "argv" });
+    expect(w.calls).toEqual([]);
+  });
+
+  it("native Windows: reads the relaunch's CODEX_HOME back through every quote PowerShell doubles", async () => {
+    // powershellQuote doubles ' and U+2018-U+201B; the drift check undoes exactly that.
+    const home = "C:\\Users\\O'Neil \u2018a\u2019 \u201ab\u201b\\.codex";
+    expect(renderWindowsLaunch("codex x", { CODEX_HOME: home }))
+      .toContain("$openrigStart.EnvironmentVariables['CODEX_HOME']='C:\\Users\\O''Neil \u2018\u2018a\u2019\u2019 \u201a\u201ab\u201b\u201b\\.codex'\n");
+    const running = { 200: facts({ env: { CODEX_HOME: home } }), 100: facts() };
+    const same = world({ nativeRelaunchHome: home, facts: running });
+    const moved = world({ nativeRelaunchHome: `${home}-other`, facts: running });
+    await onPlatform("win32", async () => {
+      expect(await same.service.restartInPlace({ seatRef: SEAT, plan: true })).toMatchObject({ ok: true, planOnly: true, codexHome: home });
+      expect(await moved.service.restartInPlace({ seatRef: SEAT, plan: true })).toMatchObject({ ok: false, code: "settings_drift", detail: { differs: ["codex home"] } });
+    });
+    expect(same.calls).toEqual([]);
+    expect(moved.calls).toEqual([]);
   });
 
   it("mid-turn and needs-input are reported, never refused", async () => {
@@ -469,6 +529,14 @@ describe("rig seat restart --keep-conversation: outcomes", () => {
     expect(w.launches[0]).toEqual({ resumeToken: TOKEN, command: `env CODEX_HOME='${HOME}' codex -m 'gpt-5.5' -s workspace-write resume '${TOKEN}'` });
     expect(w.events().map((event) => [event.type, event.outcome])).toEqual([
       ["seat.restart_in_place_started", undefined], ["seat.restart_in_place_finished", "restarted_account_unverified"]]);
+  });
+
+  it("native Windows: an unsupported TERM goes straight to KILL instead of waiting out the graceful window", async () => {
+    const w = world({ nativeTerm: true });
+    const result = await w.service.restartInPlace({ seatRef: SEAT, reason: "x" });
+    expect(result).toMatchObject({ ok: true, outcome: "restarted_account_unverified", paneShape: "shell_backed" });
+    expect(w.calls).toEqual(["signalPid 200 TERM", "signalPid 200 KILL"]);
+    expect(w.stopYields).toEqual([]);
   });
 
   it("not_started when Codex survives TERM and KILL: no resume is attempted", async () => {
@@ -919,6 +987,43 @@ describe("#1196 round 1: launch choices come from the running Codex (LOW-1); ver
       expect(built.core).toContain("--add-dir '/a b'");
       expect(built.core).not.toContain("network_access");
     }
+  });
+
+  it("native Windows: the production adapter keeps the running Windows overrides and adds none the running Codex lacked, so the relaunch is no drift", async () => {
+    const { CodexRuntimeAdapter } = await import("../src/adapters/codex-runtime-adapter.js");
+    const adapter = () => new CodexRuntimeAdapter({
+      tmux: { getPaneCommand: async () => "codex" } as never,
+      // No Codex config chooses a sandbox or sets the policy, so a fresh Windows launch would add both overrides.
+      fsOps: { readFile: () => "", writeFile: () => {}, exists: () => false, mkdirp: () => {} },
+      detectDaemonSupport: async () => ({ kind: "supported" }) as never,
+      readNetworkDefault: async () => ({ apply: true, elapsedMs: 1 }) as never,
+      verifyProfilePreflight: async () => ({ ok: true }) as never,
+      prepareTeamWorkspace: () => [],
+    });
+    const binding = (over: Partial<NodeBinding> = {}) => ({ id: "", nodeId: "n", attachmentType: "tmux", tmuxSession: SEAT, tmuxWindow: null, tmuxPane: "%1",
+      cmuxWorkspace: null, cmuxSurface: null, updatedAt: "", cwd: "/work", ...over }) as NodeBinding;
+    const build = (a: ReturnType<typeof adapter>, b: NodeBinding, over: { windowsSandboxOverride?: boolean; windowsExecutionPolicyOverride?: boolean }) =>
+      a.buildResumeCommand(b, { name: SEAT, resumeToken: TOKEN, running: { networkOverride: false, daemonOptOut: false, addDirs: [], ...over } });
+    const profiled = binding({ codexConfigProfile: "prof", teamPermissionDefault: true });
+    const [sandboxKept, sandboxLacked, policyKept, policyLacked] = await onPlatform("win32", async () => {
+      const withProfile = adapter(), plain = adapter();
+      return [
+        await build(withProfile, profiled, { windowsSandboxOverride: true }),
+        await build(withProfile, profiled, {}),
+        await build(plain, binding(), { windowsSandboxOverride: true, windowsExecutionPolicyOverride: true }),
+        await build(plain, binding(), { windowsSandboxOverride: true }),
+      ];
+    });
+    expect(sandboxKept).toMatchObject({ ok: true, core: expect.stringContaining("-c 'features.prefer_mxc=true'") });
+    expect(sandboxLacked).toMatchObject({ ok: true, core: expect.not.stringContaining("prefer_mxc") });
+    if (!policyKept?.ok || !policyLacked?.ok) throw new Error("relaunch not built");
+    expect(policyKept.core).toContain("-c 'shell_environment_policy.set.PSExecutionPolicyPreference=RemoteSigned'");
+    expect(policyLacked.core).not.toContain("PSExecutionPolicyPreference");
+    const runningConfig = (argv: string) => parseEffectiveSettings(["codex", ...shellWords(argv)]).config;
+    expect(parseEffectiveSettings(shellWords(policyKept.core)).config)
+      .toEqual(runningConfig("-s workspace-write -c check_for_update_on_startup=false -c features.prefer_mxc=true -c shell_environment_policy.set.PSExecutionPolicyPreference=RemoteSigned"));
+    expect(parseEffectiveSettings(shellWords(policyLacked.core)).config)
+      .toEqual(runningConfig("-s workspace-write -c check_for_update_on_startup=false -c features.prefer_mxc=true"));
   });
 
   it("an Account line from before the restart is not evidence", async () => {

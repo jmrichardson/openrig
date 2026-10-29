@@ -6,7 +6,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
 
-it("keeps the TUI and return prompt after a real launch-group SIGINT, then restores normal SIGINT", async () => {
+// POSIX process-group SIGINT (`process.kill(-pid)`); Windows delivers Ctrl+C as console control events.
+it.skipIf(process.platform === "win32")("keeps the TUI and return prompt after a real launch-group SIGINT, then restores normal SIGINT", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "tui-sig-"));
   const cli = path.join(root, "rig.mjs");
   await writeFile(cli, `

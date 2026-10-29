@@ -2,7 +2,8 @@
 
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   buildInternalLeakMessage,
   scanInternalLeaks,
@@ -86,7 +87,7 @@ function selectFiles(options) {
     if (options.filesManifest) {
       return readFilesManifest(options.filesManifest).map((path) => {
         const absolutePath = resolve(options.tree, path);
-        if (absolutePath !== options.tree && !absolutePath.startsWith(`${options.tree}/`)) {
+        if (absolutePath !== options.tree && !absolutePath.startsWith(`${options.tree}${sep}`)) {
           throw new Error(`Artifact path escapes scan tree: ${path}`);
         }
         if (!existsSync(absolutePath)) throw new Error(`Artifact file not found under scan tree: ${path}`);
@@ -200,7 +201,9 @@ function splitNul(bytes) {
     .sort();
 }
 
-if (import.meta.url === `file://${resolve(process.argv[1])}`) {
+// A Windows path (C:\...) is a file URL only through pathToFileURL.
+const entryUrl = process.platform === "win32" ? pathToFileURL(resolve(process.argv[1])).href : `file://${resolve(process.argv[1])}`;
+if (import.meta.url === entryUrl) {
   try {
     process.exitCode = main();
   } catch (error) {

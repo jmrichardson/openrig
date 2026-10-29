@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+const tar = process.platform === 'win32' ? join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe') : 'tar';
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const directory = path => assert.ok(lstatSync(path).isDirectory(), `${path}: expected a directory, not a link`);
 const manifests = ['.claude-plugin/plugin.json', '.codex-plugin/plugin.json'];
@@ -71,7 +72,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   assert.ok(archive && (!option || option === '--snapshot'), 'usage: check-packaged-plugin-versions.mjs archive.tgz [--snapshot]');
   const dir = mkdtempSync(join(tmpdir(), 'packaged-plugin-versions-'));
   try {
-    execFileSync('tar', ['-xzf', resolve(archive), '-C', dir, 'package/daemon/assets/plugins', 'package/package.json']);
+    execFileSync(tar, ['-xzf', resolve(archive), '-C', dir, 'package/daemon/assets/plugins', 'package/package.json']);
     const pkg = join(dir, 'package');
     directory(pkg);
     assert.ok(lstatSync(join(pkg, 'package.json')).isFile(), 'package.json: expected a regular file, not a link');

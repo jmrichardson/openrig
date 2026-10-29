@@ -93,6 +93,22 @@ const DEFAULT_AUDIT_FILE = path.join(
   "file-edit-audit.jsonl",
 );
 
+/** Rename a staged file over `target`. Windows refuses to replace a file another process holds open, as an
+ *  editor, indexer or virus scanner may briefly do; retry briefly so that reader can close it. Other platforms
+ *  replace at once, exactly as `fs.renameSync`. */
+function replaceFileSync(staged: string, target: string): void {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      fs.renameSync(staged, target);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (process.platform !== "win32" || attempt === 100 || !(code === "EPERM" || code === "EACCES" || code === "EBUSY")) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+    }
+  }
+}
+
 export class FileWriteService {
   private readonly allowlist: AllowlistRoot[];
   private readonly auditFilePath: string;
@@ -163,7 +179,7 @@ export class FileWriteService {
     }
 
     try {
-      fs.renameSync(tmpPath, target);
+      replaceFileSync(tmpPath, target);
     } catch (err) {
       // Best-effort cleanup of the orphan temp file. We don't try to
       // restore the previous content because we never touched the

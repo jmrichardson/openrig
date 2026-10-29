@@ -18,7 +18,7 @@ import {
 } from "./native-resume-probe.js";
 import { runAsyncSite } from "./sync-site-wrap.js";
 import { isClaudeSidecarFromEarlierProcess, type ResumeTokenCaptureDeps } from "./resume-token-capture.js";
-import { observeClaudePaneRuntime, type NativeProcessLister } from "./native-process-lineage.js";
+import { observeClaudePaneRuntime, readWindowsProcessesStrict, isWindowsRuntimeProcess, type NativeProcessRow, type NativeProcessLister } from "./native-process-lineage.js";
 import { validateResumeToken } from "./resume-token-validation.js";
 import { readProcessTable } from "./process-table.js";
 import type { HomeRuntime } from "./seat-runtime-home.js";
@@ -473,29 +473,44 @@ export async function defaultListProcesses(): Promise<Array<{ pid: number; ppid:
  *  cached while 520 were live). The lenient variant keeps its contract for
  *  the direct per-call consumers that want best-effort. */
 export async function defaultListProcessesStrict(): Promise<Array<{ pid: number; ppid: number; command: string; startedAt: string }>> {
+  if (process.platform === "win32") {
+    const rows = await runAsyncSite("resume_metadata.list_processes", readWindowsProcessesStrict);
+    return rows.flatMap(row => row.startedAt ? [{ ...row, startedAt: row.startedAt }] : []);
+  }
   // startedAt = the process START TIME — the identity half of pid+start-time
   // (r1's pid-reuse remedy): a reused pid changes it, so a consumer
   // holding last cycle's identity can invalidate without any extra spawn.
   const rows = await runAsyncSite("resume_metadata.list_processes", readProcessTable);
-  return rows.map(({ pid, ppid, startedAt, command }) => ({ pid, ppid, startedAt, command }));
+  return rows.map(({ pid, ppid, startedAt, command }) => ({ pid, ppid, startedAt: startedAt!, command }));
 }
 
+type ListedProcess = { pid: number; ppid: number; command: string } & Pick<NativeProcessRow, "platform" | "executableName" | "executablePath" | "startedAt">;
+
 function findCodexDescendantPids(
-  processes: Array<{ pid: number; ppid: number; command: string }>,
+  processes: ListedProcess[],
   parentPid: number
 ): number[] {
-  const childrenByParent = new Map<number, Array<{ pid: number; command: string }>>();
+  const childrenByParent = new Map<number, ListedProcess[]>();
   for (const proc of processes) {
     const siblings = childrenByParent.get(proc.ppid) ?? [];
-    siblings.push({ pid: proc.pid, command: proc.command });
+    siblings.push(proc);
     childrenByParent.set(proc.ppid, siblings);
   }
 
   const matches: number[] = [];
+  const byPid = new Map(processes.map((proc) => [proc.pid, proc]));
+  const visited = new Set<number>([parentPid]);
   const visit = (pid: number): void => {
     for (const child of childrenByParent.get(pid) ?? []) {
+      // A Windows parent PID can outlive its process and be reused: a child must be born after its parent.
+      if (child.platform === "win32") {
+        const parentBirth = Date.parse(byPid.get(pid)?.startedAt ?? "");
+        const childBirth = Date.parse(child.startedAt ?? "");
+        if (visited.has(child.pid) || !Number.isFinite(parentBirth) || !Number.isFinite(childBirth) || childBirth < parentBirth) continue;
+        visited.add(child.pid);
+      }
       visit(child.pid);
-      if (commandLooksLikeCodex(child.command)) {
+      if (child.platform === "win32" ? isWindowsRuntimeProcess(child, "codex") : commandLooksLikeCodex(child.command)) {
         matches.push(child.pid);
       }
     }

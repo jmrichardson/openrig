@@ -26,6 +26,8 @@ const DAEMON_ROOT = resolve(import.meta.dirname, "..");
 const STATIC_ROOT = resolve(DAEMON_ROOT, "context-packs-src");
 const PUBLIC_WORLD_ROOT = resolve(STATIC_ROOT, "world-public");
 const temporaryRoots: string[] = [];
+// Cases that run the shipped verifier verify-world.sh, a POSIX shell script.
+const itPosix = it.skipIf(process.platform === "win32");
 
 const EXPECTED_PUBLIC_CLAIM_IDS = [
   "world-purpose",
@@ -404,7 +406,7 @@ describe("public world pack", () => {
     expect(comments).toEqual([]);
   });
 
-  it.each(["world-public", "world-example"] as const)(
+  itPosix.each(["world-public", "world-example"] as const)(
     "fails when an uncensused authored prose comment appears in %s",
     (pack) => {
       const sourcePack = publicWorldDir();
@@ -436,7 +438,7 @@ describe("public world pack", () => {
     },
   );
 
-  it("fails when authored manifest purpose or probe semantics materially drift", () => {
+  itPosix("fails when authored manifest purpose or probe semantics materially drift", () => {
     const sourcePack = publicWorldDir();
     const redRoot = mkdtempSync(join(tmpdir(), "public-world-manifest-claims-red-"));
     temporaryRoots.push(redRoot);
@@ -468,7 +470,7 @@ describe("public world pack", () => {
     expect(result.stdout).toMatch(/FAIL.*public-manifest-authored-claims/i);
   });
 
-  it.each([
+  itPosix.each([
     [
       "trust-source relationship",
       "start-here.md",
@@ -515,7 +517,7 @@ describe("public world pack", () => {
     expect(result.stdout).toMatch(failure);
   });
 
-  it("passes on the shipped bytes, fails on a falsified claim, and skips loudly when rig is absent", () => {
+  itPosix("passes on the shipped bytes, fails on a falsified claim, and skips loudly when rig is absent", () => {
     const packDir = publicWorldDir();
     const rigPath = writeRigFixture();
     const fixtureEnv = {
@@ -576,7 +578,7 @@ describe("public world pack", () => {
     expect(skip.stdout).toMatch(/1 skipped/i);
   });
 
-  it("fails when world-public is absent from the serving and namespace projections", () => {
+  itPosix("fails when world-public is absent from the serving and namespace projections", () => {
     const rigPath = writeRigFixture({
       showStatus: 73,
       listJson: JSON.stringify([
@@ -596,7 +598,7 @@ describe("public world pack", () => {
     expect(result.stdout).toMatch(/FAIL.*private-ref-boundary/i);
   });
 
-  it("fails when the context store projection ignores its typed override", () => {
+  itPosix("fails when the context store projection ignores its typed override", () => {
     const rigPath = writeRigFixture({ configRoot: "/fixture/wrong-context" });
     const result = runVerifier(publicWorldDir(), {
       ...process.env,
@@ -610,7 +612,7 @@ describe("public world pack", () => {
     expect(result.stdout).toMatch(/FAIL.*world-example-install/i);
   });
 
-  it("fails when context add is broken despite healthy help and config projections", () => {
+  itPosix("fails when context add is broken despite healthy help and config projections", () => {
     const rigPath = writeRigFixture({ addStatus: 71 });
     const result = runVerifier(publicWorldDir(), {
       ...process.env,
@@ -624,7 +626,7 @@ describe("public world pack", () => {
     expect(result.stdout).toMatch(/FAIL.*world-example-install/i);
   });
 
-  it.each([
+  itPosix.each([
     ["public pack retrieval", { publicGet: "# unrelated content" }, /FAIL.*retrieve-public-pack/i],
     ["fresh profile composition", { profileJson: '{"pieces":[],"totalEstimatedTokens":0}' }, /FAIL.*compose-fresh-profile/i],
     ["worked example retrieval", { exampleGet: "# unrelated content" }, /FAIL.*retrieve-world-example/i],
@@ -642,7 +644,7 @@ describe("public world pack", () => {
     expect(result.stdout).toMatch(expectedFailure);
   });
 
-  it("removes a copied pack when daemon sync never indexes it", () => {
+  itPosix("removes a copied pack when daemon sync never indexes it", () => {
     const contextRoot = mkdtempSync(join(tmpdir(), "public-world-context-root-"));
     temporaryRoots.push(contextRoot);
     const rigPath = writeRigFixture({ configRoot: contextRoot, partialSync: true });
@@ -659,7 +661,7 @@ describe("public world pack", () => {
     expect(readdirSync(contextRoot)).toEqual([]);
   });
 
-  it("lets a stranger in an empty OPENRIG_HOME follow the taught world journey and observe real content", () => {
+  itPosix("lets a stranger in an empty OPENRIG_HOME follow the taught world journey and observe real content", () => {
     const strangerRoot = mkdtempSync(join(tmpdir(), "public-world-stranger-"));
     temporaryRoots.push(strangerRoot);
     const openrigHome = join(strangerRoot, "openrig-home");
@@ -713,7 +715,7 @@ describe("public world pack", () => {
     expect(existsSync(join(contextRoot, "stranger-example"))).toBe(false);
   });
 
-  it("fails loudly when the pack path returned by context show has no verifier", () => {
+  itPosix("fails loudly when the pack path returned by context show has no verifier", () => {
     const strangerRoot = mkdtempSync(join(tmpdir(), "public-world-missing-verifier-"));
     temporaryRoots.push(strangerRoot);
     const missingVerifierRoot = join(strangerRoot, "world-public");

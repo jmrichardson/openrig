@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import path from "node:path";
 import { createFullTestDb, createTestApp, mockTmuxAdapter } from "./helpers/test-app.js";
 import { SeatLifecycleService } from "../src/domain/seat-lifecycle-service.js";
 import type { RuntimeAdapter } from "../src/domain/runtime-adapter.js";
@@ -8,7 +9,7 @@ import os from "node:os";
 import { seatSkillPaths } from "../src/domain/seat-skill-storage.js";
 import { seatLaunchAdditions } from "../src/domain/seat-launch-additions.js";
 
-const root = "/fixture/first-start";
+const root = path.resolve("/fixture/first-start");
 const skillIds = ["development-team", "systematic-debugging", "test-driven-development", "verification-before-completion"];
 const member = { id: "pi", agent_ref: "local:agent", profile: "default", runtime: "pi", model: "provider/model", cwd: root };
 const closers: Array<() => void> = [];
@@ -20,9 +21,9 @@ async function failedAdd(memberOverrides?: Record<string, unknown>) {
   const effectiveMember = { ...member, ...memberOverrides };
   const files: Record<string, string> = {
     [root]: "",
-    [`${root}/agent/agent.yaml`]: `name: implementer\nversion: "1.0.0"\nresources:\n  skills:\n${skillIds.map(id => `    - id: ${id}\n      path: skills/${id}`).join("\n")}\nprofiles:\n  default:\n    uses:\n      skills: [${skillIds.join(", ")}]\nstartup:\n  files:\n    - path: role.md\n      required: true\n      delivery_hint: send_text\n`,
-    [`${root}/agent/role.md`]: "Read the role and preserve the existing seat.",
-    ...Object.fromEntries(skillIds.flatMap(id => [[`${root}/agent/skills/${id}`, ""], [`${root}/agent/skills/${id}/SKILL.md`, `# ${id}`]])),
+    [path.join(root, "agent", "agent.yaml")]: `name: implementer\nversion: "1.0.0"\nresources:\n  skills:\n${skillIds.map(id => `    - id: ${id}\n      path: skills/${id}`).join("\n")}\nprofiles:\n  default:\n    uses:\n      skills: [${skillIds.join(", ")}]\nstartup:\n  files:\n    - path: role.md\n      required: true\n      delivery_hint: send_text\n`,
+    [path.join(root, "agent", "role.md")]: "Read the role and preserve the existing seat.",
+    ...Object.fromEntries(skillIds.flatMap(id => [[path.join(root, "agent", "skills", id), ""], [path.join(root, "agent", "skills", id, "SKILL.md"), `# ${id}`]])),
   };
   let projectionBlocked = true;
   const adapter: RuntimeAdapter = {
@@ -130,7 +131,7 @@ describe("explicit first-start retry after projection failure", () => {
     expect(JSON.parse(context.resolved_files_json)).toEqual(expect.arrayContaining([expect.objectContaining({ path: expect.stringContaining("role.md"), required: true, deliveryHint: "send_text" })]));
     expect(f.adapter.deliverStartup).toHaveBeenCalled();
     expect(vi.mocked(f.adapter.deliverStartup).mock.calls.flatMap(call => call[0])).toEqual(expect.arrayContaining([
-      expect.objectContaining({ absolutePath: `${root}/agent/role.md`, required: true, deliveryHint: "send_text" }),
+      expect.objectContaining({ absolutePath: path.join(root, "agent", "role.md"), required: true, deliveryHint: "send_text" }),
     ]));
     expect(f.sessionRegistry.getSessionsForRig(f.rig.id).filter(s => s.nodeId === f.node.id).every(s => s.resumeToken === null)).toBe(true);
     expect(f.tmux.killSession).not.toHaveBeenCalled();
@@ -183,7 +184,7 @@ describe("explicit first-start retry after projection failure", () => {
     if (control === "resume") f.sessionRegistry.updateResumeToken(f.firstSession.id, "pi", "native-id");
     if (control === "native") f.db.prepare("UPDATE occupant_tenures SET native_session_id_at_boot = 'native-id' WHERE node_id = ?").run(f.node.id);
     if (control === "late-failure") f.db.prepare("UPDATE events SET payload = ? WHERE node_id = ? AND type = 'node.startup_failed'").run(JSON.stringify({ type: "node.startup_failed", nodeId: f.node.id, sessionId: f.firstSession.id, error: "Harness launch failed" }), f.node.id);
-    if (control === "changed-spec") f.files[`${root}/agent/agent.yaml`] += "\n# changed\n";
+    if (control === "changed-spec") f.files[path.join(root, "agent", "agent.yaml")] += "\n# changed\n";
     const changes = f.db.prepare("SELECT total_changes() AS n").get();
     const res = await f.request(
       control === "changed-member" ? { ...member, model: "different/model" } :

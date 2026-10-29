@@ -308,6 +308,7 @@ describe("plugins HTTP routes", () => {
 
     it("retains cold legacy references while activating the primary user specs root", async () => {
       vi.stubEnv("HOME", env.root);
+      vi.stubEnv("USERPROFILE", env.root);
       vi.stubEnv("OPENRIG_HOME", join(env.root, "primary"));
       const legacySpecs = join(env.root, ".rigged/specs");
       const primarySpecs = join(env.root, "primary/specs");

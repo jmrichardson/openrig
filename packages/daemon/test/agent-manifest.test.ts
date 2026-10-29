@@ -76,6 +76,13 @@ profiles:
 `;
 
 describe("AgentSpec manifest parser + validator", () => {
+  // Windows path rules; elsewhere these are ordinary relative names (see path-safety.test.ts).
+  it.skipIf(process.platform !== "win32").each(["C:agents\\lib", "C:\\agents\\lib", "C:/agents/lib", "\\agents\\lib", "\\\\server\\share\\lib"])("rejects rooted local imports: %s", (path) => {
+    const raw = parseAgentSpec(VALID_SPEC);
+    raw.imports = [{ ref: `local:${path}` }];
+    expect(validateAgentSpec(raw).errors).toContain(`imports[0].ref: local: ref must be a relative path (got "local:${path}")`);
+  });
+
   // T1: valid agent.yaml parses and normalizes with correct defaults
   it("valid spec parses, validates, and normalizes", () => {
     const raw = parseAgentSpec(VALID_SPEC);

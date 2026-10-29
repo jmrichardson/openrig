@@ -9,6 +9,7 @@ import type { NodeBinding, ResolvedStartupFile } from "../src/domain/runtime-ada
 import type { ProjectionPlan, ProjectionEntry } from "../src/domain/projection-planner.js";
 import type { TmuxAdapter } from "../src/adapters/tmux.js";
 import { claudePostureFlag } from "../src/adapters/yolo-mode.js";
+import { posixShell } from "./helpers/posix-shell.js";
 import { resolveReadinessTimeoutMs } from "../src/domain/readiness-timeout.js";
 import { claudeCommandSessionToken } from "../src/domain/native-process-lineage.js";
 
@@ -35,13 +36,15 @@ function mockTmux(): TmuxAdapter {
 
 function mockFs(files?: Record<string, string>): ClaudeAdapterFsOps {
   const store: Record<string, string> = { ...files };
+  // Fixtures key files by POSIX path; the product builds native paths (\project\... on win32).
+  const key = (p: string) => process.platform === "win32" ? p.replaceAll("\\", "/") : p;
   return {
-    readFile: (p: string) => { if (p in store) return store[p]!; throw new Error(`Not found: ${p}`); },
-    writeFile: (p: string, c: string) => { store[p] = c; },
-    exists: (p: string) => p in store,
+    readFile: (p: string) => { if (key(p) in store) return store[key(p)]!; throw new Error(`Not found: ${p}`); },
+    writeFile: (p: string, c: string) => { store[key(p)] = c; },
+    exists: (p: string) => key(p) in store,
     mkdirp: () => {},
     copyFile: () => {},
-    listFiles: (dir: string) => Object.keys(store).filter((k) => k.startsWith(dir + "/")).map((k) => k.slice(dir.length + 1)),
+    listFiles: (dir: string) => Object.keys(store).filter((k) => k.startsWith(key(dir) + "/")).map((k) => k.slice(key(dir).length + 1)),
     _store: store,
   } as ClaudeAdapterFsOps & { _store: Record<string, string> };
 }
@@ -213,7 +216,7 @@ describe("launchHarness — the resume token is one shell argument", () => {
   };
   // Parse the command with a real shell; `claude` is a function that prints its argv, one per line.
   const argvOf = (cmd: string): string[] =>
-    execFileSync("/bin/sh", ["-c", `claude() { printf '%s\\n' "$@"; }; ${cmd}`], { encoding: "utf8" }).split("\n").slice(0, -1);
+    execFileSync(posixShell, ["-c", `claude() { printf '%s\\n' "$@"; }; ${cmd}`], { encoding: "utf8" }).split("\n").slice(0, -1);
 
   it.each(["tok; echo injected", "$(echo injected)", "two words", "it's"])("keeps %j after --resume as one argument", async (token) => {
     const tmux = mockTmux();

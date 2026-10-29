@@ -6,6 +6,7 @@ import { join, resolve } from "node:path";
 import { buildCompactCommand, buildPostCompactRestorePrompt, buildPostCompactTurnBoundaryPrompt } from "../src/domain/claude-compaction-enforcer.js";
 import { createDaemon } from "../src/startup.js";
 import { PluginVendorService } from "../src/domain/plugin-vendor-service.js";
+import { hasPython3 } from "./helpers/refocus-hook-fakes.js";
 
 const plugin = resolve(import.meta.dirname, "../assets/plugins/openrig-core");
 const hook = join(plugin, "hooks/scripts/refocus.cjs");
@@ -67,8 +68,9 @@ printf '{}'
   };
 }
 
+// Cases gated on hasPython3 consume a successful or failing run of the shipped trace-to-root.py.
 describe("managed refocus and trace results", () => {
-  it.each([false, true])("holds peers until the actionable restore request (pasted wrapper: %s)", (wrapped) => {
+  it.skipIf(!hasPython3).each([false, true])("holds peers until the actionable restore request (pasted wrapper: %s)", (wrapped) => {
     const submit = (text: string) => wrapped ? `\n\n<pasted_content id="fixture">\n${text}\n</pasted_content id="fixture">\n` : text;
     const f = fixture();
     f.prepare(true);
@@ -91,7 +93,7 @@ describe("managed refocus and trace results", () => {
     expect(f.calls()).toEqual([]);
   });
 
-  it("manual compaction replaces a managed marker and delivers on the next prompt", () => {
+  it.skipIf(!hasPython3)("manual compaction replaces a managed marker and delivers on the next prompt", () => {
     const f = fixture();
     f.prepare(true);
     f.prepare(false);
@@ -100,7 +102,7 @@ describe("managed refocus and trace results", () => {
     expect(f.state().pendingOn).toBeUndefined();
   });
 
-  it.each([false, true])("delivers after the hold expires but never on the acknowledgement (pasted wrapper: %s)", (wrapped) => {
+  it.skipIf(!hasPython3).each([false, true])("delivers after the hold expires but never on the acknowledgement (pasted wrapper: %s)", (wrapped) => {
     const f = fixture();
     f.prepare(true);
     const armedAfter = Date.now();
@@ -156,7 +158,7 @@ describe("managed refocus and trace results", () => {
     expect(f.run("UserPromptSubmit")).toContain("just compacted");
   });
 
-  it.each(["light", "full"])("consumes successful %s traces containing diagnostic words in authored text once", (depth) => {
+  it.skipIf(!hasPython3).each(["light", "full"])("consumes successful %s traces containing diagnostic words in authored text once", (depth) => {
     const f = fixture();
     if (depth === "light") writeFileSync(join(f.root, "SPEC.md"), "---\nintent: Eliminate TRACE GAP messages without losing context\n---\n");
     writeFileSync(f.notes, "NOTES RESOLUTION GAP — an exact diagnostic line discussed in authored notes.\n");
@@ -191,7 +193,7 @@ describe("managed refocus and trace results", () => {
     expect(checked.stdout).toBe(plain.stdout);
   });
 
-  it("confirms a slow stream receipt within the remaining hook budget", () => {
+  it.skipIf(!hasPython3)("confirms a slow stream receipt within the remaining hook budget", () => {
     const f = fixture();
     f.run("PostCompact");
     for (let n = 0; n < 2; n++) f.run("UserPromptSubmit", "continue", { OPENRIG_REFOCUS_WORK_NODE: resolve(f.root, "..") });

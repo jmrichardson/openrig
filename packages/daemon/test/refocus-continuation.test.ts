@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { delimiter, join, resolve } from "node:path";
+import { fakePythonEnv, writeFakeRig } from "./helpers/refocus-hook-fakes.js";
 
 const hook = resolve(import.meta.dirname, "../assets/plugins/openrig-core/hooks/scripts/refocus.cjs");
 const boundary = "OpenRig post-compaction turn boundary. Please acknowledge this message briefly. Do not restore yet; the next normal user message will contain the restore instructions.";
@@ -14,8 +15,6 @@ function fixture(nodeRig = false) {
   roots.push(root);
   const bin = join(root, "bin");
   mkdirSync(bin);
-  const trace = join(bin, "trace");
-  const rig = join(bin, "rig");
   const calls = join(root, "calls");
   const transcript = join(root, "transcript.jsonl");
   writeFileSync(transcript, "x".repeat(100));
@@ -38,7 +37,7 @@ process.stdout.write("{}");
         OPENRIG_SESSION_NAME: "seat@test", OPENRIG_REFOCUS_ENABLED: "1", OPENRIG_REFOCUS_NOW: "",
         OPENRIG_REFOCUS_CONTENT_REF: "", OPENRIG_REFOCUS_CONTENT_FILE: "", OPENRIG_REFOCUS_TREES: "work",
         OPENRIG_REFOCUS_WORK_NODE: root, OPENRIG_WORKSPACE_ROOT: root,
-        PYTHON: trace, TRACE_RESULT: good ? "WORK TRACE: current intent" : "TRACE GAP — fixture resolver unavailable",
+        ...trace, TRACE_RESULT: good ? "WORK TRACE: current intent" : "TRACE GAP — fixture resolver unavailable",
         TRACE_STATUS: good ? "0" : "1", CALLS: calls, ...extra },
     });
     expect(result.status, result.error?.message || result.stderr).toBe(0);
@@ -142,5 +141,13 @@ describe("refocus continuation", () => {
     f.run("UserPromptSubmit", "continue", false, {}, "other-occupant");
     expect(f.calls()).toHaveLength(2);
     expect(readdirSync(join(f.root, "refocus")).filter((name) => name.endsWith(".health.json"))).toHaveLength(2);
+  });
+
+  it("reports through the seat's CLI entry on Windows and through PATH elsewhere", () => {
+    const f = fixture();
+    f.run("PostCompact");
+    // No rig is on PATH: only the Windows path may reach the fake, through OPENRIG_CLI_ENTRY.
+    for (let i = 0; i < 3; i++) f.run("UserPromptSubmit", "continue", false, { PATH: join(f.root, "no-rig") });
+    expect(f.calls()).toHaveLength(process.platform === "win32" ? 1 : 0);
   });
 });

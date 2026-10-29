@@ -111,7 +111,7 @@ files:
     lib.scan();
     const entry = lib.getByRef("collision")!;
     expect(entry.sourceType).toBe("workspace");
-    expect(entry.sourcePath).toContain("/workspace/");
+    expect(entry.sourcePath).toBe(join(workspaceRoot, "collision"));
   });
 
   // Slice-03 Atom 5 (colon-id strip, ruled contract §4) — the id is now
@@ -208,6 +208,10 @@ files:
     const entry = lib.getByRef("guard")!;
     expect(() => lib.resolveFileWithinPack(entry, "../etc/passwd")).toThrow(/inside the pack/);
     expect(() => lib.resolveFileWithinPack(entry, "/abs")).toThrow(/inside the pack/);
+    // Windows path rules; elsewhere these are ordinary relative names (see path-safety.test.ts).
+    if (process.platform === "win32") for (const path of ["C:notes.md", "C:\\notes.md", "\\notes.md", "\\\\server\\share\\notes.md"]) {
+      expect(() => lib.resolveFileWithinPack(entry, path)).toThrow(/inside the pack/);
+    }
   });
 });
 

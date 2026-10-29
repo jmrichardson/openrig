@@ -98,7 +98,7 @@ describe("advisory bundle check", () => {
     try {
       const deps = { clientFactory: vi.fn(), lifecycleDeps: {} } as unknown as StatusDeps;
       await new Command().addCommand(bundleCommand(deps)).parseAsync(["bundle", "check", root], { from: "user" });
-      expect(log.mock.calls.map(c => String(c[0]))).toContain("finding: referenced_files: Declared file is missing, unreadable or outside the bundle folder. (docs/missing.md)");
+      expect(log.mock.calls.map(c => String(c[0]))).toContain(`finding: referenced_files: Declared file is missing, unreadable or outside the bundle folder. (${path.join("docs", "missing.md")})`);
       expect(process.exitCode).toBe(1);
     } finally { log.mockRestore(); process.exitCode = exitCode; }
   });

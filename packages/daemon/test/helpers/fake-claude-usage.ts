@@ -7,6 +7,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { installNativeNodeFake } from "../../../../test/native-node-fake.js";
 
 export interface FakeClaudePlan {
   /** One `auth status` answer per call (the last repeats); `null` means exit 1 with no output; "hang" never answers. */
@@ -78,6 +79,8 @@ export function makeFakeClaude(): FakeClaude {
   fs.mkdirSync(binDir);
   fs.mkdirSync(configDir);
   fs.writeFileSync(path.join(binDir, "claude"), SCRIPT(process.execPath), { mode: 0o755 });
+  // Windows Claude is a native executable, and the reader runs only claude.exe.
+  if (process.platform === "win32") installNativeNodeFake(binDir, "claude", SCRIPT(process.execPath));
   const read = (name: string) => { try { return fs.readFileSync(path.join(configDir, name), "utf8"); } catch { return ""; } };
   const lines = (name: string) => read(name).split("\n").filter(Boolean).map((l) => JSON.parse(l));
   return {

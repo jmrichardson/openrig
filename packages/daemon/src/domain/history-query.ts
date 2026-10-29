@@ -6,7 +6,7 @@ import { sliceWhole } from "./text-cut.js";
 export type ExecDep = (cmd: string, args: string[]) => Promise<{ stdout: string; exitCode: number }>;
 
 export interface SearchResult {
-  backend: "rg" | "grep" | "none";
+  backend: "rg" | "grep" | "read" | "none";
   excerpts: string[];
   insufficient: boolean;
   noTranscriptDir?: boolean;
@@ -52,10 +52,12 @@ interface HistoryQueryOpts {
   chatSearchFn?: (rigId: string, pattern: string) => ChatSearchResult[];
   /** root of per-session provider JSONL (Claude): ~/.claude/projects. Injectable for tests. */
   claudeProjectsRoot?: string;
+  /** The daemon host's platform. Defaults to this process's. */
+  platform?: NodeJS.Platform;
 }
 
 export interface SessionSearchResult {
-  backend: "rg" | "grep" | "none";
+  backend: "rg" | "grep" | "read" | "none";
   token: string;
   found: boolean;
   path?: string;
@@ -138,12 +140,26 @@ export class HistoryQuery {
   private readonly exec: ExecDep;
   private readonly chatSearchFn?: (rigId: string, pattern: string) => ChatSearchResult[];
   private readonly claudeProjectsRoot: string;
+  private readonly platform: NodeJS.Platform;
 
   constructor(opts: HistoryQueryOpts) {
     this.transcriptsRoot = opts.transcriptsRoot;
     this.exec = opts.exec;
     this.chatSearchFn = opts.chatSearchFn;
     this.claudeProjectsRoot = opts.claudeProjectsRoot ?? join(homedir(), ".claude", "projects");
+    this.platform = opts.platform ?? process.platform;
+  }
+
+  /** Windows' last backend: Git for Windows keeps grep off PATH, and rg is seldom installed.
+   *  The matching lines of `files`, as `grep -E -i -h` prints them, or null when one is unreadable. */
+  private readMatchingLines(files: string[], pattern: string): string | null {
+    if (this.platform !== "win32") return null;
+    const match = new RegExp(pattern, "i");
+    try {
+      return files.flatMap((file) => readFileSync(file, "utf8").split("\n").filter((line) => match.test(line))).join("\n");
+    } catch {
+      return null;
+    }
   }
 
   /** Locate a session's JSONL by token: `<projectsRoot>/<any-encoded-cwd>/<token>.jsonl`.
@@ -225,6 +241,12 @@ export class HistoryQuery {
       return { backend: "grep", token: sessionToken, found: true, path: filePath, sizeBytes, excerpts, insufficient: excerpts.length === 0, advisory };
     }
 
+    const read = this.readMatchingLines([filePath], pattern);
+    if (read !== null) {
+      const excerpts = this.parseExcerpts(read).map((e) => truncateExcerpt(e));
+      return { backend: "read", token: sessionToken, found: true, path: filePath, sizeBytes, excerpts, insufficient: excerpts.length === 0, advisory };
+    }
+
     return {
       backend: "none",
       token: sessionToken,
@@ -273,6 +295,12 @@ export class HistoryQuery {
     if (grepResult.exitCode === 0 || grepResult.exitCode === 1) {
       const excerpts = this.parseExcerpts(grepResult.stdout);
       return { backend: "grep", excerpts, insufficient: excerpts.length === 0 };
+    }
+
+    const read = this.readMatchingLines(logFiles, pattern);
+    if (read !== null) {
+      const excerpts = this.parseExcerpts(read);
+      return { backend: "read", excerpts, insufficient: excerpts.length === 0 };
     }
 
     // Both backends failed (exit code 2+) — honest error

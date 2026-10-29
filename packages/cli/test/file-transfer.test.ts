@@ -157,6 +157,15 @@ describe("parseFilePathArg — the explicit-or-local grammar", () => {
     const res = parseFilePathArg("vps-a:");
     expect(res.ok).toBe(false);
   });
+
+  it.each(["C:\\Users\\me\\notes.md", "c:/work/notes.md", "\\\\server\\share\\notes.md", "\\notes.md", ".\\notes.md", "..\\notes.md"])(
+    "reads the Windows path %s as local, not as host 'C'", (raw) => {
+      expect(parseFilePathArg(raw, () => true, "win32")).toEqual({ ok: true, arg: { kind: "local", path: raw } });
+    });
+
+  it("keeps the POSIX grammar for a drive-shaped operand", () => {
+    expect(parseFilePathArg("C:/notes.md", () => false, "linux")).toEqual({ ok: true, arg: { kind: "remote", hostId: "C", path: "/notes.md" } });
+  });
 });
 
 // ── the deny wall (FR-4) ────────────────────────────────────────────────────
@@ -410,9 +419,18 @@ describe("classifyRsyncResult / runFileCopy", () => {
         },
       };
     }) as never;
-    const res = await runFileCopy({ src: local("/tmp/a"), dst: local("/tmp/b"), dryRun: true }, { spawn: fakeSpawn });
+    const res = await runFileCopy({ src: local("/tmp/a"), dst: local("/tmp/b"), dryRun: true }, { spawn: fakeSpawn, platform: "linux" });
     expect(res.failedStep).toBe("rsync-missing");
     expect(res.hint).toContain("brew install rsync");
+  });
+
+  it("native Windows refuses before starting rsync, which reads a drive path as a host", async () => {
+    let spawned = false;
+    const spawn = (() => { spawned = true; throw new Error("must not spawn"); }) as never;
+    const res = await runFileCopy({ src: local("C:\\work\\a.md"), dst: remote("/srv/a.md"), dryRun: true }, { spawn, platform: "win32" });
+    expect(res).toMatchObject({ ok: false, failedStep: "unsupported-platform", exitCode: null });
+    expect(res.hint).toContain("scp");
+    expect(spawned).toBe(false);
   });
 });
 
@@ -432,7 +450,7 @@ describe("file copy output byte boundaries", () => {
       });
       return child;
     }) as unknown as NonNullable<Parameters<typeof runFileCopy>[1]>["spawn"];
-    const result = await runFileCopy({ src: local("/tmp/src"), dst: local("/tmp/dst"), dryRun: true }, { spawn });
+    const result = await runFileCopy({ src: local("/tmp/src"), dst: local("/tmp/dst"), dryRun: true }, { spawn, platform: "linux" });
     expect(result).toMatchObject({ ok: true, stdout: text, stderr: text });
   });
 });
@@ -454,7 +472,8 @@ describe("local directory copy semantics", () => {
     expect(buildRsyncArgv(planned.plan).slice(-2)[0]).toBe(expectedSource);
   });
 
-  it.skipIf(!rsyncAvailable).each([false, true])("native rsync preserves source directory trailing slash=%s (requires installed rsync)", async (contentsOnly) => {
+  // Native Windows refuses rsync copies before spawning (see the unsupported-platform case).
+  it.skipIf(!rsyncAvailable || process.platform === "win32").each([false, true])("native rsync preserves source directory trailing slash=%s (requires installed rsync)", async (contentsOnly) => {
     const root = mkdtempSync(path.join(process.cwd(), "openrig-copy-contents-"));
     try {
       const src = path.join(root, "source");
@@ -478,7 +497,8 @@ describe("local directory copy semantics", () => {
   });
 });
 
-it.skipIf(!rsyncAvailable && process.platform !== "darwin")("native local file copies disclose the transferred byte count", async () => {
+// Native Windows refuses rsync copies before spawning (see the unsupported-platform case).
+it.skipIf((!rsyncAvailable && process.platform !== "darwin") || process.platform === "win32")("native local file copies disclose the transferred byte count", async () => {
   expect(rsyncAvailable, "macOS native copy proof requires the system rsync").toBe(true);
   const root = mkdtempSync(path.join(process.cwd(), "openrig-copy-stats-"));
   try {

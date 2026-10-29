@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { CODEX_LAUNCH_DEFAULTS } from "./helpers/codex-state.js";
 import Database from "better-sqlite3";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -207,7 +208,7 @@ describe("S03 selected arguments and unchanged defaults", () => {
   });
   it("Codex legacy resume uses the same explicit selection", async () => {
     const t = refusedTransport(); await new CodexResumeAdapter(t.tmux).resume("seat", "codex_id", "original", "/inert", null, "full_bypass");
-    expect(t.send.mock.calls[0]?.[1]).toContain("codex -s danger-full-access -a never '-c' 'check_for_update_on_startup=false' resume");
+    expect(t.send.mock.calls[0]?.[1]).toContain(`codex -s danger-full-access -a never ${CODEX_LAUNCH_DEFAULTS} resume`);
   });
   it("does not widen unset, floor, named-profile or environment-only behavior", () => {
     expect(codexPostureArg("", {})).toBe(" -s workspace-write");

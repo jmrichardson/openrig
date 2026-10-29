@@ -50,6 +50,42 @@ describe("SessionFingerprinter", () => {
     expect(await fp.fingerprint(makePane({ activeCommand }))).toMatchObject({ runtimeHint: "codex", confidence: "high" });
   });
 
+  it.each([
+    [String.raw`C:\Program Files\Claude\claude.exe`, "claude-code"],
+    [String.raw`C:\Program Files\Codex\CODEX.EXE`, "codex"],
+    [String.raw`C:\Program Files\PowerShell\7\pwsh.exe`, "terminal"],
+    [String.raw`C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`, "terminal"],
+    [String.raw`C:\Windows\System32\cmd.exe`, "terminal"],
+  ])("recognizes native foreground executable %s", async (activeCommand, runtimeHint) => {
+    const fp = new SessionFingerprinter({ cmuxAdapter: mockCmux(), tmuxAdapter: mockTmux(), fsExists: () => false, platform: "win32" });
+    expect(await fp.fingerprint(makePane({ activeCommand }))).toMatchObject({ runtimeHint, confidence: "high" });
+  });
+
+  it.each([
+    String.raw`C:\Program Files\Codex\codex-reporter.exe`,
+    String.raw`C:\Program Files\Claude\notclaude.exe`,
+    String.raw`C:\Program Files\nodejs\node.exe`,
+  ])("does not manufacture runtime identity from native foreground %s", async (activeCommand) => {
+    const fp = new SessionFingerprinter({ cmuxAdapter: mockCmux(), tmuxAdapter: mockTmux(), fsExists: () => false, platform: "win32" });
+    expect(await fp.fingerprint(makePane({ activeCommand }))).toMatchObject({ runtimeHint: "unknown", confidence: "low" });
+  });
+
+  // Linux and macOS keep the original Layer-1 shell names; others fall through to the pane content.
+  it.each(["nu", "ksh", "pwsh", "PowerShell.exe"])("on POSIX, foreground %s is not a Layer-1 shell", async (activeCommand) => {
+    const fp = new SessionFingerprinter({ cmuxAdapter: mockCmux(), tmuxAdapter: mockTmux("Claude Code v2.1.5"), fsExists: () => false, platform: "linux" });
+    expect(await fp.fingerprint(makePane({ activeCommand }))).toMatchObject({ runtimeHint: "claude-code", confidence: "medium" });
+  });
+
+  it.each(["bash", "/bin/zsh", "dash", "tcsh", "csh"])("on POSIX, foreground %s is still a Layer-1 shell", async (activeCommand) => {
+    const fp = new SessionFingerprinter({ cmuxAdapter: mockCmux(), tmuxAdapter: mockTmux("Claude Code v2.1.5"), fsExists: () => false, platform: "darwin" });
+    expect(await fp.fingerprint(makePane({ activeCommand }))).toMatchObject({ runtimeHint: "terminal", confidence: "high" });
+  });
+
+  it("on POSIX, a Codex label is matched by its own spelling, not a Windows one", async () => {
+    const fp = new SessionFingerprinter({ cmuxAdapter: mockCmux(), tmuxAdapter: mockTmux(), fsExists: () => false, platform: "linux" });
+    expect(await fp.fingerprint(makePane({ activeCommand: "codex.exe" }))).toMatchObject({ runtimeHint: "unknown", confidence: "low" });
+  });
+
   it("unrelated process name does not override real pane banner evidence", async () => {
     const fp = new SessionFingerprinter({ cmuxAdapter: mockCmux(), tmuxAdapter: mockTmux("Claude Code"), fsExists: () => false });
     expect(await fp.fingerprint(makePane({ activeCommand: "codex-reporter" }))).toMatchObject({ runtimeHint: "claude-code", confidence: "medium" });

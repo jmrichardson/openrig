@@ -651,8 +651,8 @@ describe("rig status --json", () => {
       const parsed = await parsedJson({
         lifecycleDeps: mockLifecycleDeps({
           homeDir: "/home/x/.openrig",
-          exists: vi.fn((p: string) => p === "/home/x/.openrig/HOME-MOVED"),
-          readFile: vi.fn((p: string) => (p === "/home/x/.openrig/HOME-MOVED" ? "/home/x/.openrig-new\n" : null)),
+          exists: vi.fn((p: string) => p === path.join("/home/x/.openrig", "HOME-MOVED")),
+          readFile: vi.fn((p: string) => (p === path.join("/home/x/.openrig", "HOME-MOVED") ? "/home/x/.openrig-new\n" : null)),
           fetch: vi.fn(async () => { throw refused(); }),
         }),
         clientFactory: noClient(),

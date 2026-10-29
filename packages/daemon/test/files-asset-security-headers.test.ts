@@ -5,6 +5,7 @@ import { mkdtempSync, rmSync, writeFileSync, realpathSync, symlinkSync } from "n
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { filesRoutes } from "../src/routes/files.js";
+import { canCreateFileSymlinks } from "../../../test/symlink-capability.mjs";
 
 const html = '<!doctype html><p id="preview">waiting</p><script>document.getElementById("preview").textContent="ready";</script>';
 const script = 'document.getElementById("preview").textContent="ready";';
@@ -23,7 +24,7 @@ describe("GET /api/files/asset — previews and retained boundaries", () => {
     writeFileSync(join(root, "图表.svg"), svg);
     writeFileSync(join(root, "sample.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
     writeFileSync(join(outside, "other.html"), "outside");
-    symlinkSync(join(outside, "other.html"), join(root, "link.html"));
+    if (canCreateFileSymlinks) symlinkSync(join(outside, "other.html"), join(root, "link.html"));
     app = new Hono();
     app.use("*", async (c, next) => {
       c.set("filesAllowlist" as never, [{ name: "ws", canonicalPath: realpathSync(root) }]);
@@ -92,7 +93,7 @@ describe("GET /api/files/asset — previews and retained boundaries", () => {
     expect(new Uint8Array(await res.arrayBuffer())).toEqual(new Uint8Array([0x89, 0x50, 0x4e, 0x47]));
   });
 
-  it.each(["../other.html", "/etc/passwd", "link.html"])("retains path containment for %s", async (file) => {
+  it.each(["../other.html", "/etc/passwd", ...(canCreateFileSymlinks ? ["link.html"] : [])])("retains path containment for %s", async (file) => {
     const res = await app.request(url(file, "&render=1"));
     expect(res.status).toBe(400);
     expect(await res.text()).not.toBe("outside");

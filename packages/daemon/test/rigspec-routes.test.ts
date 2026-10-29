@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { resolve } from "node:path";
 import type Database from "better-sqlite3";
 import type { Hono } from "hono";
 import type { RigRepository } from "../src/domain/rig-repository.js";
@@ -632,7 +633,7 @@ describe("Rigspec import routes (pod-aware dual-stack)", () => {
     expect(rigRepo.getRigWorkspace(rig.id)).toEqual({
       workspaceRoot: "/workspace",
       repos: [
-        { name: "app", path: "/workspace/app", kind: "project" },
+        { name: "app", path: resolve("/workspace", "app"), kind: "project" },
         { name: "docs", path: "/workspace/docs", kind: "knowledge" },
       ],
       defaultRepo: "app",
@@ -732,7 +733,7 @@ describe("Rigspec import routes (pod-aware dual-stack)", () => {
     expect(res.status).toBe(201);
     const body = await res.json();
     const rig = setup.rigRepo.getRig(body.rigId);
-    expect(rig?.nodes.find((node) => node.logicalId === "research.scout")?.cwd).toBe("/tmp");
+    expect(rig?.nodes.find((node) => node.logicalId === "research.scout")?.cwd).toBe(resolve("/tmp"));
   });
 
   it("POST /api/rigs/import/materialize can target an existing rig", async () => {

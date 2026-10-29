@@ -1,13 +1,17 @@
 import fs from "node:fs";
-import { describe, expect, it } from "vitest";
+import os from "node:os";
+import nodePath from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   assessNativeResumeProbe,
   buildNativeResumeCommand,
   buildCodexResumeCore,
   isProbeShellReady,
+  printedCodexPostureArg,
 } from "../src/domain/native-resume-probe.js";
 
 import { CLAUDE_BYPASS_CONSENT } from "./fixtures/claude-bypass-consent.js";
+import { useChosenCodexWindowsSandbox } from "./helpers/codex-windows-sandbox.js";
 
 const currentUpdatePrompt = fs.readFileSync(new URL("./fixtures/codex-update-0.160.0.txt", import.meta.url), "utf8");
 // Codex's own rust-v0.156.1 snapshot at b412ff32c417f855c2b2d1581b77058eed87c84b:
@@ -111,6 +115,7 @@ describe("default-path consent", () => {
 });
 
 describe("native resume probe", () => {
+  useChosenCodexWindowsSandbox();
   describe("headerless Claude auto-mode requires managed identity proof", () => {
     const screen = "Restored conversation\n❯\u00a0\n  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents\n";
     it("keeps every screen-only caller conservative", () => {

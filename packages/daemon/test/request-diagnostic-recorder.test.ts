@@ -22,7 +22,8 @@ it("writes fast diagnostic events asynchronously with bounded backlog, explicit 
     expect(rows(file).at(-1).coverage.dropped).toBe(2);
     expect(wait).not.toHaveBeenCalled();
     const files = fs.readdirSync(dir); expect(files.length).toBeLessThanOrEqual(4);
-    for (const name of files) { const stat = fs.statSync(path.join(dir, name)); expect(stat.size).toBeLessThanOrEqual(1000); expect(stat.mode & 0o777).toBe(0o600); }
+    // POSIX mode bits; Windows uses ACLs
+    for (const name of files) { const stat = fs.statSync(path.join(dir, name)); expect(stat.size).toBeLessThanOrEqual(1000); if (process.platform !== "win32") expect(stat.mode & 0o777).toBe(0o600); }
   } finally { await recorder.close(); }
 });
 it("retains write-failure and worker-loss drain refusal", async () => {

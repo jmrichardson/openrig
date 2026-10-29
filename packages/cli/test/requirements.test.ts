@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
 import http from "node:http";
+import nodePath from "node:path";
 import { Command } from "commander";
 import { requirementsCommand } from "../src/commands/requirements.js";
 import { DaemonClient } from "../src/client.js";
@@ -172,7 +173,7 @@ describe("Requirements CLI", () => {
     });
 
     const parsed = JSON.parse(capturedBody);
-    expect(parsed.sourceRef).toBe("/my/spec.yaml");
+    expect(parsed.sourceRef).toBe(nodePath.resolve("/my/spec.yaml"));
 
     // Restore handler
     server.removeAllListeners("request");

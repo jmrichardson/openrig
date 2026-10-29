@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { ConfigStore } from "../src/config-store.js";
 import { SettingsStore } from "../../daemon/src/domain/user-settings/settings-store.js";
+import { canCreateFileSymlinks } from "../../../test/symlink-capability.mjs";
 const failure = vi.hoisted(() => ({ active: false, ownership: false, renameCode: "", createCode: "", writeCode: "ENOSPC" }));
 vi.mock("node:fs", async (original) => {
   const actual = await original<typeof import("node:fs")>();
@@ -44,7 +45,7 @@ it.each(stores)("%s preserves the previous native config after a partial failed 
     expect(fs.readdirSync(dir)).toEqual(["config.json"]);
   }
 });
-it.each(stores)("%s retains a native config symlink and its target permissions on successful writes", (Store) => {
+it.skipIf(!canCreateFileSymlinks).each(stores)("%s retains a native config symlink and its target permissions on successful writes", (Store) => {
   const target = join(dir, "target.json"), link = join(dir, "config.json");
   fs.writeFileSync(target, "{}"); fs.chmodSync(target, 0o640); fs.symlinkSync(target, link);
   new Store(link).set("transcripts.lines", "20");

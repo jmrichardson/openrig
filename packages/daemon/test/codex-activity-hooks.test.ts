@@ -6,12 +6,15 @@
 // the turn-scope hooks (incl. the PermissionRequest keystone) FIRE.
 import { describe, it, expect, vi } from "vitest";
 import nodePath from "node:path";
-import { CodexRuntimeAdapter, type CodexAdapterFsOps } from "../src/adapters/codex-runtime-adapter.js";
+import { CodexRuntimeAdapter, codexActivityHookCommand, type CodexAdapterFsOps } from "../src/adapters/codex-runtime-adapter.js";
 import type { TmuxAdapter } from "../src/adapters/tmux.js";
+import path from "node:path";
 
 const RELAY = "/daemon/assets/plugins/openrig-core/hooks/scripts/activity-relay.cjs";
 const CONFIG = nodePath.join("/home/test", ".codex", "config.toml");
 const EVENTS = ["SessionStart", "UserPromptSubmit", "Stop", "PermissionRequest"] as const;
+// The literal command OpenRig writes; native Windows runs the relay from an encoded PowerShell script instead.
+const hookCommand = (relay: string) => process.platform === "win32" ? codexActivityHookCommand(relay) : `node "${relay}"`;
 
 function mockCodexFs(files?: Record<string, string>): CodexAdapterFsOps & { _store: Record<string, string> } {
   const store: Record<string, string> = { ...files };
@@ -44,7 +47,7 @@ describe("OPR.0.4.1.10 FR-A — Codex config-layer activity hooks", () => {
       expect(cfg).toContain(`[[hooks.${ev}]]`);
       expect(cfg).toContain(`[[hooks.${ev}.hooks]]`);
     }
-    expect(cfg).toContain(`command = 'node "${RELAY}"'`);
+    expect(cfg).toContain(`command = '${hookCommand(RELAY)}'`);
     expect(cfg).toContain("timeout = 5");
   });
 
@@ -102,13 +105,13 @@ describe("OPR.0.4.1.10 FR-A — Codex config-layer activity hooks", () => {
     makeAdapter(fs, RELAY).ensureCodexActivityHooks();
     makeAdapter(fs, "/new/relay.cjs").ensureCodexActivityHooks();
     const cfg = fs._store[CONFIG]!;
-    expect(cfg).toContain(`command = 'node "/new/relay.cjs"'`);
-    expect(cfg).not.toContain(`command = 'node "${RELAY}"'`);
+    expect(cfg).toContain(`command = '${hookCommand("/new/relay.cjs")}'`);
+    expect(cfg).not.toContain(`command = '${hookCommand(RELAY)}'`);
     expect(cfg.match(/# BEGIN OPENRIG MANAGED ACTIVITY HOOKS/g)?.length).toBe(1);
   });
 
   it("keeps $ sequences in the relay path literal when the block is rewritten", () => {
-    const dollarRelay = "/opt/rig$&$$/`x`/activity-relay.cjs";
+    const dollarRelay = "/opt/rig/opt/rig$&$$/`x`/activity-relay.cjs$/`x`/assets/plugins/openrig-core/hooks/scripts/activity-relay.cjs";
     const fs = mockCodexFs({
       [dollarRelay]: "// relay",
       [CONFIG]: '[projects."/some/project"]\ntrust_level = "trusted"\n',
@@ -119,7 +122,7 @@ describe("OPR.0.4.1.10 FR-A — Codex config-layer activity hooks", () => {
     adapter.ensureCodexActivityHooks();
     const second = fs._store[CONFIG]!;
     expect(second).toBe(first);
-    expect(second.split(`command = 'node "${dollarRelay}"'`).length - 1).toBe(EVENTS.length);
+    expect(second.split(`command = '${hookCommand(dollarRelay)}'`).length - 1).toBe(EVENTS.length);
     expect(second.match(/# BEGIN OPENRIG MANAGED ACTIVITY HOOKS/g)?.length).toBe(1);
     expect(second.startsWith('[projects."/some/project"]\ntrust_level = "trusted"\n')).toBe(true);
   });

@@ -6,12 +6,13 @@ import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { stringify } from "yaml";
 import { readWorkflowGuidance } from "../src/domain/workflow-guidance.js";
+import { contextRefNames, workflowPlanningContext } from "../src/domain/workflow-planning-context.js";
 import { ContextPackLibraryService } from "../src/domain/context-packs/context-pack-library-service.js";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, {recursive:true, force:true}); });
 function fixture() {
-  const root = mkdtempSync(join(tmpdir(), "workflow-guidance-")); roots.push(root);
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "workflow-guidance-"))); roots.push(root);
   const project = join(root,"project.yaml"), mission = join(root,"missions/trial/mission.yaml"), slice = join(root,"missions/trial/slices/one/slice.yaml");
   const write = (path: string, value: unknown) => {mkdirSync(join(path,".."),{recursive:true});writeFileSync(path,typeof value === "string" ? value : stringify(value));};
   const catalog = join(root,"method.md");
@@ -87,5 +88,26 @@ describe("selected workflow guidance",()=>{
     const library=new ContextPackLibraryService({roots:[{path:join(f.root,"packs"),sourceType:"user_file"}]});expect(library.scan().errors).toEqual([]);
     f.write(f.mission,{sdlc:{catalog:{address:"editorial/method.md#components"}}});
     expect(readWorkflowGuidance({...f.input,library}).catalogPath).toBe(realpathSync(join(pack,"method.md")));
+  });
+  it("reads only context refs that name a manifest inside a folder, never a bare file name",()=>{
+    const g=readWorkflowGuidance({instanceId:"WF",contextRefs:["project.yaml","mission.yaml","slice.yaml"]});
+    expect(g).toMatchObject({state:"unselected",sources:[],unknowns:[]});
+  });
+});
+
+describe("workflow context ref names",()=>{
+  it("match a folder's manifest by '/' everywhere and also by '\\' on Windows",()=>{
+    expect(contextRefNames("/w/missions/m/mission.yaml","mission.yaml","linux")).toBe(true);
+    expect(contextRefNames("C:\\w\\missions\\m\\mission.yaml","mission.yaml","win32")).toBe(true);
+    expect(contextRefNames("C:\\w\\missions\\m\\mission.yaml","mission.yaml","linux")).toBe(false);
+    for (const platform of ["linux","win32"] as const) {
+      expect(contextRefNames("mission.yaml","mission.yaml",platform)).toBe(false);
+      expect(contextRefNames("/w/sub-mission.yaml","mission.yaml",platform)).toBe(false);
+    }
+  });
+  it("gives projected prompts the authored plan from a native mission path",()=>{
+    const f=fixture();f.write(f.mission,{arrangement:{planning_posture:{rule:"Plan in waves."}}});
+    expect(workflowPlanningContext([f.project,f.mission],"WF")).toContain("Workflow plan: Planning posture: Plan in waves.");
+    expect(workflowPlanningContext(["mission.yaml"],"WF")).toEqual([]);
   });
 });

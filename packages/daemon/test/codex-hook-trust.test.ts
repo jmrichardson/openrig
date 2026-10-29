@@ -19,6 +19,7 @@ import {
   CodexRuntimeAdapter,
   computeCodexHookTrust,
   upsertCodexHookTrust,
+  codexActivityHookCommand,
   type CodexAdapterFsOps,
 } from "../src/adapters/codex-runtime-adapter.js";
 import type { TmuxAdapter } from "../src/adapters/tmux.js";
@@ -26,6 +27,7 @@ import type { TmuxAdapter } from "../src/adapters/tmux.js";
 const RELAY = "/daemon/assets/plugins/openrig-core/hooks/scripts/activity-relay.cjs";
 const CONFIG = nodePath.join("/home/test", ".codex", "config.toml");
 const COMMAND = `node "${RELAY}"`;
+const MANAGED_COMMAND = codexActivityHookCommand(RELAY);
 const EVENTS = ["SessionStart", "UserPromptSubmit", "Stop", "PermissionRequest"] as const;
 
 // PIN TO VM READ-BACK (qa gate) — PROVISIONAL from open-source reproduction (PR #20321 / commits
@@ -168,7 +170,7 @@ describe("OPR.0.4.3.33 — upsertCodexHookTrust (idempotent, non-clobbering, sec
 
   // A table example inside a person's multi-line instructions isn't a table: it stays exact, and the real one is written.
   it("leaves a single-quoted table example inside a multi-line string alone and writes the real table", () => {
-    const existing = `developer_instructions = """\n[hooks.state.'${KEY}']\ntrusted_hash = 'example only'\n"""\n`;
+    const existing = `developer_instructions = """\n[hooks.state.'${KEY.replaceAll("\\", "\\\\")}']\ntrusted_hash = 'example only'\n"""\n`;
     const out = upsertCodexHookTrust(existing, KEY, HASH);
     const parsed = parseToml(out) as { developer_instructions: string; hooks: { state: Record<string, { trusted_hash: string }> } };
     expect(parsed.developer_instructions).toBe((parseToml(existing) as { developer_instructions: string }).developer_instructions);
@@ -185,7 +187,7 @@ describe("OPR.0.4.3.33 — upsertCodexHookTrust (idempotent, non-clobbering, sec
   // The probe header's name is one the document doesn't already have, so a person's own key or table of that name can't
   // stand in for it.
   it.each(['"""', "'''"])("leaves a table example in %s instructions alone beside a root key named like the probe", (quote) => {
-    const existing = `openrig-header-probe-2 = 'personal'\ndeveloper_instructions = ${quote}\n[hooks.state.'${KEY}']\ntrusted_hash = 'example only'\n${quote}\n`;
+    const existing = `openrig-header-probe-2 = 'personal'\ndeveloper_instructions = ${quote}\n[hooks.state.'${quote === '"""' ? KEY.replaceAll("\\", "\\\\") : KEY}']\ntrusted_hash = 'example only'\n${quote}\n`;
     const out = upsertCodexHookTrust(existing, KEY, HASH);
     const parsed = parseToml(out) as Record<string, any>;
     expect(parsed.developer_instructions).toBe((parseToml(existing) as Record<string, any>).developer_instructions);
@@ -209,7 +211,7 @@ describe("OPR.0.4.3.33 — provisioning-seam coupling (ensureCodexActivityHooks 
   it("emits BOTH the managed hook block AND exactly the 4 [hooks.state] trust records", () => {
     const fs = mockCodexFs({ [RELAY]: "// relay" });
     makeAdapter(fs).ensureCodexActivityHooks();
-    const cfg = fs._store[CONFIG]!;
+    const cfg = fs._store[nodePath.normalize(CONFIG)]!;
     expect(cfg).toBeDefined();
     // the managed hook block is present
     expect(cfg).toContain("# BEGIN OPENRIG MANAGED ACTIVITY HOOKS");
@@ -217,7 +219,10 @@ describe("OPR.0.4.3.33 — provisioning-seam coupling (ensureCodexActivityHooks 
     // and exactly the 4 trust state entries (keySource falls back to the plain config path
     // because the mock fs never lands the file on the real disk for realpathSync)
     for (const ev of EVENTS) {
-      const { key, hash } = PROVISIONAL_FIXTURE[ev];
+      // Windows writes its own config path and hook command, so its records are computed.
+      const { key, hash } = process.platform === "win32"
+        ? computeCodexHookTrust(ev, { keySource: nodePath.normalize(CONFIG), command: codexActivityHookCommand(RELAY), timeoutSec: 5 })
+        : PROVISIONAL_FIXTURE[ev];
       expect(cfg).toContain(`[hooks.state.${JSON.stringify(key)}]`);
       expect(cfg).toContain(`trusted_hash = ${JSON.stringify(hash)}`);
     }
@@ -234,7 +239,7 @@ describe("OPR.0.4.3.33 — provisioning-seam coupling (ensureCodexActivityHooks 
     makeAdapter(fs).ensureCodexActivityHooks();
     const cfg = fs._store[CONFIG]!;
     const parsed = parseToml(cfg) as { hooks: { state: Record<string, { trusted_hash: string }> } };
-    for (const ev of EVENTS) expect(parsed.hooks.state[PROVISIONAL_FIXTURE[ev].key]!.trusted_hash).toBe(PROVISIONAL_FIXTURE[ev].hash);
+    for (const ev of EVENTS) expect(parsed.hooks.state[PROVISIONAL_FIXTURE[ev].key]!.trusted_hash).toBe(process.platform === "win32" ? computeCodexHookTrust(ev, { keySource: CONFIG, command: MANAGED_COMMAND, timeoutSec: 5 }).hash : PROVISIONAL_FIXTURE[ev].hash);
     expect(cfg.match(/^\[hooks\.state\./gm)?.length).toBe(4);
   });
 
@@ -247,7 +252,7 @@ describe("OPR.0.4.3.33 — provisioning-seam coupling (ensureCodexActivityHooks 
     adapter.ensureCodexActivityHooks();
     const config = fs._store[CONFIG]!;
     const parsed = parseToml(config) as { hooks: { state: Record<string, unknown> } };
-    const own = computeCodexHookTrust(event, { keySource: CONFIG, command: COMMAND, timeoutSec: 5, groupIndex: 2 });
+    const own = computeCodexHookTrust(event, { keySource: CONFIG, command: MANAGED_COMMAND, timeoutSec: 5, groupIndex: 2 });
     expect(parsed.hooks.state[own.key]).toEqual({ trusted_hash: own.hash });
     expect(parsed.hooks.state[userKey]).toEqual({ trusted_hash: "sha256:person", enabled: false });
     expect(config).toContain(userGroups);
@@ -287,9 +292,9 @@ describe("OPR.0.4.3.33 — provisioning-seam coupling (ensureCodexActivityHooks 
     const fs = mockCodexFs({ [RELAY]: "// relay" });
     const adapter = makeAdapter(fs);
     adapter.ensureCodexActivityHooks();
-    const first = fs._store[CONFIG]!;
+    const first = fs._store[nodePath.normalize(CONFIG)]!;
     adapter.ensureCodexActivityHooks();
-    const second = fs._store[CONFIG]!;
+    const second = fs._store[nodePath.normalize(CONFIG)]!;
     expect(second).toBe(first);
     expect(second.match(/^\[hooks\.state\./gm)?.length).toBe(4);
   });
@@ -297,10 +302,10 @@ describe("OPR.0.4.3.33 — provisioning-seam coupling (ensureCodexActivityHooks 
   it("preserves a pre-existing [projects] trust entry through the hook + trust write", () => {
     const fs = mockCodexFs({
       [RELAY]: "// relay",
-      [CONFIG]: '[projects."/some/project"]\ntrust_level = "trusted"\n',
+      [nodePath.normalize(CONFIG)]: '[projects."/some/project"]\ntrust_level = "trusted"\n',
     });
     makeAdapter(fs).ensureCodexActivityHooks();
-    const cfg = fs._store[CONFIG]!;
+    const cfg = fs._store[nodePath.normalize(CONFIG)]!;
     expect(cfg).toContain('[projects."/some/project"]');
     expect(cfg).toContain('trust_level = "trusted"');
     expect(cfg).toContain("# BEGIN OPENRIG MANAGED ACTIVITY HOOKS");
@@ -324,7 +329,7 @@ describe("#17 — a config.toml Codex saved after \"Trust all\"", () => {
   ].join("\n");
   const PERSON_TRUST = { [`${CONFIG}:session_start:0:0`]: "sha256:person-session-start", [`${CONFIG}:pre_tool_use:0:0`]: "sha256:person-pre-tool-use" };
   const ours = (event: (typeof EVENTS)[number]) =>
-    computeCodexHookTrust(event, { keySource: CONFIG, command: COMMAND, timeoutSec: 5, groupIndex: event === "SessionStart" ? 1 : 0 });
+    computeCodexHookTrust(event, { keySource: CONFIG, command: MANAGED_COMMAND, timeoutSec: 5, groupIndex: event === "SessionStart" ? 1 : 0 });
   const makeAdapter = (fs: CodexAdapterFsOps) => new CodexRuntimeAdapter({ tmux: mockTmux(), fsOps: fs, activityRelayPath: RELAY });
   const launch = (config: string) => {
     const fs = mockCodexFs({ [RELAY]: "// relay", [CONFIG]: config });
@@ -342,7 +347,7 @@ describe("#17 — a config.toml Codex saved after \"Trust all\"", () => {
       `${key === firstOurs ? "# END OPENRIG MANAGED ACTIVITY HOOKS\n\n" : ""}[hooks.state.'${key}']\ntrusted_hash = '${hashes[key]}'\n`);
     return `${groups}\n[hooks.state]\n${tables.join("\n")}`;
   }
-  const relayGroups = (hooks: Hooks, event: string) => (hooks[event] ?? []).filter((group) => group.hooks[0]!.command === COMMAND).length;
+  const relayGroups = (hooks: Hooks, event: string) => (hooks[event] ?? []).filter((group) => group.hooks[0]!.command === MANAGED_COMMAND).length;
 
   it("the fixture has the person's trust inside OpenRig's markers, as Codex leaves it", () => {
     const saved = codexSaved();
@@ -414,7 +419,7 @@ describe("#17 — a config.toml Codex saved after \"Trust all\"", () => {
     it("leaves a person's own group for another event alone, even when it runs the relay", () => {
       const next = read(launch(group("PreToolUse", OLD, 60) + group("Stop")));
       expect(next.hooks.PreToolUse[0].hooks[0].command).toBe(`node "${OLD}"`);
-      expect(next.hooks.Stop[0].hooks[0].command).toBe(COMMAND);
+      expect(next.hooks.Stop[0].hooks[0].command).toBe(MANAGED_COMMAND);
     });
 
     it("removes OpenRig's group written with a quoted event key when hooks are turned off", () => {
@@ -439,7 +444,7 @@ describe("#17 — a config.toml Codex saved after \"Trust all\"", () => {
       const person = '[[hooks.PermissionRequest]]\n[[hooks.PermissionRequest.hooks]]\ntype = "command"\ncommand = "person-approve"\n';
       const config = marked(group("PermissionRequest") + person);
       const commands = (text: string) => (read(text).hooks.PermissionRequest ?? []).map((g: any) => g.hooks[0].command);
-      expect(commands(launch(config))).toEqual([COMMAND, "person-approve"]);
+      expect(commands(launch(config))).toEqual([MANAGED_COMMAND, "person-approve"]);
       expect(commands(hooksOff(config))).toEqual(["person-approve"]);
     });
 

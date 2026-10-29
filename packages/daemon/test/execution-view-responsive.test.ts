@@ -9,7 +9,8 @@ import { ViewProjector } from "../src/domain/view-projector.js";
 import { migrate } from "../src/db/migrate.js";
 import { queueItemSummarySchema } from "../src/db/migrations/044_queue_item_summary.js";
 
-it("serves health and SQL views while the real execution route waits for Git", async () => {
+// The real Git child is interposed by a script named `git` on PATH; Windows spawns only PE executables from PATH.
+it.skipIf(process.platform === "win32")("serves health and SQL views while the real execution route waits for Git", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "execution-responsive-"));
   const db = createFullTestDb();
   migrate(db, [queueItemSummarySchema]);

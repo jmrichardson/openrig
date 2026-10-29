@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   resolvePermissionPolicyAttachment,
@@ -94,9 +95,9 @@ describe("review50-r2 independent Seam-B adversarial branches", () => {
       const setup = createTestApp(db, {
         adapters: { "claude-code": adapter },
         podInstantiatorFsOps: {
-          exists: (p) => p.includes("agents/impl"),
+          exists: (p) => p.includes(join("agents", "impl")),
           readFile: (p) => {
-            if (p.includes("agents/impl")) return AGENT_YAML;
+            if (p.includes(join("agents", "impl"))) return AGENT_YAML;
             throw new Error(`not found: ${p}`);
           },
         },
@@ -147,9 +148,9 @@ describe("review50-r2 independent Seam-B adversarial branches", () => {
       const setup = createTestApp(db, {
         adapters: { "claude-code": adapter },
         podInstantiatorFsOps: {
-          exists: (p) => p.includes("agents/impl"),
+          exists: (p) => p.includes(join("agents", "impl")),
           readFile: (p) => {
-            if (p.includes("agents/impl")) return AGENT_YAML;
+            if (p.includes(join("agents", "impl"))) return AGENT_YAML;
             throw new Error(`not found: ${p}`);
           },
         },

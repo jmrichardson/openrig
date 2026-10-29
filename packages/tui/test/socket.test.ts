@@ -86,13 +86,14 @@ describe("control-socket adapter (spike-adopted; arch boundary constraint)", () 
     expect(JSON.parse(state!).state).toMatchObject({ viewTab: "recent", drill: ["host:vm-host"] });
   });
 
-  it("refuses socket paths beyond the sun_path limit with a named error", async () => {
+  it.skipIf(process.platform === "win32")("refuses socket paths beyond the sun_path limit with a named error", async () => {
     const view = createViewState({ instanceId: "tui-sock", getSnapshot: () => snap });
     const tooLong = path.join(os.tmpdir(), "x".repeat(MAX_SOCKET_PATH_BYTES + 1) + ".sock");
     await expect(createControlSocket({ socketPath: tooLong, view })).rejects.toThrow(/socket path too long/);
   });
 
-  it("defaults the socket home to $OPENRIG_HOME/run (herdr-style convention) and stays under the limit", () => {
+  // Windows binds a named pipe derived from this path, so the sun_path cap does not apply there.
+  it.skipIf(process.platform === "win32")("defaults the socket home to $OPENRIG_HOME/run (herdr-style convention) and stays under the limit", () => {
     const prevOpenRigHome = process.env["OPENRIG_HOME"];
     const prevUserHome = process.env["HOME"];
     try {

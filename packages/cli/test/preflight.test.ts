@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, mkdirSync, chmodSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, chmodSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import net from "node:net";
@@ -9,11 +9,14 @@ import { ConfigStore } from "../src/config-store.js";
 import { preflightCommand } from "../src/commands/preflight.js";
 import type { DaemonStatus } from "../src/daemon-lifecycle.js";
 
-function makeExec(tmuxMode: "healthy" | "missing" | "unhealthy" = "healthy"): (cmd: string) => Promise<string> {
+function makeExec(
+  tmuxMode: "healthy" | "missing" | "unhealthy" = "healthy",
+  platform: NodeJS.Platform = process.platform,
+): (cmd: string) => Promise<string> {
   return async (cmd: string) => {
     if (cmd === "tmux -V") {
       if (tmuxMode === "missing") throw new Error("command not found: tmux");
-      return "tmux 3.6a";
+      return platform === "win32" ? "tmux 3.4.0\npsmux 3.4.0" : "tmux 3.6a";
     }
     if (cmd === "tmux list-sessions") {
       if (tmuxMode === "missing") throw new Error("command not found: tmux");
@@ -47,6 +50,10 @@ describe("SystemPreflight", () => {
     tmuxMode?: "healthy" | "missing" | "unhealthy";
     configOverrides?: Record<string, unknown>;
     daemonStatus?: Partial<DaemonStatus>;
+    platform?: NodeJS.Platform;
+    exec?: (cmd: string) => Promise<string>;
+    env?: NodeJS.ProcessEnv;
+    exists?: (path: string) => boolean;
   }) {
     const configPath = join(tmpDir, "config.json");
     const config = new ConfigStore(configPath);
@@ -55,7 +62,11 @@ describe("SystemPreflight", () => {
     mkdirSync(homeDir, { recursive: true });
 
     return new SystemPreflight({
-      exec: makeExec(opts?.tmuxMode ?? "healthy"),
+      exec: opts?.exec ?? makeExec(opts?.tmuxMode ?? "healthy", opts?.platform ?? "linux"),
+      platform: opts?.platform ?? "linux",
+      // Hermetic: never look for, or put on PATH, this machine's own psmux.
+      env: opts?.env ?? {},
+      exists: opts?.exists ?? (() => false),
       configStore: config,
       getDaemonStatus: makeStatus(opts?.daemonStatus),
       riggedHome: homeDir,
@@ -101,14 +112,17 @@ describe("SystemPreflight", () => {
   });
 
   // Test 3
-  it("tmux missing → ready: false with guidance", async () => {
-    const pf = createPreflight({ tmuxMode: "missing" });
+  it.each([
+    ["linux", "install tmux"],
+    ["win32", "install portable psmux"],
+  ] as const)("missing multiplexer on %s → ready: false with guidance", async (platform, installHint) => {
+    const pf = createPreflight({ tmuxMode: "missing", platform });
     const result = await pf.run();
     expect(result.ready).toBe(false);
     const tmuxCheck = result.checks.find((c) => c.name === "tmux");
     expect(tmuxCheck!.ok).toBe(false);
     expect(tmuxCheck!.error).toContain("not found");
-    expect(tmuxCheck!.fix).toContain("install tmux");
+    expect(tmuxCheck!.fix).toContain(installHint);
   });
 
   it("tmux installed but default control socket unhealthy → ready: false with guidance", async () => {
@@ -123,8 +137,49 @@ describe("SystemPreflight", () => {
     expect(tmuxCheck!.fix).toContain("restart the default tmux server");
   });
 
+  it.each([
+    ["tmux 3.3.8\npsmux 3.3.8", false],
+    ["tmux 3.6a", false],
+    ["tmux 3.4.0\npsmux 3.4.0", true],
+  ] as const)("Windows gates %s without modifying existing sessions", async (version, ready) => {
+    const exec = vi.fn(async (command: string) => command === "tmux -V" ? version : "");
+    const result = await createPreflight({ platform: "win32", exec }).run({ port: 0 });
+    expect(result.ready).toBe(ready);
+    const check = result.checks.find((item) => item.name === "tmux")!;
+    expect(check.ok).toBe(ready);
+    expect(exec.mock.calls.map(([command]) => command)).toEqual(
+      ready ? ["tmux -V", "tmux list-sessions"] : ["tmux -V"],
+    );
+    if (!ready) {
+      expect(check.error).toContain("psmux 3.4.0");
+      expect(check.fix).toContain("Existing sessions are not stopped automatically");
+    }
+  });
+
+  it("on Windows uses the psmux rig setup installed when this shell's PATH predates it", async () => {
+    const managed = "C:\\Users\\A\\AppData\\Local\\OpenRig\\tools\\psmux-3.4.0";
+    const env: NodeJS.ProcessEnv = { LOCALAPPDATA: "C:\\Users\\A\\AppData\\Local", PATH: "C:\\Windows" };
+    const exec = vi.fn(async (command: string) => {
+      if (!env["PATH"]!.split(";").includes(managed)) throw new Error("'tmux' is not recognized");
+      return command === "tmux -V" ? "tmux 3.4.0\npsmux 3.4.0" : "";
+    });
+    const exists = vi.fn((file: string) => file === `${managed}\\tmux.exe`);
+    const result = await createPreflight({ platform: "win32", exec, env, exists }).run({ port: 0 });
+    expect(result.checks.find((item) => item.name === "tmux")).toMatchObject({ ok: true });
+    expect(env["PATH"]).toBe(`C:\\Windows;${managed}`);
+    expect(exec.mock.calls.map(([command]) => command)).toEqual(["tmux -V", "tmux -V", "tmux list-sessions"]);
+  });
+
+  it("leaves PATH alone on Windows when rig setup installed no psmux", async () => {
+    const env: NodeJS.ProcessEnv = { LOCALAPPDATA: "C:\\Users\\A\\AppData\\Local", PATH: "C:\\Windows" };
+    const result = await createPreflight({ platform: "win32", tmuxMode: "missing", env }).run({ port: 0 });
+    expect(result.checks.find((item) => item.name === "tmux")).toMatchObject({ ok: false, fix: expect.stringContaining("install portable psmux") });
+    expect(env["PATH"]).toBe("C:\\Windows");
+  });
+
   // Test 4
-  it("OpenRig home not writable → ready: false with guidance", async () => {
+  // POSIX mode bits; Windows uses ACLs, so chmod 0o444 does not make the directory unwritable there.
+  it.skipIf(process.platform === "win32")("OpenRig home not writable → ready: false with guidance", async () => {
     const readonlyDir = join(tmpDir, "readonly-home");
     mkdirSync(readonlyDir);
     chmodSync(readonlyDir, 0o444);
@@ -141,6 +196,24 @@ describe("SystemPreflight", () => {
     expect(homeCheck!.fix).toContain("permissions");
     // Restore perms for cleanup
     chmodSync(readonlyDir, 0o755);
+  });
+
+  it("OpenRig home cannot be created → ready: false with guidance", async () => {
+    // A file blocking the directory is unwritable on Windows and POSIX, even as root.
+    const blockedHome = join(tmpDir, "blocked-home");
+    writeFileSync(blockedHome, "not a directory");
+    const pf = new SystemPreflight({
+      exec: makeExec(),
+      configStore: new ConfigStore(join(tmpDir, "config.json")),
+      getDaemonStatus: makeStatus(),
+      riggedHome: join(blockedHome, "nested"),
+    });
+    const result = await pf.run();
+    expect(result.ready).toBe(false);
+    const homeCheck = result.checks.find((c) => c.name === "writable_home");
+    expect(homeCheck!.ok).toBe(false);
+    expect(homeCheck!.fix).toContain("permissions");
+    expect(homeCheck!.error).toContain(join(blockedHome, "nested"));
   });
 
   // Test 5
@@ -230,6 +303,29 @@ describe("Preflight CLI", () => {
 
   afterEach(() => {
     rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("derives the writable home from the native database path when no home override is given", async () => {
+    const configPath = join(tmpDir, "config.json");
+    const dbPath = join(tmpDir, "openrig.sqlite");
+    writeFileSync(dbPath, "");
+    writeFileSync(configPath, JSON.stringify({
+      daemon: { port: 0 },
+      db: { path: dbPath },
+      transcripts: { path: join(tmpDir, "transcripts") },
+    }));
+    const cmd = preflightCommand({
+      exec: makeExec(),
+      configPath,
+      getDaemonStatus: makeStatus(),
+    });
+    const { logs, exitCode } = await captureLogs(async () => {
+      await new Command().addCommand(cmd).parseAsync(["node", "rig", "preflight", "--json"]);
+    });
+    const result = JSON.parse(logs.join("\n"));
+    expect(result.ready).toBe(true);
+    expect(result.checks.find((check: { name: string }) => check.name === "writable_home").ok).toBe(true);
+    expect(exitCode).toBeUndefined();
   });
 
   // Test 9 (--json)

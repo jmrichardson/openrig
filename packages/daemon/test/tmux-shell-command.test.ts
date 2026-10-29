@@ -27,7 +27,8 @@ function fixture(fail?: string, scriptPath = "/tmp/launch 'quoted'.sh") {
 }
 
 describe("shell launch transport", () => {
-  it.each(["missing", "nonzero"])("keeps sourced launch alive with errexit when PATH rm is %s", async failure => {
+  // Executes the staged script with /bin/sh; psmux panes use sendWindowsShellCommand instead.
+  it.skipIf(process.platform === "win32").each(["missing", "nonzero"])("keeps sourced launch alive with errexit when PATH rm is %s", async failure => {
     const root = mkdtempSync(join(tmpdir(), "launch-cleanup-failure-"));
     try {
       const bin = join(root, "bin");
@@ -45,7 +46,8 @@ describe("shell launch transport", () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
-  it.each([
+  // Executes the staged script with /bin/sh; psmux panes use sendWindowsShellCommand instead.
+  it.skipIf(process.platform === "win32").each([
     { sourceInPane: false, execInScript: false },
     { sourceInPane: true, execInScript: false },
     { sourceInPane: false, execInScript: true },
@@ -87,7 +89,8 @@ describe("shell launch transport", () => {
     expect(f.commands.at(-1)).toBe("tmux send-keys -t 'pane' 'Enter'");
   });
 
-  it("uses only the existing sh dependency for the fish capability probe", async () => {
+  // Executes the fish probe with /bin/sh, which Windows does not provide.
+  it.skipIf(process.platform === "win32")("uses only the existing sh dependency for the fish capability probe", async () => {
     const f = fixture();
     vi.spyOn(f.adapter, "getPaneCommand").mockResolvedValue("fish");
     expect(await f.adapter.sendShellCommand("pane", "claude", undefined, { sourceInPane: true })).toEqual({ ok: true });
@@ -112,7 +115,8 @@ describe("shell launch transport", () => {
     }
   });
 
-  it.each(["pair\\\\backslashes", "trailing\\", "quote\\'backslash"])("keeps a backslash payload on sh without changing its value (%s)", async value => {
+  // Executes the staged payload with /bin/sh; psmux panes use sendWindowsShellCommand instead.
+  it.skipIf(process.platform === "win32").each(["pair\\\\backslashes", "trailing\\", "quote\\'backslash"])("keeps a backslash payload on sh without changing its value (%s)", async value => {
     const root = mkdtempSync(join(tmpdir(), "fish-staging-"));
     try {
       const f = fixture(undefined, join(root, "launch.sh"));

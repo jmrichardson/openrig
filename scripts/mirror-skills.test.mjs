@@ -1,6 +1,7 @@
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -14,7 +15,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
-import { dirname, join } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { tmpdir } from "node:os";
 import {
   SOURCE_DIR,
@@ -27,6 +28,14 @@ import {
   RSYNC_MISSING_MESSAGE,
 } from "./mirror-skills.mjs";
 import { buildEdgeDigests } from "../packages/daemon/scripts/gen-control-plane-json.mjs";
+import { canCreateFileSymlinks } from "../test/symlink-capability.mjs";
+
+// Native Windows: the apply mode and checkMode run rsync, which Git for Windows does not ship and which
+// would read a C:\ path as a remote host (the --check gate compares digests and sources without it); and files
+// there carry no POSIX mode bits.
+const windows = process.platform === "win32";
+const RSYNC_ONLY = windows && "runs rsync, which native Windows does not have";
+const POSIX_MODES = windows && "Windows files carry no POSIX mode bits";
 
 test("parseChanges extracts file-change and deletion lines from itemize-changes output", () => {
   const output = [
@@ -100,7 +109,7 @@ test("source SKILL.md inventory is non-empty (sanity check)", () => {
   );
 });
 
-test("mirror is in sync with source (drift-detect via --check)", () => {
+test("mirror is in sync with source (drift-detect via --check)", { skip: RSYNC_ONLY }, () => {
   // The load-bearing assertion: skills/_canonical/ must not drift from
   // packages/daemon/specs/agents/shared/skills/. Failing this means
   // someone edited the source without running `npm run mirror-skills`.
@@ -227,7 +236,7 @@ test("stagePublicSkills applies membership, path, frontmatter, and fence transfo
   }
 });
 
-test("stagePublicSkills preserves prose and executable source modes", async () => {
+test("stagePublicSkills preserves prose and executable source modes", { skip: POSIX_MODES }, async () => {
   const mirror = await import("./mirror-skills.mjs");
   const root = mkdtempSync(join(tmpdir(), "openrig-mirror-modes-"));
   try {
@@ -480,7 +489,7 @@ test("stagePublicSkills rejects an unmatched fence in non-SKILL Markdown with fi
   }
 });
 
-test("stagePublicSkills rejects canon file symlinks before reading or staging outside bytes", async () => {
+test("stagePublicSkills rejects canon file symlinks before reading or staging outside bytes", { skip: !canCreateFileSymlinks && "needs file symlink privilege" }, async () => {
   const mirror = await import("./mirror-skills.mjs");
   const root = mkdtempSync(join(tmpdir(), "openrig-mirror-symlink-red-"));
   try {
@@ -526,7 +535,7 @@ test("stagePublicSkills rejects canon directory symlinks before recursion or sta
     write(join(outside, "secret.txt"), "outside directory bytes\n");
     const link = join(canon, "alpha", "references", "linked-directory");
     mkdirSync(dirname(link), { recursive: true });
-    symlinkSync(outside, link, "dir");
+    symlinkSync(outside, link, windows ? "junction" : "dir");
 
     await assert.rejects(
       mirror.stagePublicSkills({
@@ -537,7 +546,7 @@ test("stagePublicSkills rejects canon directory symlinks before recursion or sta
       }),
       (error) => {
         assert.match(error.message, /symlink/i);
-        assert.match(error.message, /alpha\/references\/linked-directory/);
+        assert.match(error.message, windows ? /alpha\\references\\linked-directory/ : /alpha\/references\/linked-directory/);
         return true;
       },
     );
@@ -922,7 +931,7 @@ test("authoring regeneration writes each generated copy from the skill's one hom
   }
 });
 
-test("authoring regeneration repairs permission-only drift in generated copies from the home's modes", async () => {
+test("authoring regeneration repairs permission-only drift in generated copies from the home's modes", { skip: RSYNC_ONLY }, async () => {
   const mirror = await import("./mirror-skills.mjs");
   const root = mkdtempSync(join(tmpdir(), "openrig-authoring-modes-"));
   try {
@@ -947,7 +956,7 @@ test("authoring regeneration repairs permission-only drift in generated copies f
   }
 });
 
-test("staged files keep the source's exact mode, so a publishable home passes under umask 0077 and 0022", async () => {
+test("staged files keep the source's exact mode, so a publishable home passes under umask 0077 and 0022", { skip: RSYNC_ONLY }, async () => {
   const mirror = await import("./mirror-skills.mjs");
   for (const mask of [0o077, 0o022]) {
     const root = mkdtempSync(join(tmpdir(), "openrig-umask-"));
@@ -1360,11 +1369,21 @@ function walkSkillFiles(root) {
   return out;
 }
 
+// Visits each file with "/" separators, which the callers match on, on Windows too.
 function walk(root, visit) {
   for (const entry of readdirSync(root)) {
     const path = join(root, entry);
     const s = statSync(path);
     if (s.isDirectory()) walk(path, visit);
-    else visit(path);
+    else visit(sep === "\\" ? path.replaceAll("\\", "/") : path);
   }
 }
+
+// A main-module check must execute on Windows too, rather than silently returning success.
+test("direct --check refuses a checkout without its control manifests", t => {
+  const root = mkdtempSync(join(tmpdir(), "mirror direct "));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const result = spawnSync(process.execPath, [fileURLToPath(new URL("./mirror-skills.mjs", import.meta.url)), "--check"], { cwd: root, encoding: "utf8" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /ENOENT|control|membership/);
+});

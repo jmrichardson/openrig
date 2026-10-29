@@ -18,7 +18,8 @@ describe("run-evals — has a runnable, documented entry", () => {
     expect(cmd).toMatch(/tsx/);
   });
 
-  it("ships the entry executable (the shebang is real)", () => {
+  // POSIX mode bits; Windows uses ACLs
+  it.skipIf(process.platform === "win32")("ships the entry executable (the shebang is real)", () => {
     expect(statSync(ENTRY).mode & 0o111).not.toBe(0);
   });
 });

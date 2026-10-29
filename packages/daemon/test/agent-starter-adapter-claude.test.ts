@@ -12,6 +12,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createFullTestDb } from "./helpers/test-app.js";
+import { nativePath } from "./helpers/fixture-path.js";
 import { RigRepository } from "../src/domain/rig-repository.js";
 import { PodRepository } from "../src/domain/pod-repository.js";
 import { SessionRegistry } from "../src/domain/session-registry.js";
@@ -129,12 +130,12 @@ describe("Agent Starter v1 vertical — real Claude adapter delivery (M2 R2)", (
 
       const fsOps: AgentResolverFsOps = {
         readFile: (p: string) => {
-          if (p === `${RIG_ROOT}/agents/impl/agent.yaml`) {
+          if (nativePath(p) === nativePath(`${RIG_ROOT}/agents/impl/agent.yaml`)) {
             return `name: impl\nversion: "1.0.0"\nresources:\n  skills: []\nprofiles:\n  default:\n    uses:\n      skills: []`;
           }
           throw new Error(`Not found: ${p}`);
         },
-        exists: (p: string) => p === `${RIG_ROOT}/agents/impl/agent.yaml`,
+        exists: (p: string) => nativePath(p) === nativePath(`${RIG_ROOT}/agents/impl/agent.yaml`),
       };
 
       const inst = new PodRigInstantiator({
@@ -173,7 +174,7 @@ describe("Agent Starter v1 vertical — real Claude adapter delivery (M2 R2)", (
       // The Claude adapter's `mergeGuidance` writes to <binding.cwd>/CLAUDE.md
       // wrapped in a `BEGIN OpenRig MANAGED BLOCK` envelope. The cwd for this
       // member resolves to RIG_ROOT (`cwd: "."`).
-      const expectedClaudeMdPath = path.join(RIG_ROOT, "CLAUDE.md");
+      const expectedClaudeMdPath = nativePath(path.join(RIG_ROOT, "CLAUDE.md"));
       const claudeMd = claudeFs._store[expectedClaudeMdPath];
       expect(claudeMd, "expected real ClaudeCodeAdapter to have written CLAUDE.md via guidance_merge").toBeDefined();
       // The managed block is keyed on the starter file path (`file.path`,

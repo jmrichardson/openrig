@@ -72,20 +72,47 @@ function withIdleCompactionOff(args: string[], on: boolean): string[] {
   return [...args.slice(0, at + 1), JSON.stringify({ ...settings, idleCompaction: false }), ...args.slice(at + 2)];
 }
 
-function claudeCommandSettings(allow: string[], ask: string[] = []): string[] {
-  const permissions = { allow, ...(ask.length ? { ask } : {}) };
+/** The PowerShell(x:*) rule for each Bash(x:*) one, in the same order. */
+function powerShellRules(rules: string[]): string[] {
+  return rules.flatMap(rule => {
+    const family = /^Bash\((.+:\*)\)$/.exec(rule)?.[1];
+    return family ? [`PowerShell(${family})`] : [];
+  });
+}
+
+/** On native Windows Claude Code runs commands through its PowerShell tool, which Bash rules neither allow nor
+ *  restrict, so each Bash(x:*) rule is followed there by the same family's PowerShell(x:*) one. */
+function withPowerShellRules(rules: string[], platform: NodeJS.Platform): string[] {
+  if (platform !== "win32") return rules;
+  return rules.flatMap(rule => [rule, ...powerShellRules([rule])]);
+}
+
+function claudeCommandSettings(allow: string[], ask: string[], platform: NodeJS.Platform): string[] {
   const hook = fileURLToPath(new URL("../../assets/claude-team-permissions.cjs", import.meta.url));
-  if (!existsSync(hook)) return ["--settings", JSON.stringify({ permissions })];
+  if (!existsSync(hook)) {
+    // Without the hook every ask is a native rule, for both tools on native Windows.
+    const permissions = { allow: withPowerShellRules(allow, platform), ...(ask.length ? { ask: withPowerShellRules(ask, platform) } : {}) };
+    return ["--settings", JSON.stringify({ permissions })];
+  }
+  // Native Windows: Claude's own PowerShell parser is the primary gate for lifecycle asks, through native PowerShell
+  // ask rules. The hook also asks for spellings a prefix rule may miss (rig.cmd and other suffixes, odd case or
+  // escapes). The cost is that `rig <lifecycle> --help` prompts under PowerShell there. Bash asks stay hook-only.
+  const nativeAsk = platform === "win32" ? powerShellRules(ask) : [];
   const policy = Buffer.from(JSON.stringify({ allow, ask })).toString("base64");
   const command = [process.execPath, hook, policy].map(shellQuote).join(" ");
+  const bash = { matcher: "Bash", hooks: [{ type: "command", command, timeout: 5 }] };
+  // The PowerShell tool's hook is exec form (Claude Code 2.1.139 and later), which starts node with no shell. Claude runs a
+  // shell-form command in Git Bash, or in PowerShell when Git Bash is missing, where this POSIX quoting fails: Claude
+  // Code before 2.1.299 then runs the command unasked, and 2.1.299 and later block every PowerShell command.
+  const powershell = { matcher: "PowerShell", hooks: [{ type: "command", command: process.execPath, args: [hook, policy], timeout: 5 }] };
   return ["--settings", JSON.stringify({
-    permissions: { allow },
-    hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command, timeout: 5 }] }] },
+    permissions: { allow: withPowerShellRules(allow, platform), ...(nativeAsk.length ? { ask: nativeAsk } : {}) },
+    hooks: { PreToolUse: platform === "win32" ? [bash, powershell] : [bash] },
   })];
 }
 
-/** Session flags only; never writes a personal/project permission file. */
-export function operationalLaunchArgs(runtime: string, choice: LaunchChoice): string[] {
+/** Session flags only; never writes a personal/project permission file. `platform` is the launch host's (tests set it). */
+export function operationalLaunchArgs(runtime: string, choice: LaunchChoice, platform: NodeJS.Platform = process.platform): string[] {
   if (runtime === "codex") {
     // Managed seats leave Codex upgrades to the operator. This is launch-local;
     // it does not write config or accept a rate-limit model switch.
@@ -93,7 +120,7 @@ export function operationalLaunchArgs(runtime: string, choice: LaunchChoice): st
       choice.kernelAuthority ? { launchPosture: "full_bypass", nonInterruptive: true } : choice)];
   }
   if (runtime === "claude-code") {
-    const args = withIdleCompactionOff(claudeOperationalArgs(choice), choice.managedCompaction ?? managedCompactionActive());
+    const args = withIdleCompactionOff(claudeOperationalArgs(choice, platform), choice.managedCompaction ?? managedCompactionActive());
     if (choice.claudePermissions === undefined) return args;
     const rules = validateClaudePermissionRules(choice.claudePermissions);
     const at = args.indexOf("--settings");
@@ -106,10 +133,10 @@ export function operationalLaunchArgs(runtime: string, choice: LaunchChoice): st
   return choice.kernelAuthority ? [] : nonInterruptiveArgs(runtime, choice);
 }
 
-function claudeOperationalArgs(choice: LaunchChoice): string[] {
-  if (choice.kernelAuthority) return claudeCommandSettings(KERNEL_CLAUDE_ALLOW);
+function claudeOperationalArgs(choice: LaunchChoice, platform: NodeJS.Platform): string[] {
+  if (choice.kernelAuthority) return claudeCommandSettings(KERNEL_CLAUDE_ALLOW, [], platform);
   if (choice.teamPermissionDefault && !choice.permissionMode && (!choice.launchPosture || choice.launchPosture === "floor")) {
-    return claudeCommandSettings(TEAM_CLAUDE_ALLOW, TEAM_CLAUDE_ASK);
+    return claudeCommandSettings(TEAM_CLAUDE_ALLOW, TEAM_CLAUDE_ASK, platform);
   }
   return nonInterruptiveArgs("claude-code", choice);
 }

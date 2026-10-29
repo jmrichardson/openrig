@@ -415,7 +415,8 @@ it('preparation receipt: unknown activity at the final short send is not an unse
  expect(body.error).not.toContain('Refused:');expect(compacts(f)).toHaveLength(0);expect(f.writes).toHaveLength(1);
 });
 
-for(const kind of ['regular','symlink'])it(`workspace setup: preserves an existing ${kind} ignore file and falls back`,async()=>{
+// The symlink case needs SeCreateSymbolicLinkPrivilege on Windows.
+for(const kind of ['regular','symlink'])it.skipIf(kind==='symlink'&&!canCreateFileSymlinks)(`workspace setup: preserves an existing ${kind} ignore file and falls back`,async()=>{
  const f=fixture(),cwd=join(f.home,'repo'),root=join(cwd,'.openrig','compaction');mkdirSync(root,{recursive:true});
  const ignore=join(root,'.gitignore'),outside=join(f.home,'unrelated.txt'),original='# user policy\nlogs/\n!shared.txt\n';
  if(kind==='symlink'){writeFileSync(outside,original);symlinkSync(outside,ignore);}else writeFileSync(ignore,original);
@@ -451,7 +452,8 @@ it('workspace setup: publishes only after creating the actual attempt parent',as
  expect(a.mapPath).toBe(join(cwd,'.openrig','compaction','preparation',seat,a.attemptId,'RESTORE-MAP.md'));
  stageMap(f);await f.e.maybeAutoCompact({...input,cwd});expect(compacts(f)).toHaveLength(1);
 });
-it.skipIf(process.getuid?.()===0)('workspace setup: an unwritable descendant selects the home fallback',async()=>{
+// POSIX mode bits; Windows uses ACLs, so chmod 0o500 cannot make a directory unwritable.
+it.skipIf(process.getuid?.()===0||process.platform==='win32')('workspace setup: an unwritable descendant selects the home fallback',async()=>{
  const f=fixture(),cwd=join(f.home,'repo'),parent=join(cwd,'.openrig','compaction','preparation');mkdirSync(parent,{recursive:true});chmodSync(parent,0o500);
  try{
   await f.e.maybeAutoCompact({...input,cwd});const a=f.e.getPreparationState(seat)!;

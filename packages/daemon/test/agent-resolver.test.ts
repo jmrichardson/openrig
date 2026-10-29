@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { join, resolve } from "node:path";
 import { resolveAgentRef, type AgentResolverFsOps } from "../src/domain/agent-resolver.js";
 
 /** Helper: create a minimal valid agent.yaml */
@@ -16,18 +17,37 @@ function validAgentYamlWithSkill(name: string, skillId: string): string {
 
 /** Mock filesystem */
 function mockFs(files: Record<string, string>): AgentResolverFsOps {
+  const nativeFiles = Object.fromEntries(Object.entries(files).map(([path, content]) => [resolve(path), content]));
   return {
     readFile: (path: string) => {
-      if (path in files) return files[path]!;
+      if (resolve(path) in nativeFiles) return nativeFiles[resolve(path)]!;
       throw new Error(`File not found: ${path}`);
     },
-    exists: (path: string) => path in files,
+    exists: (path: string) => resolve(path) in nativeFiles,
   };
 }
 
 const RIG_ROOT = "/project/rigs/my-rig";
 
 describe("AgentSpec source resolver + import resolver", () => {
+  // Windows path rules; elsewhere these are ordinary relative names (see path-safety.test.ts).
+  it.skipIf(process.platform !== "win32").each(["C:agents\\impl", "C:\\agents\\impl", "\\agents\\impl", "\\\\server\\share\\impl"])("rejects rooted local references before filesystem access: %s", (path) => {
+    const unexpected = () => { throw new Error("unsafe reference reached filesystem"); };
+    expect(resolveAgentRef(`local:${path}`, RIG_ROOT, { exists: unexpected, readFile: unexpected }).ok).toBe(false);
+  });
+
+  it.each([resolve("agent root with spaces"), ...(process.platform === "win32" ? ["\\\\server\\shared agents\\root"] : [])])("resolves native absolute paths and imports: %s", (root) => {
+    const agentDir = join(root, "base");
+    const importDir = join(root, "shared");
+    const fs = mockFs({
+      [join(agentDir, "agent.yaml")]: validAgentYaml({ imports: `imports:\n  - ref: ${JSON.stringify(`path:${importDir}`)}` }),
+      [join(importDir, "agent.yaml")]: validAgentYaml({ name: "shared" }),
+    });
+    const result = resolveAgentRef(`path:${agentDir}`, root, fs);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.imports[0]!.sourcePath).toBe(importDir);
+  });
+
   // T1: local: ref resolves relative to rig root
   it("local: ref resolves relative to rig root", () => {
     const fs = mockFs({
@@ -37,7 +57,7 @@ describe("AgentSpec source resolver + import resolver", () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.resolved.spec.name).toBe("test-agent");
-      expect(result.resolved.sourcePath).toBe("/project/rigs/my-rig/agents/impl");
+      expect(result.resolved.sourcePath).toBe(resolve("/project/rigs/my-rig/agents/impl"));
     }
   });
 

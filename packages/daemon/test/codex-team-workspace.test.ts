@@ -28,7 +28,7 @@ describe("Codex team workspace preparation", () => {
   });
   it("does not grant home, an ancestor, or a symlink to home", () => {
     const f = fixture(); vi.spyOn(console, "warn").mockImplementation(() => {});
-    const alias = path.join(f.root, "alias"); fs.symlinkSync(f.home, alias);
+    const alias = path.join(f.root, "alias"); fs.symlinkSync(f.home, alias, process.platform === "win32" ? "junction" : "dir");
     for (const candidate of [f.home, f.root, alias, "/"]) {
       const dirs = prepareCodexTeamWorkspace("dev-builder@workshop", candidate, f.shared, f.home);
       expect(dirs).toEqual([path.join(f.shared, "rigs/workshop/state/dev")]);
@@ -38,7 +38,7 @@ describe("Codex team workspace preparation", () => {
     for (const name of ["r00-team-seat", "seat@team", "dev-seat@team@host", "../dev-seat@team"]) {
       expect(codexQueueStateRoot(name, "/shared")).toBeUndefined();
     }
-    expect(codexQueueStateRoot("dev-code-review@team", "/shared")).toBe("/shared/rigs/team/state/dev");
+    expect(codexQueueStateRoot("dev-code-review@team", "/shared")).toBe(path.join("/shared", "rigs/team/state/dev"));
   });
   it("quotes spaces and preserves launch availability when optional preparation fails", () => {
     expect(codexTeamWorkspaceArg(() => ["/custom work", "/state"], "seat")).toBe(" --add-dir '/custom work' --add-dir '/state'");

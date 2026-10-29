@@ -1,4 +1,5 @@
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
+import { isRootedPath } from "./path-safety.js";
 
 // -- Shared types --
 
@@ -622,7 +623,7 @@ interface ValidateOptions {
  */
 export function isRelativeSafePath(p: string): boolean {
   if (!p || p.length === 0) return false;
-  if (p.startsWith("/")) return false;
+  if (isRootedPath(p)) return false;
   if (p.includes("\\")) return false;
   const segments = p.split("/");
   for (const seg of segments) {

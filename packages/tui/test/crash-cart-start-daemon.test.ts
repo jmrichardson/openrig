@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { daemonStartArgs } from "../src/crash-cart/start-daemon.js";
+import { daemonStartArgs, fleetRestoreStartCommand } from "../src/crash-cart/start-daemon.js";
 import { resolveCrashCartKey } from "../src/crash-cart/keys.js";
 
 describe("local startup target", () => {
@@ -13,6 +13,14 @@ describe("local startup target", () => {
       expect(() => daemonStartArgs(target)).toThrow("no local daemon was started");
     },
   );
+  it.each(["linux", "darwin"] as const)("restores the fleet with a plain rig daemon start from PATH on %s", (platform) => {
+    expect(fleetRestoreStartCommand("/usr/bin/node", ["/opt/openrig/dist/bin-wrapper.js"], platform)).toEqual({ executable: "rig", args: ["daemon", "start"] });
+  });
+  it("restores the fleet through the CLI entry on Windows, keeping the plain daemon start", () => {
+    expect(fleetRestoreStartCommand("C:\\node\\node.exe", ["C:\\npm\\node_modules\\@openrig\\cli\\dist\\bin-wrapper.js"], "win32")).toEqual({
+      executable: "C:\\node\\node.exe", args: ["C:\\npm\\node_modules\\@openrig\\cli\\dist\\bin-wrapper.js", "daemon", "start"],
+    });
+  });
   it("unavailable prerequisites permit inspection/retry but no recovery effects", () => {
     const opts = { unavailable: "native load failed" };
     expect(resolveCrashCartKey("r", opts)).toBe("retry");

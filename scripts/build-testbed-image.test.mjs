@@ -113,7 +113,7 @@ test("Q2 rider (effect proof): the build verb LOADS the daemon inside the contai
   assert.match(text, /\/healthz/, "must confirm readiness deterministically via /healthz (operator correction — no fixed sleep)");
 });
 
-test("image-load success, failure and deadline all retain status and remove only the named container", () => {
+test("image-load success, failure and deadline all retain status and remove only the named container", { skip: process.platform === "win32" && "the Docker testbed build runs under /bin/bash with #! fakes on a POSIX PATH" }, () => {
   const root = mkdtempSync(join(process.cwd(), ".testbed-load-"));
   try {
     for (const p of ["scripts", "docker/testbed", "packages/cli", "bin"]) mkdirSync(join(root, p), { recursive: true });

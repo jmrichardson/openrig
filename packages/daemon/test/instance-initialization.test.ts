@@ -11,7 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { join, relative, sep } from "node:path";
 import {
   ensureOpenRigInstance,
   openRigContextLibraryRoots,
@@ -30,7 +30,7 @@ function tree(root: string): Array<{ path: string; kind: "directory" | "file"; c
   const walk = (dir: string): void => {
     for (const name of readdirSync(dir).sort()) {
       const abs = join(dir, name);
-      const rel = relative(root, abs);
+      const rel = relative(root, abs).split(sep).join("/");
       if (statSync(abs).isDirectory()) {
         out.push({ path: rel, kind: "directory" });
         walk(abs);
@@ -51,7 +51,7 @@ describe("canonical OpenRig instance initialization", () => {
   it("declares the canonical addressable and System World library roots together", () => {
     expect(openRigContextLibraryRoots("/instance/context")).toEqual([
       "/instance/context",
-      "/instance/context/system",
+      join("/instance/context", "system"),
     ]);
   });
 
@@ -122,7 +122,7 @@ describe("canonical OpenRig instance initialization", () => {
     const outside = join(parent, "outside");
     mkdirSync(home, { recursive: true });
     mkdirSync(outside);
-    symlinkSync(outside, join(home, "context"));
+    symlinkSync(outside, join(home, "context"), process.platform === "win32" ? "junction" : "dir");
 
     const result = ensureOpenRigInstance({ home });
 

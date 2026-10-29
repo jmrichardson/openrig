@@ -30,7 +30,8 @@ import {
   type PiRunnerState, type RunnerRuntime,
 } from "./pi-runner-protocol.js";
 
-const SHELL_COMMANDS = new Set(["bash", "fish", "nu", "sh", "tmux", "zsh"]);
+import { isRuntimeShell } from "../domain/shell-classifier.js";
+import { projectionResourceDirectory, projectionResourceId } from "../domain/projection-resource-path.js";
 
 export interface PiAdapterFsOps {
   readFile(path: string): string;
@@ -128,7 +129,7 @@ export class PiRuntimeAdapter implements RuntimeAdapter {
     const skillsDir = nodePath.join(agentDir, "skills");
     if (this.fs.exists(skillsDir) && this.fs.listFiles) {
       for (const file of this.fs.listFiles(skillsDir)) {
-        results.push({ effectiveId: file, category: "skill", installedPath: nodePath.join(skillsDir, file) });
+        results.push({ effectiveId: file.split(nodePath.sep).map(part => projectionResourceId(part)).join(nodePath.sep), category: "skill", installedPath: nodePath.join(skillsDir, file) });
       }
     }
     return results;
@@ -137,7 +138,7 @@ export class PiRuntimeAdapter implements RuntimeAdapter {
   /** Conflict detection must inspect this seat's copy, not a Claude sibling. */
   skillTargetPath(tmuxSession: string | null, effectiveId: string): string | null {
     if (!tmuxSession) return null;
-    return nodePath.join(piSeatPaths(this.stateRoot, tmuxSession).agentDir, "skills", effectiveId, "SKILL.md");
+    return nodePath.join(piSeatPaths(this.stateRoot, tmuxSession).agentDir, "skills", projectionResourceDirectory(effectiveId), "SKILL.md");
   }
 
   async project(plan: ProjectionPlan, binding: NodeBinding): Promise<ProjectionResult> {
@@ -300,13 +301,14 @@ export class PiRuntimeAdapter implements RuntimeAdapter {
       openRouterCharge: this.runtime === "pi" && this.openRouterChargeEnabled(),
     });
 
-    const command = this.runtime === "pi" && this.seatLaunchEnvironment
+    // A native Windows pane needs the launch environment for OMP too; POSIX OMP keeps its bare command.
+    const command = (this.runtime === "pi" || process.platform === "win32") && this.seatLaunchEnvironment
       ? await this.seatLaunchEnvironment.command(sessionName, cmd, { nodeId: binding.nodeId, generation: binding.launchGeneration, runtime: this.runtime })
       : cmd;
     // Stage long commands without leaving a shell above the live runner.
     let textResult = await this.tmux.sendShellCommand(sessionName, command, undefined, { stageIfLong: true, execInScript: true });
     // This refusal precedes any input: retain the bare-command fallback when routing cannot fit.
-    if (!textResult.ok && textResult.code === "launch_path_too_long" && command !== cmd) {
+    if (process.platform !== "win32" && !textResult.ok && textResult.code === "launch_path_too_long" && command !== cmd) {
       textResult = await this.tmux.sendShellCommand(sessionName, cmd, undefined, { stageIfLong: true, execInScript: true });
     }
     if (!textResult.ok) {
@@ -358,7 +360,7 @@ export class PiRuntimeAdapter implements RuntimeAdapter {
     // pane at the shell; READY scrollback and a stale ready sidecar do not
     // make a stopped seat ready).
     const paneCommand = (await this.tmux.getPaneCommand(binding.tmuxSession)) ?? "";
-    const atShell = SHELL_COMMANDS.has(paneCommand);
+    const atShell = isRuntimeShell(paneCommand);
     const state = this.readRunnerState(binding.tmuxSession);
     if (state?.exited) {
       return { ready: false, reason: `${this.runtime}-runner exited (code ${state.exited.code ?? "unknown"})`, code: "runner_exited" };
@@ -450,7 +452,7 @@ export class PiRuntimeAdapter implements RuntimeAdapter {
     if (entry.category === "skill") {
       if (!binding.tmuxSession) return false;
       const { agentDir } = piSeatPaths(this.stateRoot, binding.tmuxSession);
-      const targetDir = nodePath.join(agentDir, "skills", entry.effectiveId);
+      const targetDir = nodePath.join(agentDir, "skills", projectionResourceDirectory(entry.effectiveId));
       this.fs.mkdirp(targetDir);
       let isDir = false;
       if (this.fs.listFiles) {

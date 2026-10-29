@@ -48,6 +48,29 @@ const cases = [
 ] as const;
 
 describe("shared restore preconditions", () => {
+  const windowsPaths = ["C:\\work\\required", "c:/work/required", "\\\\server\\share\\required", "\\required", ".\\required", "..\\required"];
+
+  it.each(windowsPaths)("checks Windows startup paths: %s", (ownerRoot) => {
+    const snapshot = data();
+    snapshot.nodeStartupContext!["node-1"]!.resolvedStartupFiles[0]!.ownerRoot = ownerRoot;
+    const result = validatePreRestore(snapshot, { fsOps: { exists: (file) => file !== ownerRoot }, platform: "win32" });
+    expect(result.blockers).toEqual([expect.objectContaining({ code: "startup_owner_root_missing", path: ownerRoot })]);
+  });
+
+  it.each((["linux", "darwin"] as const).flatMap((platform) => windowsPaths.map((value) => [platform, value] as const)))(
+    "on %s, leaves a Windows path form unchecked as an ordinary name: %s",
+    (platform, value) => {
+      const snapshot = data();
+      const file = snapshot.nodeStartupContext!["node-1"]!.resolvedStartupFiles[0]!;
+      file.ownerRoot = value;
+      file.absolutePath = value;
+      snapshot.nodeStartupContext!["node-1"]!.resolvedStartupFiles.push({ path: "optional.md", ownerRoot: "/owner", absolutePath: value, required: false });
+      const servicesRecord = { ...services(), rigRoot: value, composeFile: value };
+      const result = validatePreRestore(snapshot, { fsOps: { exists: (path) => path !== value }, servicesRecord, platform });
+      expect(result).toEqual({ blockers: [], warnings: [] });
+    },
+  );
+
   it.each(cases)("preserves the exact refusal for missing %s", (missing, code, message, remediation) => {
     const result = validatePreRestore(data(), { fsOps: { exists: (path) => path !== missing }, servicesRecord: services() });
     expect(result).toEqual({

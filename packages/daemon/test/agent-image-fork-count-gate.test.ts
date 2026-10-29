@@ -9,6 +9,7 @@
 
 import { describe, it, expect, vi } from "vitest";
 import { createFullTestDb } from "./helpers/test-app.js";
+import { fixtureFs } from "./helpers/fixture-path.js";
 import { RigRepository } from "../src/domain/rig-repository.js";
 import { PodRepository } from "../src/domain/pod-repository.js";
 import { SessionRegistry } from "../src/domain/session-registry.js";
@@ -65,10 +66,7 @@ function mockSucceedingAdapter(runtime = "claude-code"): RuntimeAdapter {
 }
 
 function mockFs(files: Record<string, string>): AgentResolverFsOps {
-  return {
-    readFile: (p: string) => { if (p in files) return files[p]!; throw new Error(`Not found: ${p}`); },
-    exists: (p: string) => p in files,
-  };
+  return fixtureFs(files);
 }
 
 const RIG_ROOT = "/project/rigs/my-rig";

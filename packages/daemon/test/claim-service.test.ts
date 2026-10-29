@@ -12,6 +12,9 @@ import { vi } from "vitest";
 import type { TmuxAdapter, TmuxResult } from "../src/adapters/tmux.js";
 import { TranscriptStore } from "../src/domain/transcript-store.js";
 import { ALL_MIGRATIONS } from "../src/db/all-migrations.js";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 
 describe("ClaimService", () => {
@@ -28,6 +31,7 @@ describe("ClaimService", () => {
   let startPipePaneSpy: ReturnType<typeof vi.fn>;
   let ensureContextCollectorSpy: ReturnType<typeof vi.fn>;
   let transcriptStore: TranscriptStore;
+  let transcriptsRoot: string;
 
   beforeEach(() => {
     db = createDb();
@@ -52,7 +56,8 @@ describe("ClaimService", () => {
       hasSession: vi.fn(async () => true),
       capturePaneContent: vi.fn(async () => ""),
     } as unknown as TmuxAdapter;
-    transcriptStore = new TranscriptStore({ transcriptsRoot: "/tmp/openrig-claim-service-transcripts", enabled: true });
+    transcriptsRoot = mkdtempSync(join(tmpdir(), "openrig-claim-service-transcripts-"));
+    transcriptStore = new TranscriptStore({ transcriptsRoot, enabled: true });
     claimService = new ClaimService({
       db,
       rigRepo,
@@ -67,7 +72,10 @@ describe("ClaimService", () => {
     });
   });
 
-  afterEach(() => { db.close(); });
+  afterEach(() => {
+    db.close();
+    rmSync(transcriptsRoot, { recursive: true, force: true });
+  });
 
   function seedDiscovery(opts?: { runtimeHint?: string; tmuxSession?: string; tmuxPane?: string }) {
     return discoveryRepo.upsertDiscoveredSession({

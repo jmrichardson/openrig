@@ -7,6 +7,7 @@
 //     sibling home (or HOME-MOVED marker) must surface BOTH paths — never assert
 //     daemon-down from the wrong home.
 import { describe, it, expect, vi } from "vitest";
+import path from "node:path";
 import { getDaemonStatus, type LifecycleDeps } from "../src/daemon-lifecycle.js";
 
 function baseDeps(over: Partial<LifecycleDeps> = {}): LifecycleDeps {
@@ -73,25 +74,25 @@ describe("home-resolution honesty (never daemon-down from the wrong home)", () =
       fetch: REFUSED,
       homeDir: "/fake/home/.openrig",
       listDir: vi.fn((p: string) => (p === "/fake/home" ? [".openrig", ".openrig-build-vm-x"] : [])),
-      exists: vi.fn((p: string) => p === "/fake/home/.openrig-build-vm-x/daemon.json"),
+      exists: vi.fn((p: string) => p === path.join("/fake/home/.openrig-build-vm-x", "daemon.json")),
       readFile: vi.fn((p: string) =>
-        p === "/fake/home/.openrig-build-vm-x/daemon.json" ? JSON.stringify({ pid: 4242, port: 7433 }) : null,
+        p === path.join("/fake/home/.openrig-build-vm-x", "daemon.json") ? JSON.stringify({ pid: 4242, port: 7433 }) : null,
       ),
       isProcessAlive: vi.fn((pid: number) => pid === 4242),
     });
     const s = await getDaemonStatus(deps);
     expect(s.state).toBe("unverified");
     expect(s.siblingHint?.resolvedHome).toBe("/fake/home/.openrig");
-    expect(s.siblingHint?.siblingHome).toBe("/fake/home/.openrig-build-vm-x");
+    expect(s.siblingHint?.siblingHome).toBe(path.join("/fake/home", ".openrig-build-vm-x"));
   });
 
   it("HOME-MOVED marker in the resolved home surfaces the moved-to path", async () => {
     const deps = baseDeps({
       fetch: REFUSED,
       homeDir: "/fake/home/.openrig",
-      exists: vi.fn((p: string) => p === "/fake/home/.openrig/HOME-MOVED"),
+      exists: vi.fn((p: string) => p === path.join("/fake/home/.openrig", "HOME-MOVED")),
       readFile: vi.fn((p: string) =>
-        p === "/fake/home/.openrig/HOME-MOVED" ? "/fake/home/.openrig-build-vm-x\n" : null,
+        p === path.join("/fake/home/.openrig", "HOME-MOVED") ? "/fake/home/.openrig-build-vm-x\n" : null,
       ),
     });
     const s = await getDaemonStatus(deps);

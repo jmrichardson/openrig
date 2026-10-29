@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type Database from "better-sqlite3";
+import { basename } from "node:path";
 import {
   CLAUDE_ACTIVITY_RUNG_INVENTORY,
   CODEX_ACTIVITY_RUNG_INVENTORY,
@@ -49,7 +50,7 @@ describe("S19 A5 — readClaudeSelfReportEvidence: the pid.json rung, undocument
   });
   const readOf = (files: Record<string, string>, throwOnList = false): ClaudeSelfReportRead => ({
     listFiles: () => { if (throwOnList) throw new Error("ENOENT"); return Object.keys(files); },
-    readFile: (p) => { const f = p.split("/").pop()!; if (f in files) return files[f]!; throw new Error("ENOENT"); },
+    readFile: (p) => { const f = basename(p); if (f in files) return files[f]!; throw new Error("ENOENT"); },
   });
   const input = (read: ClaudeSelfReportRead) => ({ sessionsDir: "/cfg/sessions", sessionName: NAME, seatNodeId: SEAT, read });
 

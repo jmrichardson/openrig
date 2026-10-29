@@ -74,7 +74,7 @@ export function assertDestinationNamespaceContained(targetRoot: string, installN
 // Helper scripts are served as text, never executed by the install validator.
 const ALLOWED_CONTEXT_PACK_SUFFIXES = new Set([".md", ".markdown", ".yaml", ".yml", ".txt", ".sh", ".ts", ".mjs", ".py"]);
 
-export function validateContextPackManifestForInstall(manifestPath: string): void {
+export function validateContextPackManifestForInstall(manifestPath: string, platform: NodeJS.Platform = process.platform): void {
   let parsed: unknown;
   try {
     parsed = parseYaml(readFileSync(manifestPath, "utf-8"));
@@ -122,7 +122,9 @@ export function validateContextPackManifestForInstall(manifestPath: string): voi
     if (typeof relPath !== "string" || relPath.length === 0) {
       throw new Error(`manifest at ${manifestPath} files[${i}] missing 'path' (string)`);
     }
-    if (relPath.split(/[\\/]/).includes("..") || isAbsolute(relPath) || relPath.startsWith("\\")) {
+    // On Windows a drive-relative "C:notes.md" is rooted too; the daemon's manifest parser refuses it there.
+    const rooted = isAbsolute(relPath) || relPath.startsWith("\\") || (platform === "win32" && /^[A-Za-z]:/.test(relPath));
+    if (relPath.split(/[\\/]/).includes("..") || rooted) {
       throw new Error(`manifest at ${manifestPath} files[${i}].path '${relPath}' must be a relative path inside the pack (no '..' segments, no leading '/')`);
     }
     if (!ALLOWED_CONTEXT_PACK_SUFFIXES.has(extname(relPath))) {

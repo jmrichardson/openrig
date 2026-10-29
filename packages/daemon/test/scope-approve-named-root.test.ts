@@ -95,7 +95,7 @@ describe("ScopeApproveService — the caller's missions root (#995)", () => {
   it("counts a symlinked worktree as the same root", () => {
     const linkParent = fs.mkdtempSync(path.join(os.tmpdir(), "scope-approve-link-"));
     const link = path.join(linkParent, "linked-work");
-    fs.symlinkSync(namedRoot, link);
+    fs.symlinkSync(namedRoot, link, process.platform === "win32" ? "junction" : "dir");
     expect(fs.realpathSync(link)).not.toBe(link);
 
     service().approve({ ...input, missionsRoot: link });

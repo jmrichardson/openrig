@@ -38,6 +38,11 @@ beforeAll(() => {
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
 describe("parseSourceRef — one grammar, the pre-# kind prefix", () => {
+  // Windows path rules; elsewhere a drive-letter name is an ordinary relative name (see path-safety.test.ts).
+  it.skipIf(process.platform !== "win32").each(["C:notes.md", "C:\\notes.md", "C:/notes.md", "\\notes.md", "\\\\server\\share\\notes.md"])("rejects Windows roots after a source kind: %s", (path) => {
+    expect(() => parseSourceRef(`seat:${path}`)).toThrow(SourceResolutionError);
+  });
+
   it("bare refs are library; project:/seat:/mission: prefixes name the tree resolvers", () => {
     expect(parseSourceRef("walk.md")).toEqual({ kind: "library", rel: "walk.md" });
     expect(parseSourceRef("project:SPEC.md")).toEqual({ kind: "project", rel: "SPEC.md" });

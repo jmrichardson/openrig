@@ -47,7 +47,10 @@ export interface SecretLookupOpts {
 }
 
 /** Warn if the env file is group/world readable (item 10 hygiene). Returns a warning string or null. */
-export function checkEnvFilePermissions(envFile: string, fsops: SecretFsOps = nodeSecretFs): string | null {
+export function checkEnvFilePermissions(envFile: string, fsops: SecretFsOps = nodeSecretFs, platform: NodeJS.Platform = process.platform): string | null {
+  // Windows reports every file as mode 0666 (0444 when read-only), and chmod cannot change who may
+  // read it; the file's ACL decides that. Warn about nothing rather than about the wrong thing.
+  if (platform === "win32") return null;
   const mode = fsops.statMode(envFile);
   if (mode === null) return null; // absent — a separate "unconfigured" concern
   if (mode & 0o077) return `secret env file ${envFile} is mode ${mode.toString(8)} — should be 0600 (group/other must not read secrets)`;

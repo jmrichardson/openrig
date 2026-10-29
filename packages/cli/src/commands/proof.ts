@@ -573,7 +573,26 @@ export function replaceArtifactFile(target: string, content: string, stagingId: 
   }
   try {
     if (failure !== undefined) throw failure;
-    fs.renameSync(staging, target);
+    try {
+      fs.renameSync(staging, target);
+    } catch (renameErr) {
+      // Windows refuses to replace a file with the read-only attribute. That attribute belongs to the file, so
+      // clearing it would make every other hard link writable: clear it only for a sole link. The staged file
+      // already carries the read-only mode, so the replacement stays read-only.
+      const current = process.platform === "win32" && (renameErr as NodeJS.ErrnoException).code === "EPERM"
+        ? fs.lstatSync(target, { throwIfNoEntry: false }) : undefined;
+      if (!current?.isFile() || (current.mode & 0o200) !== 0) throw renameErr;
+      if (current.nlink !== 1) {
+        throw new ScopeCliError({
+          fact: `Proof artifact '${path.basename(target)}' is read-only and hard-linked to another path.`,
+          consequence: "The artifact was not replaced; making it writable would also make the other link writable.",
+          action: "Remove the other link or the read-only attribute yourself, then re-run with --replace.",
+        });
+      }
+      fs.chmodSync(target, current.mode | 0o200);
+      try { fs.renameSync(staging, target); }
+      catch (retryErr) { fs.chmodSync(target, current.mode); throw retryErr; }
+    }
   } catch (err) {
     try { fs.rmSync(staging, { force: true }); }
     catch (cleanupErr) { console.error(`warning: could not remove staging file ${staging}: ${(cleanupErr as Error).message}`); }

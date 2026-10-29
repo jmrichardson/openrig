@@ -6,6 +6,7 @@
 // allow-list, path-traversal rejection on supplementary files.
 
 import { parse as parseYaml } from "yaml";
+import { isRootedPath, ROOTED_PATH_RULE } from "../path-safety.js";
 import {
   AgentImageError,
   type AgentImageManifest,
@@ -129,10 +130,10 @@ export function parseAgentImageManifest(rawYaml: string, sourcePath: string): Ag
           { sourcePath, index: i },
         );
       }
-      if (path.split(/[\\/]/).includes("..") || path.startsWith("/")) {
+      if (path.split(/[\\/]/).includes("..") || isRootedPath(path)) {
         throw new AgentImageError(
           "manifest_invalid",
-          `manifest at ${sourcePath} files[${i}].path '${path}' must be a relative path inside the image (no '..', no leading '/')`,
+          `manifest at ${sourcePath} files[${i}].path '${path}' must be a relative path inside the image (no '..', no ${ROOTED_PATH_RULE})`,
           { sourcePath, index: i, path },
         );
       }

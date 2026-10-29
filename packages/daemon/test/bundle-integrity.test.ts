@@ -17,8 +17,8 @@ function realFsOps(): IntegrityFsOps {
       const results: string[] = [];
       function walk(d: string, prefix: string) {
         for (const entry of fs.readdirSync(d, { withFileTypes: true })) {
-          if (entry.isDirectory()) walk(path.join(d, entry.name), path.join(prefix, entry.name));
-          else results.push(prefix ? path.join(prefix, entry.name) : entry.name);
+          if (entry.isDirectory()) walk(path.join(d, entry.name), path.posix.join(prefix, entry.name));
+          else results.push(prefix ? path.posix.join(prefix, entry.name) : entry.name);
         }
       }
       walk(dir, "");

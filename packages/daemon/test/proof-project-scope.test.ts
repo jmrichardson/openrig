@@ -2,7 +2,7 @@
 // containment per project root; unqualified scopes keep the selected `workspace.slices_root` behavior.
 import { afterEach, describe, expect, it } from "vitest";
 import * as fs from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import YAML from "yaml";
 import { Hono } from "hono";
@@ -104,7 +104,7 @@ describe("project-qualified proof scope (#132)", () => {
     expect((await judged.json()).error).toBe("path_escape");
     const outside = fs.realpathSync(fs.mkdtempSync(join(tmpdir(), "proof-outside-"))); fixtures.push(outside);
     fs.writeFileSync(join(outside, "evidence.md"), "outside");
-    fs.symlinkSync(outside, join(f.alpha.slice, "proof/outside"));
+    fs.symlinkSync(outside, join(f.alpha.slice, "proof/outside"), process.platform === "win32" ? "junction" : "dir");
     const evidence = await f.judge("alpha:m0/slices/01-t001", { evidence: ["proof/outside/evidence.md"] });
     expect((await evidence.json()).error).toBe("path_escape");
     expect(fs.existsSync(join(f.alpha.slice, "proof/judgments"))).toBe(false);
@@ -132,11 +132,15 @@ describe("project-qualified proof scope (#132)", () => {
     const f = fixture();
     for (const scope of ["C:\\Users\\x\\missions\\m0\\slices\\01-t001", "C:/Users/x/missions/m0/slices/01-t001"]) {
       const res = await f.get(`scope=${encodeURIComponent(scope)}`);
-      // resolved against the selected workspace like any unqualified scope (there it doesn't exist), never as project "C"
-      expect(await res.json(), scope).toMatchObject({ error: "scope_missing" });
+      // resolved against the selected workspace like any unqualified scope (there it doesn't exist, and a
+      // scope that is absolute on this platform escapes it), never as project "C"
+      expect(await res.json(), scope).toMatchObject({ error: isAbsolute(scope) ? "path_escape" : "scope_missing" });
     }
-    // a one-letter prefix with a relative scope is a project only when the catalog has it; here it hasn't
-    expect(await (await f.get(`scope=${encodeURIComponent("C:m0")}`)).json()).toMatchObject({ error: "scope_missing" });
+    // a one-letter prefix with a relative scope is a project only when the catalog has it; here it hasn't,
+    // so it stays a path: on Windows a drive-relative one, which on the workspace's drive names its m0
+    const oneLetter = await (await f.get(`scope=${encodeURIComponent("C:m0")}`)).json();
+    if (resolve(f.legacy.missions, "C:m0") === join(f.legacy.missions, "m0")) expect(oneLetter).toEqual(await (await f.get("scope=m0")).json());
+    else expect(oneLetter).toMatchObject({ error: "scope_missing" });
   });
 
   it("catalog-project reads report the source watcher as unavailable/unverified and name the project; workspace reads don't", async () => {
@@ -282,7 +286,8 @@ describe("project-qualified proof scope (#132)", () => {
     expect(viaScopes.readiness.items[0].revision).toBe(viaProof.items[0].revision);
   });
 
-  it("an unqualified scope whose mission folder has a colon still resolves as written, even when the prefix is a catalogued project", async () => {
+  // Windows file names cannot contain ':', so the colon-named mission folder cannot exist there.
+  it.skipIf(process.platform === "win32")("an unqualified scope whose mission folder has a colon still resolves as written, even when the prefix is a catalogued project", async () => {
     const f = fixture();
     // the selected workspace has a mission folder "alpha:trial"; "alpha" is also a catalogued project
     const trial = join(f.legacy.missions, "alpha:trial"), slice = join(trial, "slices", "01-t001");

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve, dirname } from "node:path";
+import { join, resolve, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { fireCompaction, StubCompactionError } from "../src/adapters/stub-compaction.js";
 
@@ -82,7 +82,7 @@ describe("stub compaction behavior fires the real precompact seam", () => {
       });
       const marker = JSON.parse(readFileSync(result.markerPath, "utf8"));
       expect(dirname(marker.outputDir)).toBe(join(dir, "packets"));
-      const out = { createdAt: marker.createdAt, outStamp: String(marker.outputDir).split("/").pop() };
+      const out = { createdAt: marker.createdAt, outStamp: basename(String(marker.outputDir)) };
       rmSync(dir, { recursive: true, force: true });
       return out;
     };

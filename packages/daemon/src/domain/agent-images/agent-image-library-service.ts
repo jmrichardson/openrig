@@ -16,6 +16,7 @@
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync, mkdirSync, unlinkSync, rmSync } from "node:fs";
 import { join, relative, dirname } from "node:path";
 import { parseAgentImageManifest } from "./manifest-parser.js";
+import { isRootedPath, ROOTED_PATH_RULE } from "../path-safety.js";
 import {
   AgentImageError,
   type AgentImageEntry,
@@ -317,10 +318,10 @@ export class AgentImageLibraryService {
       );
     }
     for (const relPath of fileContents.keys()) {
-      if (relPath.split(/[\\/]/).includes("..") || relPath.startsWith("/")) {
+      if (relPath.split(/[\\/]/).includes("..") || isRootedPath(relPath)) {
         throw new AgentImageError(
           "manifest_invalid",
-          `install file path '${relPath}' must be relative inside the image (no '..', no leading '/')`,
+          `install file path '${relPath}' must be relative inside the image (no '..', no ${ROOTED_PATH_RULE})`,
         );
       }
     }

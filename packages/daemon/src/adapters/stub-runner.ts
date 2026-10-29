@@ -405,6 +405,18 @@ export async function runStubRunner(args: StubRunnerArgs): Promise<void> {
   // daemon then sees the pane fall back to a shell and readiness fails (F1). This
   // timer never fires (its callback is a no-op); it exists only to ref the loop.
   const keepAlive = setInterval(() => { /* ref the event loop until termination */ }, 1 << 30);
+  // A POSIX tty echoes text sent to the pane although the stub never reads it, line by line (tmux pastes into a
+  // pane that never asked for bracketed paste without the delimiters). A Windows console echoes nothing unless a
+  // process reads, and OpenRig writes its payload there as console input with bracketed-paste delimiters and raw
+  // LFs for an editor. Echo that input the way the POSIX pane shows it; Ctrl+C still stops the stub.
+  if (process.platform === "win32" && process.stdin.isTTY) {
+    process.stdin.setRawMode(true);
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", (chunk: string) => {
+      if (chunk.includes("\x03")) process.emit("SIGINT");
+      process.stdout.write(chunk.replace(/\x1b\[20[01]~/g, "").replace(/\r\n?|\n/g, "\n"));
+    });
+  }
 
   // Record an honest exit on termination so the daemon's readiness never
   // false-greens a stopped seat off a stale ready sidecar.

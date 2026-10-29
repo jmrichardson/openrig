@@ -1,3 +1,6 @@
+import { windowsPathEntries } from "../adapters/windows-launch.js";
+import { statSync } from "node:fs";
+import path from "node:path";
 import type { ExecFn } from "../adapters/tmux.js";
 import { shellQuote } from "../adapters/shell-quote.js";
 
@@ -37,6 +40,20 @@ interface ProbeOptions {
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 
+/** cmd.exe has no `command -v`, and would interpret the name. Find it as cmd's own
+ * search does, on PATH with each PATHEXT extension, without running anything. */
+function windowsCommandPath(name: string): string | null {
+  const extensions = (process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean);
+  const names = extensions.some(ext => name.toLowerCase().endsWith(ext.toLowerCase())) ? [name] : extensions.map(ext => name + ext.toLowerCase());
+  for (const dir of windowsPathEntries(process.env.PATH ?? "")) {
+    for (const candidate of names) {
+      const file = path.resolve(dir, candidate);
+      try { if (statSync(file).isFile()) return file; } catch { /* next candidate */ }
+    }
+  }
+  return null;
+}
+
 /**
  * Provider-backed probe registry for CLI tools and system packages.
  * Uses injected ExecFn — no real shell execution in tests.
@@ -57,6 +74,13 @@ export class RequirementsProbeRegistry {
    * Returns the resolved binary path in detectedPath, version stays null.
    */
   async probeCli(name: string): Promise<ProbeResult> {
+    if (this.platform === "win32") {
+      const detectedPath = windowsCommandPath(name);
+      return {
+        name, kind: "cli_tool", status: detectedPath ? "installed" : "missing", version: null,
+        detectedPath, provider: null, command: null, installHints: null, error: null,
+      };
+    }
     const cmd = `command -v ${shellQuote(name)}`;
     try {
       const stdout = await this.execWithTimeout(cmd);

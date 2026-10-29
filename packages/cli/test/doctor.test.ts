@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import { join, resolve } from "node:path";
 import { createProgram } from "../src/index.js";
 import { Command } from "commander";
 import { doctorCommand, runDoctorChecks, type DoctorDeps } from "../src/commands/doctor.js";
@@ -15,7 +16,7 @@ const defaultConfig = {
 function makeDeps(overrides?: Partial<DoctorDeps>): DoctorDeps {
   return {
     exists: () => true,
-    baseDir: "/install/cli/dist",
+    baseDir: resolve("install", "cli", "dist"),
     readFile: () => null,
     exec: (cmd: string) => {
       if (cmd === "tmux -V") return "tmux 3.4\n";
@@ -34,11 +35,12 @@ function makeDeps(overrides?: Partial<DoctorDeps>): DoctorDeps {
 
 describe("runDoctorChecks", () => {
   it("monorepo command-dir base resolves via the same daemon root seam as daemon start", () => {
+    const packagesDir = resolve("fixture", "openrig", "packages");
     const deps = makeDeps({
-      baseDir: "/Users/example/code/openrig/packages/cli/src/commands",
+      baseDir: join(packagesDir, "cli", "src", "commands"),
       exists: (p) =>
-        p === "/Users/example/code/openrig/packages/daemon/dist/index.js"
-        || p === "/Users/example/code/openrig/packages/ui/dist/index.html",
+        p === join(packagesDir, "daemon", "dist", "index.js")
+        || p === join(packagesDir, "ui", "dist", "index.html"),
     });
 
     const { checks } = runDoctorChecks(deps);
@@ -47,7 +49,7 @@ describe("runDoctorChecks", () => {
   });
 
   it("daemon dist found -> pass", () => {
-    const deps = makeDeps({ exists: (p) => p.endsWith("dist/index.js") || p.endsWith("index.html") });
+    const deps = makeDeps({ exists: (p) => p.endsWith(join("dist", "index.js")) || p.endsWith("index.html") });
     const { checks } = runDoctorChecks(deps);
     const daemonCheck = checks.find((c) => c.name === "daemon_dist");
     expect(daemonCheck?.status).toBe("pass");
@@ -83,14 +85,14 @@ describe("runDoctorChecks", () => {
   });
 
   it("UI dist found -> pass", () => {
-    const deps = makeDeps({ exists: (p) => p.endsWith("index.html") || p.endsWith("dist/index.js") });
+    const deps = makeDeps({ exists: (p) => p.endsWith("index.html") || p.endsWith(join("dist", "index.js")) });
     const { checks } = runDoctorChecks(deps);
     const uiCheck = checks.find((c) => c.name === "ui_dist");
     expect(uiCheck?.status).toBe("pass");
   });
 
   it("UI dist missing -> fail with guidance", () => {
-    const deps = makeDeps({ exists: (p) => p.endsWith("dist/index.js") }); // daemon exists but not UI
+    const deps = makeDeps({ exists: (p) => p.endsWith(join("dist", "index.js")) }); // daemon exists but not UI
     const { checks } = runDoctorChecks(deps);
     const uiCheck = checks.find((c) => c.name === "ui_dist");
     expect(uiCheck?.status).toBe("fail");

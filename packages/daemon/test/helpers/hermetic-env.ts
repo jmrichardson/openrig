@@ -324,7 +324,10 @@ export function prepareHermeticEnv(opts: PrepareHermeticEnvOptions = {}): Hermet
   const stateDir = join(root, "state");
   // Keep both compatibility and explicit socket paths below sun_path's cap.
   const tmuxTmpDir = join(root, "tx");
-  const tmuxSocketPath = join(root, "tmux.sock");
+  // Windows: libuv finds only tmux.exe on PATH, so no wrapper reaches the daemon's tmux. psmux keys
+  // its servers by PSMUX_DATA_DIR instead, and `-S <PSMUX_DATA_DIR>\default` names that default server.
+  const psmuxDataDir = join(root, "psmux");
+  const tmuxSocketPath = process.platform === "win32" ? join(psmuxDataDir, "default") : join(root, "tmux.sock");
   const tmuxWrapperDir = join(root, "bin");
   const tmuxWrapperPath = join(tmuxWrapperDir, "tmux");
   for (const dir of [home, openrigHome, stateDir, tmuxTmpDir, tmuxWrapperDir]) {
@@ -376,6 +379,7 @@ process.exit(result.status ?? 1);
   // -S socket is the identity-bearing half, so a missing directory cannot make a
   // later invocation fall back to the operator's default server.
   env.TMUX_TMPDIR = tmuxTmpDir;
+  if (process.platform === "win32") env.PSMUX_DATA_DIR = psmuxDataDir;
   env.PATH = [tmuxWrapperDir, runtimeStubDir, originalPath].filter(Boolean).join(delimiter);
   // Forced-local: never resolve/attach the shared fleet kernel.
   env.OPENRIG_NO_KERNEL = "1";
@@ -388,7 +392,7 @@ process.exit(result.status ?? 1);
 
   const cleanup = () => {
     if (!existsSync(root)) return;
-    if (existsSync(tmuxSocketPath)) {
+    if (existsSync(process.platform === "win32" ? psmuxDataDir : tmuxSocketPath)) {
       let privateServerRunning = true;
       let privateProcesses = "";
       try {

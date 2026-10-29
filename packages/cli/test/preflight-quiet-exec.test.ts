@@ -21,7 +21,7 @@ describe("quietPreflightExec", () => {
 
   it("still lets the tmux probe tell no server yet from a broken server", async () => {
     const run = (stderr: string) => probeTmuxControlAsync(async (cmd) =>
-      cmd === "tmux -V" ? "tmux 3.4" : quietPreflightExec(failWith(stderr)));
+      cmd === "tmux -V" ? (process.platform === "win32" ? "tmux 3.4.0\npsmux 3.4.0" : "tmux 3.4") : quietPreflightExec(failWith(stderr)));
     expect((await run("error connecting to /tmp/tmux-1/default (No such file or directory)")).code).toBe("no_server");
     expect(await run("server exited unexpectedly")).toMatchObject({ code: "unhealthy", available: false, detail: expect.stringContaining("server exited unexpectedly") });
   });

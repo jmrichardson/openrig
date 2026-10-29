@@ -1,0 +1,83 @@
+name: Native Windows (experimental)
+
+# Builds, type-checks and runs the tests that exercise the experimental native Windows path
+# (psmux, Windows PowerShell, named pipes, CIM process facts) on a clean Windows runner, then
+# assembles the package. tests.yml runs the full package suites on macOS. No provider
+# credentials or operator configuration are supplied. See
+# docs/reference/windows-support-experiment.md.
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-native-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run lint
+      # Node expands the glob itself; scripts/windows-native-workflow.test.mjs checks that every package
+      # test file with a Windows-only case is named in a step below.
+      - name: Repository script suite
+        run: node --test --test-concurrency=1 --test-timeout=300000 scripts/*.test.mjs
+      - name: Repository reference, docs, skill mirror and context pack checks
+        run: node --import tsx scripts/check-first-run-references.mjs && node scripts/check-docs-guard.mjs && node scripts/mirror-skills.mjs --check && node scripts/generate-context-packs.mjs --check
+      - name: Install pinned portable psmux
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'psmux.zip'
+          Invoke-WebRequest 'https://github.com/psmux/psmux/releases/download/v3.4.0/psmux-v3.4.0-windows-x64.zip' -OutFile $archive
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne 'a66b6be7c13c6fa0dc3660a267b9e34eaa91a4eb7f07fbd55a0468018bd0f721') { throw 'psmux archive checksum mismatch' }
+          $install = Join-Path $env:RUNNER_TEMP 'psmux'
+          Expand-Archive $archive $install
+          $binary = @(Get-ChildItem $install -Filter tmux.exe -Recurse)
+          if ($binary.Count -ne 1) { throw 'Expected one portable tmux.exe' }
+          "OPENRIG_TEST_PSMUX=$($binary[0].FullName)" >> $env:GITHUB_ENV
+          $binary[0].DirectoryName >> $env:GITHUB_PATH
+          "PSMUX_DATA_DIR=$env:RUNNER_TEMP\openrig-psmux" >> $env:GITHUB_ENV
+      - name: Native terminal, identity and production drain tests
+        working-directory: packages/daemon
+        run: npx vitest run test/windows-terminal-native.test.ts test/windows-launch.test.ts test/windows-pi-command.test.ts test/windows-process-lineage.test.ts test/windows-process-census.test.ts test/windows-process-control.test.ts test/windows-daemon-control.test.ts test/windows-managed-launch.test.ts test/windows-token-launch.test.ts test/windows-classic-claude.test.ts test/omp-runner.test.ts test/workflow-guidance.test.ts test/proof-judgments.test.ts test/resume-token-validation.test.ts test/native-process-lineage.test.ts test/tmux-adapter.test.ts test/tmux-argv-exec.test.ts test/tmux-psmux-adapter.test.ts test/windows-idle-shell-native.test.ts test/windows-seat-bin.test.ts
+      - name: Native runtime, hooks and recovery regressions
+        working-directory: packages/daemon
+        run: npx vitest run test/windows-runtime-hooks.test.ts test/windows-runtime-recovery.test.ts test/windows-resource-projection.test.ts test/windows-probe-cleanup.test.ts test/codex-thread-id.test.ts test/control-plane-census.test.ts test/current-generation-record.test.ts test/session-fingerprinter.test.ts test/seat-identity-reconciler.test.ts test/walk-consumption-primitives.test.ts test/process-census.test.ts test/omp-runtime-adapter.test.ts test/restore-preconditions.test.ts test/codex-activity-hooks.test.ts test/codex-hook-trust.test.ts test/codex-runtime-adapter.test.ts test/codex-windows-sandbox.test.ts test/claude-compaction-packet-root.test.ts test/seat-restart-in-place.test.ts test/seat-runtime-switch-service.test.ts test/codex-resume.test.ts test/transcript-rotation.test.ts test/refocus-windows-trace.test.ts test/openrig-upgrade-skill.test.ts test/native-resume-probe.test.ts test/refocus-occupant-baseline.test.ts test/review-freeze.test.ts test/claude-team-permissions.test.ts test/kernel-authority.test.ts test/team-permission-default.test.ts
+      - name: Native terminal views and herdr
+        working-directory: packages/daemon
+        run: npx vitest run test/herdr-windows.test.ts test/windows-tile-attach.test.ts test/herdr-windows-native.test.ts test/herdr-socket-utf8.test.ts test/terminal-provider-ride.test.ts test/s08-open-rig-herdr.test.ts test/terminal-service.test.ts
+      - name: Native resource and containment regressions
+        working-directory: packages/daemon
+        run: npx vitest run test/agent-manifest.test.ts test/agent-resolver.test.ts test/rigspec-schema.test.ts test/package-manifest.test.ts test/requirements-probe.test.ts test/bundle-types.test.ts test/draft-rig-generator.test.ts test/files-path-safety.test.ts test/context-pack-manifest-parser.test.ts test/context-pack-library-service.test.ts test/profile-source-resolver.test.ts test/agent-image-manifest-parser.test.ts test/agent-image-library-service.test.ts test/health-diagnosis.test.ts test/spec-library-workflow-folder-route.test.ts test/replace-file.test.ts test/fixture-home-cleanup.test.ts test/policy-spec.test.ts test/skill-discovery.test.ts
+      - name: CLI lifecycle
+        working-directory: packages/cli
+        run: npx vitest run test/daemon-lifecycle.test.ts test/daemon-lifecycle-status.test.ts test/daemon-lifecycle-event-loop.test.ts test/browser-launch.test.ts test/log-tail.test.ts test/terminal-window-windows.test.ts test/terminal-window-windows-herdr.test.ts test/terminal-window-herdr-native.test.ts test/herdr-launch-config.test.ts
+      - name: Native setup and CLI regressions
+        working-directory: packages/cli
+        run: npx vitest run test/setup-windows.test.ts test/setup.test.ts test/setup-doctor-auth.test.ts test/doctor.test.ts test/preflight.test.ts test/codex-auth-lib.test.ts test/attach.test.ts test/attach-tmux-exec.test.ts test/chatroom.test.ts test/chatroom-tmux.test.ts test/heartbeat.test.ts test/ask-wake-windows.test.ts test/destroy-native-listener.test.ts test/tui-command.test.ts test/proof.test.ts test/local-reading.test.ts test/plugin.test.ts test/client-terminal-token.test.ts test/openrig-home-empty.test.ts test/team-permission-parser.test.ts
+      - name: Native TUI pipes, reading and live events
+        run: npm run test -w packages/tui -- test/socket-windows.test.ts test/socket.test.ts test/socket-collision.test.ts test/socket-concurrency.test.ts test/socket-commands-query.test.ts test/reading-journey.test.ts test/reading-native-paths.test.ts test/mission-outcomes.test.ts test/activity-stream-response.test.ts test/activity-stream-deadline.test.ts test/live-events-close-race.test.ts test/page-error-response.test.ts test/live-events.test.ts test/browser-boundary-tui-render.test.ts
+      - name: Native TUI entry and navigation regressions
+        working-directory: packages/tui
+        run: npx vitest run test/cli-entry.test.ts test/spec-graph-launch.test.ts test/hydrate.test.ts test/attention.test.ts
+      - name: Native package assembly
+        run: npm run build:package:windows
+      - name: Production CLI launch, messaging and daemon restart
+        run: node scripts/verify-windows-native.mjs "$env:OPENRIG_TEST_PSMUX"
+      - name: Packaged help pack is its source byte for byte
+        run: node -e "const fs = require('node:fs'); if (!fs.readFileSync('packages/cli/daemon/context-packs/help/help.md').equals(fs.readFileSync('docs/reference/help.md'))) { console.error('packages/cli/daemon/context-packs/help/help.md differs from docs/reference/help.md'); process.exit(1); }"

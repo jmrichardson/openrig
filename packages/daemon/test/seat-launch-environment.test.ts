@@ -6,7 +6,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createServer } from "node:http";
 import Database from "better-sqlite3";
-import { SeatLaunchEnvironment, publicSeatEnvironment } from "../src/domain/seat-launch-environment.js";
+import { SeatLaunchEnvironment, launchExecutable, publicSeatEnvironment } from "../src/domain/seat-launch-environment.js";
 import { ClaudeManagedLaunch } from "../src/domain/claude-managed-launch.js";
 import { ClaudeCodeAdapter } from "../src/adapters/claude-code-adapter.js";
 import { CodexRuntimeAdapter } from "../src/adapters/codex-runtime-adapter.js";
@@ -61,6 +61,7 @@ function fixture() {
   async function execute(command: string, managed = false) {
     expect(command).not.toContain(env.OPENRIG_ACTIVITY_HOOK_TOKEN);
     expect(command).not.toContain(env.ANTHROPIC_API_KEY);
+    expect(command).not.toContain("OPENRIG_CLI_ENTRY");
     const { stdout } = await exec("/bin/bash", ["--noprofile", "--rcfile", rc, "-ic", command], { env, cwd: binding.cwd, timeout: 5000 });
     const observed = JSON.parse(stdout);
     expect(observed).toMatchObject({ body: { node: "node-current" }, home: env.OPENRIG_HOME, node: "node-current", OPENRIG_DB: env.OPENRIG_DB, TMUX_TMPDIR: env.TMUX_TMPDIR });
@@ -113,7 +114,7 @@ describe.skipIf(process.platform === "win32")("seat launch environment after she
     db.exec("INSERT INTO bindings VALUES ('b','node-current','seat@rig','%1'); INSERT INTO occupant_tenures VALUES ('node-current','current-generation',1)");
     // Include the same user-tool dir in the existing managed PATH; managed PATH/HOME stay bound.
     f.env.PATH += ":" + path.join(f.root, "user-bin");
-    const managed = new ClaudeManagedLaunch(db, f.env, {});
+    const managed = new ClaudeManagedLaunch(db, f.env, {}, undefined, undefined, "linux");
     const prepared = await managed.prepare({ nodeId: "node-current", session: "seat@rig", pane: "%1" }, "auto");
     const observed = await f.execute(prepared.command(["--permission-mode", "auto"]), true);
     expect(observed.HOME).toBe(f.env.HOME); expect(observed.PATH).toBe(f.env.PATH);
@@ -127,7 +128,7 @@ describe.skipIf(process.platform === "win32")("seat launch environment after she
     db.exec("CREATE TABLE nodes(id TEXT,runtime TEXT,cwd TEXT); CREATE TABLE bindings(id TEXT,node_id TEXT,tmux_session TEXT,tmux_pane TEXT); CREATE TABLE occupant_tenures(node_id TEXT,generation_uuid TEXT,generation_ordinal INTEGER)");
     db.prepare("INSERT INTO nodes VALUES ('node-current','claude-code',?)").run(f.binding.cwd);
     db.exec("INSERT INTO bindings VALUES ('b','node-current','seat@rig','%1'); INSERT INTO occupant_tenures VALUES ('node-current','current-generation',1)");
-    const prepared = await new ClaudeManagedLaunch(db, f.env, {}).prepare({ nodeId: "node-current", session: "seat@rig", pane: "%1" }, "auto");
+    const prepared = await new ClaudeManagedLaunch(db, f.env, {}, undefined, undefined, "linux").prepare({ nodeId: "node-current", session: "seat@rig", pane: "%1" }, "auto");
     const command = prepared.command(["--permission-mode", "auto"]);
     expect(command).not.toContain(f.env.OPENRIG_URL);
     expect(command).toContain('export OPENRIG_URL="${OPENRIG_URL-}"');
@@ -151,5 +152,15 @@ describe.skipIf(process.platform === "win32")("seat launch environment after she
   it("explicit allowlist never types unknown secrets or runtime/user variables", () => {
     expect(publicSeatEnvironment({ OPENRIG_HOME: "/instance", OPENRIG_URL: "http://127.0.0.1:1234", OPENRIG_NEW_SECRET: "secret", OPENRIG_ACTIVITY_HOOK_TOKEN: "token", ANTHROPIC_API_KEY: "key", HOME: "/home", CLAUDE_CONFIG_DIR: "/claude", CODEX_HOME: "/codex" })).toEqual({ OPENRIG_HOME: "/instance", OPENRIG_URL: "http://127.0.0.1:1234" });
     expect(publicSeatEnvironment({ OPENRIG_URL: "http://user:secret@127.0.0.1" })).toEqual({});
+  });
+});
+
+describe("launchExecutable on the POSIX launch PATH", () => {
+  it("still resolves an empty PATH element against the working directory, as execvp does", () => {
+    const cwd = mkdtempSync(path.join(tmpdir(), "seat-exe-"));
+    cleanup.push(() => rmSync(cwd, { recursive: true, force: true }));
+    writeFileSync(path.join(cwd, "codex"), "#!/bin/sh\n", { mode: 0o755 });
+    expect(launchExecutable("codex", ["", "/nonexistent"].join(path.delimiter), cwd)).toBe(path.join(cwd, "codex"));
+    expect(() => launchExecutable("codex", "/nonexistent", cwd)).toThrow("Seat launch requires codex on the daemon launch PATH.");
   });
 });

@@ -60,7 +60,8 @@ export function generateDraftRig(sessions: DiscoveredSession[]): DraftResult {
   const pods: RigSpecPod[] = [];
 
   for (const [cwd, groupSessions] of cwdGroups) {
-    const baseName = cwd !== "__no-cwd__" ? cwd.split("/").pop() ?? "pod" : "default";
+    // Windows pane cwds separate with "\".
+    const baseName = cwd !== "__no-cwd__" ? cwd.split(process.platform === "win32" ? /[\\/]/ : "/").pop() ?? "pod" : "default";
     const podId = dedupeId(sanitizeId(baseName), podIds);
 
     const memberIds = new Set<string>();

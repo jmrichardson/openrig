@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { createServer, type Server, type Socket } from "node:net";
 import { mkdtempSync, rmSync, existsSync, unlinkSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { tmpdir } from "node:os";
 import { DispatchBuffer } from "../src/domain/gateway/dispatch-buffer.js";
 import { connectGateway } from "../src/domain/gateway/transport.js";
@@ -92,7 +92,8 @@ describe("A4a gateway transport e2e (real unix socket)", () => {
   });
   const setup = () => {
     home = mkdtempSync(join(tmpdir(), "a4a-e2e-"));
-    sockPath = join(home, "g.sock"); // short: <tmpdir>/a4a-e2eXXXXXX/g.sock
+    // Node IPC on Windows listens on a named pipe, not a filesystem path.
+    sockPath = process.platform === "win32" ? `\\\\.\\pipe\\${basename(home)}` : join(home, "g.sock"); // short: <tmpdir>/a4a-e2eXXXXXX/g.sock
     expect(sockPath.length).toBeLessThan(104); // sun_path guard
   };
 

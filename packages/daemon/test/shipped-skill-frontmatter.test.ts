@@ -9,7 +9,7 @@
 
 import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync, existsSync } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 import { parseSkillFrontmatter } from "../src/domain/skill-discovery.js";
 
 const PACKAGE_ROOT = resolve(import.meta.dirname, "..");
@@ -30,7 +30,7 @@ describe("shipped SKILL.md frontmatter", () => {
 
   it("finds shipped skills under every shipped root", () => {
     for (const root of SHIPPED_ROOTS) {
-      expect(skillFiles.some((f) => f.startsWith(root + "/")), `no SKILL.md under ${root}`).toBe(true);
+      expect(skillFiles.some((f) => f.startsWith(root + sep)), `no SKILL.md under ${root}`).toBe(true);
     }
   });
 

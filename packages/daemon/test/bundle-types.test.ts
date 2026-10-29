@@ -31,6 +31,12 @@ const VALID_RAW = {
 };
 
 describe("Bundle types", () => {
+  // Windows path rules; elsewhere a drive-letter name is an ordinary relative name (see path-safety.test.ts).
+  it.skipIf(process.platform !== "win32").each(["C:rig.yaml", "C:/rig.yaml", "C:\\rig.yaml", "\\\\server\\share\\rig.yaml"])("rejects Windows roots in archive-relative paths: %s", (path) => {
+    expect(isRelativeSafePath(path)).toBe(false);
+    expect(validateBundleManifest({ ...VALID_RAW, rig_spec: path }).valid).toBe(false);
+  });
+
   it("round-trips optional legacy setup declarations without checking them", () => {
     const preconditions = [{ name: "Prepare source", commands: ["cd source", "npm ci"] }, { name: "Sign in" }];
     const normalized = normalizeBundleManifest({ ...VALID_RAW, preconditions });

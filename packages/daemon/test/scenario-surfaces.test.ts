@@ -12,6 +12,7 @@ import {
   UnboundSurfaceError,
   type SurfaceContext,
 } from "./helpers/scenario-surfaces.js";
+import { controlEndpoint } from "../../tui/src/socket-server.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const RIG_BIN = resolve(HERE, "../../cli/dist/bin-wrapper.js");
@@ -61,7 +62,8 @@ describe("surface readers — tui_socket `state` query (fake unix socket)", () =
         }
       });
     });
-    await new Promise<void>((r) => server.listen(sockPath, r));
+    // The shipped TUI listens on a named pipe derived from the path on Windows.
+    await new Promise<void>((r) => server.listen(controlEndpoint(sockPath), r));
     try {
       const ctx: SurfaceContext = {
         rigBin: RIG_BIN,

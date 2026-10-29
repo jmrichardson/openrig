@@ -32,15 +32,19 @@ function mockTmux() {
   } as unknown as ConstructorParameters<typeof ClaudeCodeAdapter>[0]["tmux"];
 }
 
+// The adapters join paths with node:path, so keys are stored with "/" separators
+// on every platform.
+const key = (p: string) => p.replaceAll("\\", "/");
+
 function mockClaudeFs(files?: Record<string, string>): ClaudeAdapterFsOps & { _store: Record<string, string> } {
   const store: Record<string, string> = { ...files };
   return {
-    readFile: (p: string) => { if (p in store) return store[p]!; throw new Error(`Not found: ${p}`); },
-    writeFile: (p: string, c: string) => { store[p] = c; },
-    exists: (p: string) => p in store,
+    readFile: (p: string) => { if (key(p) in store) return store[key(p)]!; throw new Error(`Not found: ${p}`); },
+    writeFile: (p: string, c: string) => { store[key(p)] = c; },
+    exists: (p: string) => key(p) in store,
     mkdirp: () => {},
     copyFile: () => {},
-    listFiles: (dir: string) => Object.keys(store).filter((k) => k.startsWith(dir + "/")).map((k) => k.slice(dir.length + 1)),
+    listFiles: (dir: string) => Object.keys(store).filter((k) => k.startsWith(key(dir) + "/")).map((k) => k.slice(key(dir).length + 1)),
     homedir: "/home/test",
     _store: store,
   } as ClaudeAdapterFsOps & { _store: Record<string, string> };
@@ -49,11 +53,11 @@ function mockClaudeFs(files?: Record<string, string>): ClaudeAdapterFsOps & { _s
 function mockCodexFs(files?: Record<string, string>): CodexAdapterFsOps & { _store: Record<string, string> } {
   const store: Record<string, string> = { ...files };
   return {
-    readFile: (p: string) => { if (p in store) return store[p]!; throw new Error(`Not found: ${p}`); },
-    writeFile: (p: string, c: string) => { store[p] = c; },
-    exists: (p: string) => p in store,
+    readFile: (p: string) => { if (key(p) in store) return store[key(p)]!; throw new Error(`Not found: ${p}`); },
+    writeFile: (p: string, c: string) => { store[key(p)] = c; },
+    exists: (p: string) => key(p) in store,
     mkdirp: () => {},
-    listFiles: (dir: string) => Object.keys(store).filter((k) => k.startsWith(dir + "/")).map((k) => k.slice(dir.length + 1)),
+    listFiles: (dir: string) => Object.keys(store).filter((k) => k.startsWith(key(dir) + "/")).map((k) => k.slice(key(dir).length + 1)),
     homedir: "/home/test",
     _store: store,
   } as CodexAdapterFsOps & { _store: Record<string, string> };

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { PackageResolver, type FsOps } from "../src/domain/package-resolver.js";
+import { fixtureKey, nativePath } from "./helpers/fixture-path.js";
 
 const VALID_MANIFEST = `
 schema_version: 1
@@ -22,10 +23,11 @@ name: test-pkg
 function mockFs(files: Record<string, string>): FsOps {
   return {
     readFile: vi.fn((p: string) => {
-      if (files[p]) return files[p]!;
+      const k = fixtureKey(files, p);
+      if (k !== undefined && files[k]) return files[k]!;
       throw new Error(`ENOENT: ${p}`);
     }),
-    exists: vi.fn((p: string) => p in files),
+    exists: vi.fn((p: string) => fixtureKey(files, p) !== undefined),
   };
 }
 
@@ -88,7 +90,7 @@ describe("PackageResolver", () => {
     const result = resolver.resolve("./my-pkg", "/home/user/code");
 
     expect(result.sourceKind).toBe("local_path");
-    expect(result.sourceRef).toBe("/home/user/code/my-pkg");
+    expect(result.sourceRef).toBe(nativePath("/home/user/code/my-pkg"));
     expect(result.manifest.name).toBe("test-pkg");
   });
 });

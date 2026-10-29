@@ -3,7 +3,7 @@ import { execFile, type ChildProcess } from "node:child_process";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { createServer, type Server } from "node:http";
-import { join, dirname, resolve } from "node:path";
+import { join, dirname, resolve, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { StubScript } from "../src/adapters/stub-script.js";
 
@@ -91,7 +91,7 @@ describe("stub-runner FULL determinism pin (PRD §5, R3)", () => {
       pane: paneNorm,
       events: sink.filter((c) => c.run === run).map((c) => c.body),
       markerCreatedAt: marker.createdAt,
-      outStamp: String(marker.outputDir).split("/").pop() ?? "",
+      outStamp: basename(String(marker.outputDir)),
     };
   }
 

@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { OMP_MAX_REASSEMBLED_FRAME_BYTES, OmpFrameDecoder, ompProtocolV2Limit, type OmpFrameResult } from "../src/adapters/omp-rpc-frame.js";
 import { RunnerCore, type RunnerIo } from "../src/adapters/pi-runner.js";
 import type { PiRunnerState } from "../src/adapters/pi-runner-protocol.js";
+import { installNativeNodeFake } from "../../../test/native-node-fake.js";
 
 const MiB = 1024 * 1024;
 /** OMP v18.5.0's chunk payload size (rpc-frame.ts RPC_CHUNK_PAYLOAD_BYTES). */
@@ -362,8 +363,9 @@ describe("OMP runner over protocol v2 (#1275)", () => {
 const RUNNER = nodePath.join(__dirname, "..", "src", "adapters", "pi-runner.ts");
 const FAKE_OMP = String.raw`
 const fs = require("node:fs"), readline = require("node:readline");
-const v2 = process.env.HOME.endsWith("/v2"); // the seat HOME is the only env the runner forwards that the test can name
+const v2 = require("node:path").basename(process.env.HOME) === "v2"; // the seat HOME is the only env the runner forwards that the test can name
 const argv = process.argv.slice(2), sessionFile = argv[argv.indexOf("--session") + 1];
+fs.writeFileSync(require("node:path").join(process.env.HOME, "omp.pids"), JSON.stringify([process.pid, process.ppid]));
 const entries = () => fs.readFileSync(sessionFile, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)).filter((e) => e.type !== "session");
 let version = 1, chunkId = 0;
 const write = (frame) => {
@@ -391,6 +393,8 @@ async function restoreThroughRunner(v2: boolean): Promise<{ cursor: string | und
   fs.mkdirSync(bin);
   fs.writeFileSync(nodePath.join(root, "fake-omp.cjs"), FAKE_OMP);
   fs.writeFileSync(nodePath.join(bin, "omp"), `#!/bin/sh\nexec "${process.execPath}" "${nodePath.join(root, "fake-omp.cjs")}" "$@"\n`, { mode: 0o755 });
+  // The runner starts Windows OMP only from a native omp.exe.
+  if (process.platform === "win32") installNativeNodeFake(bin, "omp", FAKE_OMP);
   // The seat HOME is <stateRoot>/<sessionName>; the fake reads v1/v2 from its name.
   const sessionName = v2 ? "v2" : "v1";
   const seat = nodePath.join(root, "state", sessionName);
@@ -402,7 +406,7 @@ async function restoreThroughRunner(v2: boolean): Promise<{ cursor: string | und
   const child = spawn(process.execPath, [
     "--import", "tsx", RUNNER, "--runtime", "omp", "--approval-mode", "always-ask", "--session-name", sessionName,
     "--state-root", nodePath.join(root, "state"), "--cwd", root, "--launch-id", "launch-1", "--session", sessionFile,
-  ], { env: { PATH: `${bin}:/usr/bin:/bin`, HOME: root, TMPDIR: os.tmpdir() }, stdio: ["pipe", "pipe", "pipe"] });
+  ], { env: { PATH: process.platform === "win32" ? bin : `${bin}:/usr/bin:/bin`, HOME: root, TMPDIR: os.tmpdir() }, stdio: ["pipe", "pipe", "pipe"] });
   let output = "";
   child.stdout.on("data", (d) => { output += d; });
   child.stderr.on("data", (d) => { output += d; });
@@ -415,6 +419,14 @@ async function restoreThroughRunner(v2: boolean): Promise<{ cursor: string | und
   const exited = new Promise((r) => child.once("close", r));
   child.kill();
   await exited;
+  // Killing the runner leaves OMP to exit on its stdin's EOF. Wait for it (and on Windows its native
+  // forwarder, its parent), which hold the temp root as their cwd and bin/omp.exe open until they exit.
+  const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  const ompPids = JSON.parse(fs.readFileSync(nodePath.join(seat, "omp.pids"), "utf8")) as number[];
+  for (const deadline = Date.now() + 10_000; ompPids.some(alive);) {
+    if (Date.now() > deadline) throw new Error(`fake OMP (pids ${ompPids.join(", ")}) did not exit after its runner stopped`);
+    await new Promise((r) => setTimeout(r, 50));
+  }
   return { cursor: state().lastEntryId, output, last: entries.at(-1)!.id as string };
 }
 

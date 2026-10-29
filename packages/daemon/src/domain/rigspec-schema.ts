@@ -16,7 +16,8 @@ import type {
   WorkspaceRepoSpec,
 } from "./types.js";
 import { WORKSPACE_KINDS } from "./types.js";
-import { validateSafePath } from "./path-safety.js";
+import { isAbsolute } from "node:path";
+import { isRootedPath, validateSafePath } from "./path-safety.js";
 import { CLAUDE_MANAGED_BLOCK_FILES } from "./managed-blocks.js";
 import { canonicalCompactionStrategy, canonicalContinuityMechanic } from "./agent-manifest.js";
 import { unknownLevelWarning } from "./seat-effort.js";
@@ -627,11 +628,11 @@ function validateMember(member: Record<string, unknown>, index: number, podPrefi
     } else if (ref.startsWith("local:")) {
       const path = ref.slice("local:".length);
       if (!path) errors.push(`${prefix}.agent_ref: local: ref must have a path`);
-      else if (path.startsWith("/")) errors.push(`${prefix}.agent_ref: local: ref must be a relative path (got "${ref}")`);
+      else if (isRootedPath(path)) errors.push(`${prefix}.agent_ref: local: ref must be a relative path (got "${ref}")`);
     } else if (ref.startsWith("path:")) {
       const path = ref.slice("path:".length);
       if (!path) errors.push(`${prefix}.agent_ref: path: ref must have a path`);
-      else if (!path.startsWith("/")) errors.push(`${prefix}.agent_ref: path: ref must be an absolute path (got "${ref}")`);
+      else if (!isAbsolute(path)) errors.push(`${prefix}.agent_ref: path: ref must be an absolute path (got "${ref}")`);
     }
   }
 

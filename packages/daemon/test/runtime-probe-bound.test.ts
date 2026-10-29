@@ -13,6 +13,11 @@ import { migrate } from "../src/db/migrate.js";
 import { ALL_MIGRATIONS } from "../src/db/all-migrations.js";
 import { RuntimeVerifier, probeTimeoutOutcome } from "../src/domain/runtime-verifier.js";
 
+// cmd.exe runs neither shebangs nor extensionless files: give a fake script a launcher it finds through PATHEXT.
+function addWindowsLauncher(script: string): void {
+  if (process.platform === "win32") fs.writeFileSync(`${script}.cmd`, `@"${process.execPath}" "%~dp0${path.basename(script)}" %*\r\n`);
+}
+
 // A fake runtime: logs each start's pid and process group, then per mode for --version and --help.
 // "hang" ignores stdin, HUP and TERM and leaves a child in its group that ignores them too.
 type Mode = "ok" | "fail" | "hang";
@@ -24,7 +29,7 @@ const fs = require("node:fs");
 const { spawn, execFileSync } = require("node:child_process");
 const arg = process.argv[2];
 const mode = arg === "--version" ? ${JSON.stringify(version)} : arg === "--help" ? ${JSON.stringify(help)} : "fail";
-const pgid = Number(execFileSync("ps", ["-o", "pgid=", "-p", String(process.pid)]).toString().trim());
+const pgid = process.platform === "win32" ? null : Number(execFileSync("ps", ["-o", "pgid=", "-p", String(process.pid)]).toString().trim());
 if (mode === "hang") {
   process.on("SIGTERM", () => {});
   process.on("SIGHUP", () => {});
@@ -41,16 +46,18 @@ if (mode === "hang") {
   process.exit(1);
 }
 `, { mode: 0o755 });
+  addWindowsLauncher(path.join(dir, name));
   return { dir, log };
 }
 const starts = (log: string): Array<{ arg: string; pids: number[]; pgid: number }> =>
   fs.existsSync(log) ? fs.readFileSync(log, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
 
 // A killed process keeps its pid until it is reaped (orphans by init, or launchd on macOS): every recorded pid and
-// group must be gone within REAP_BOUND_MS; anything left is named with its ps state.
+// group must be gone within REAP_BOUND_MS; anything left is named with its ps state. Windows has no process groups
+// (or ps): there every recorded pid must be gone.
 const REAP_BOUND_MS = 2_000;
 const exists = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
-const psRows = () => execFileSync("ps", ["-A", "-o", "pid=,pgid=,stat="]).toString().trim().split("\n")
+const psRows = () => process.platform === "win32" ? [] : execFileSync("ps", ["-A", "-o", "pid=,pgid=,stat="]).toString().trim().split("\n")
   .map((l) => l.trim().split(/\s+/)).map(([pid, pgid, stat]) => ({ pid: Number(pid), pgid: Number(pgid), stat: stat ?? "" }));
 async function leftAfterReapBound(s: { pids: number[]; pgid: number }) {
   const until = Date.now() + REAP_BOUND_MS;
@@ -61,8 +68,8 @@ async function leftAfterReapBound(s: { pids: number[]; pgid: number }) {
 describe("boundedProbeExec", () => {
   it("answers with stdout on exit 0, and rejects a failing command as before (not as a timeout)", async () => {
     const exec = boundedProbeExec(5_000, 500);
-    expect(await exec("printf 'codex-cli 0.200.0\\n'")).toBe("codex-cli 0.200.0\n");
-    const failed = await exec("printf oops >&2; exit 3").catch((e) => e);
+    expect(await exec(`${JSON.stringify(process.execPath)} -e "process.stdout.write('codex-cli 0.200.0\\n')"`)).toBe("codex-cli 0.200.0\n");
+    const failed = await exec(`${JSON.stringify(process.execPath)} -e "process.stderr.write('oops');process.exit(3)"`).catch((e) => e);
     expect(failed).toBeInstanceOf(Error);
     expect(failed).not.toBeInstanceOf(ProbeTimeoutError);
     expect(String(failed.message)).toContain("exit 3");
@@ -89,7 +96,8 @@ describe("boundedProbeExec", () => {
 });
 
 describe("boundedProbeExec where a process group can't be signalled, and with a descendant holding the output", () => {
-  it("Windows-like: the group stop reaches nothing, so the probe process itself is killed", async () => {
+  // Simulates Windows on POSIX through sh's `exec` and process groups; on Windows the real stopGroup runs above.
+  it.skipIf(process.platform === "win32")("Windows-like: the group stop reaches nothing, so the probe process itself is killed", async () => {
     const fake = fakeRuntime("hangy", "hang", "ok");
     // A group stop that kills nothing, as on Windows where kill(-pid) throws and stopGroup gives up.
     const noGroupKill = async () => {};
@@ -118,6 +126,7 @@ const child = spawn(process.execPath, ["-e", "process.on('SIGTERM',()=>{});setIn
 require("node:fs").writeFileSync(${JSON.stringify(log)}, JSON.stringify({ pid: process.pid, child: child.pid }));
 process.stdout.write("holder 4.5.6\\n", () => process.exit(0));
 `, { mode: 0o755 });
+    addWindowsLauncher(script);
     const started = performance.now();
     expect(await boundedProbeExec(5_000, 300)(`${script} --version`)).toBe("holder 4.5.6\n");
     expect(performance.now() - started).toBeLessThan(3_000);
@@ -140,6 +149,7 @@ const child = spawn(process.execPath, ["-e", "process.on('SIGTERM',()=>{});setIn
 require("node:fs").writeFileSync(${JSON.stringify(log)}, JSON.stringify({ child: child.pid }));
 process.stdout.write("late 1.0.0 " + "x".repeat(${SIZE}) + "\\n", () => process.exit(0));
 `, { mode: 0o755 });
+    addWindowsLauncher(script);
     const out = await boundedProbeExec(5_000, 300)(`${script} --version`);
     expect(out.length).toBe("late 1.0.0 ".length + SIZE + 1);
     expect(out.startsWith("late 1.0.0 ")).toBe(true);
@@ -149,7 +159,8 @@ process.stdout.write("late 1.0.0 " + "x".repeat(${SIZE}) + "\\n", () => process.
     expect(exists(child), `descendant ${child}`).toBe(false);
   });
 
-  it("output written in the last instant before the pipes close (a descendant's final line on TERM) is still read", async () => {
+  // The final line comes from a descendant's SIGTERM handler; Windows has no TERM, and taskkill /F ends a tree outright.
+  it.skipIf(process.platform === "win32")("output written in the last instant before the pipes close (a descendant's final line on TERM) is still read", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "runtime-probe-bound-tail-"));
     const script = path.join(dir, "tail");
     // The probe prints its version and exits 0; its descendant holds stdout, and on TERM writes a final line and exits.
@@ -158,6 +169,7 @@ const { spawn } = require("node:child_process");
 spawn(process.execPath, ["-e", "process.on('SIGTERM',()=>{process.stdout.write('TAIL ' + 'y'.repeat(200000) + '\\\\n',()=>process.exit(0))});setInterval(()=>{},1000)"], { stdio: ["ignore", "inherit", "inherit"] });
 process.stdout.write("tail 2.0.0\\n", () => process.exit(0));
 `, { mode: 0o755 });
+    addWindowsLauncher(script);
     const out = await boundedProbeExec(5_000, 300)(`${script} --version`);
     expect(out.startsWith("tail 2.0.0\n")).toBe(true);
     expect(out.endsWith("y\n"), `got ${out.length} bytes`).toBe(true);
@@ -170,13 +182,15 @@ describe("boundedProbeExec leaves a descendant that closed its stdio alone, as m
     const log = path.join(dir, "pids");
     const script = path.join(dir, "updater");
     // Prints its version, starts a background child (same group, stdio closed: like an updater without setsid), exits 0.
+    // On Windows a Node parent's attached children end with it (libuv's job object), so a background child detaches.
     fs.writeFileSync(script, `#!${process.execPath}
 const { spawn } = require("node:child_process");
-const child = spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], { stdio: "ignore" });
+const child = spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], { stdio: "ignore", detached: process.platform === "win32" });
 child.unref();
 require("node:fs").writeFileSync(${JSON.stringify(log)}, JSON.stringify({ child: child.pid }));
 process.stdout.write("updater 7.8.9\\n", () => process.exit(0));
 `, { mode: 0o755 });
+    addWindowsLauncher(script);
     const started = performance.now();
     expect(await boundedProbeExec(5_000, 300)(`${script} --version`)).toBe("updater 7.8.9\n");
     expect(performance.now() - started).toBeLessThan(3_000);

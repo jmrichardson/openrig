@@ -311,7 +311,8 @@ setInterval(() => {}, 1000);
 // is where the seats actually are. The focused p2 cleanup proof separately
 // detects removal of the socket shim by observing the owned server PID survive.
 describe("D5 p3 (integration) — an INHERITED tmux server is replaced, proven while seats live", () => {
-  it("seats land on the scaffold-owned server; the inherited sentinel server gains nothing", async () => {
+  // POSIX tmux default socket at TMUX_TMPDIR/tmux-<uid>; psmux keys servers by PSMUX_DATA_DIR.
+  it.skipIf(process.platform === "win32")("seats land on the scaffold-owned server; the inherited sentinel server gains nothing", async () => {
     const { spawnScenarioDaemon, runRig } = await import("./helpers/scenario-daemon.js");
     const { fileURLToPath } = await import("node:url");
     const { dirname, resolve } = await import("node:path");

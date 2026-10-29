@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import Database from "better-sqlite3";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { CodexThreadIdResolver, lstartToMinTs, readCodexThreadIdFromCandidateHomes } from "../src/domain/codex-thread-id.js";
 
 const roots: string[] = [];
@@ -32,6 +32,7 @@ describe("Codex home discovery respects an explicit HOME", () => {
   it("reads the default home before resolving a process home and never consults passwd", async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "codex-default-home-")); roots.push(home);
     vi.stubEnv("HOME", home);
+    if (process.platform === "win32") vi.stubEnv("USERPROFILE", home);
     const passwd = vi.spyOn(os, "userInfo").mockImplementation(() => { throw new Error("passwd home must not be read"); });
     const processHome = vi.fn(() => "/synthetic-other-home");
     const read = vi.fn((_pid: number, candidate: string) => candidate === home ? "conversation" : undefined);
@@ -45,6 +46,7 @@ describe("Codex home discovery respects an explicit HOME", () => {
   it("candidate-home fallback finds fixture logs without searching the passwd home", () => {
     const f = fixture(); f.thread("conversation"); f.log("conversation"); f.finish();
     vi.stubEnv("HOME", f.home);
+    if (process.platform === "win32") vi.stubEnv("USERPROFILE", f.home);
     const passwd = vi.spyOn(os, "userInfo").mockImplementation(() => { throw new Error("passwd home must not be read"); });
     expect(readCodexThreadIdFromCandidateHomes(60422, [])).toBe("conversation");
     expect(passwd).not.toHaveBeenCalled();
@@ -54,6 +56,7 @@ describe("Codex home discovery respects an explicit HOME", () => {
     const foreign = fixture(); foreign.thread("foreign-conversation"); foreign.log("foreign-conversation"); foreign.finish();
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "codex-empty-home-")); roots.push(home);
     vi.stubEnv("HOME", home);
+    if (process.platform === "win32") vi.stubEnv("USERPROFILE", home);
     const passwd = vi.spyOn(os, "userInfo").mockReturnValue({ homedir: foreign.home } as ReturnType<typeof os.userInfo>);
     expect(readCodexThreadIdFromCandidateHomes(60422, [])).toBeUndefined();
     expect(passwd).not.toHaveBeenCalled();
@@ -64,6 +67,36 @@ describe("native conversation identity excludes same-process auxiliary threads",
   it("resolves the first native conversation while title generation is the newest log activity", async () => {
     const f = fixture(); f.thread("conversation"); f.log("conversation"); f.log("title", start + 2);
     expect(await f.finish().resolve(60422, identity)).toBe("conversation");
+  });
+
+  describe("with a Windows (CIM) start time", () => {
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    beforeEach(() => { Object.defineProperty(process, "platform", { ...platform, value: "win32" }); });
+    afterEach(() => { Object.defineProperty(process, "platform", platform); });
+
+    it("rejects an earlier Windows process's conversation when its PID is reused", async () => {
+      const f = fixture();
+      f.thread("retired"); f.log("retired", start - 1);
+      f.thread("current"); f.log("current", start + 1);
+      expect(await f.finish().resolve(60422, new Date(start * 1000).toISOString())).toBe("current");
+    });
+
+    it("does not assign a Windows start-second log to the new process", async () => {
+      const f = fixture();
+      f.thread("ambiguous"); f.log("ambiguous", start);
+      expect(await f.finish().resolve(60422, new Date(start * 1000 + 500).toISOString())).toBeUndefined();
+    });
+  });
+
+  it("reads only a ps start time off Windows", () => {
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    try {
+      Object.defineProperty(process, "platform", { ...platform, value: "linux" });
+      expect(lstartToMinTs(new Date(start * 1000).toISOString())).toBeUndefined();
+      expect(lstartToMinTs(identity)).toBe(start);
+      Object.defineProperty(process, "platform", { ...platform, value: "win32" });
+      expect(lstartToMinTs(new Date(start * 1000 + 999).toISOString())).toBe(start);
+    } finally { Object.defineProperty(process, "platform", platform); }
   });
 
   it.each(["no conversation", "unrelated process", "retired pid", "ambiguous start second", "non-CLI thread", "two conversations"])("refuses %s instead of selecting a recent rollout", async kind => {

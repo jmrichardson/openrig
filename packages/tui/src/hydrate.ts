@@ -340,7 +340,9 @@ function toNeedsItem(item: NeedsYouItemRead): NeedsItem {
 
 function resolveAgentRef(ref: string, agentSpecNames: Set<string>): string {
   if (agentSpecNames.has(ref)) return ref;
-  const basename = ref.replace(/\/+$/, "").split("/").at(-1)?.replace(/\.(?:ya?ml|json)$/, "");
+  // A native Windows daemon resolves authored `local:..\agents\x` and `path:C:\...` refs.
+  const parts = process.platform === "win32" ? ref.replace(/[\\/]+$/, "").split(/[\\/]/) : ref.replace(/\/+$/, "").split("/");
+  const basename = parts.at(-1)?.replace(/\.(?:ya?ml|json)$/, "");
   return basename && agentSpecNames.has(basename) ? basename : ref;
 }
 

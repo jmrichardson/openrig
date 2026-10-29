@@ -5,12 +5,14 @@
 
 import { basename, dirname, join, relative, isAbsolute, sep } from "node:path";
 import { parseSqliteUtcMs } from "../sqlite-time.js";
+import { claudeCommandSessionToken, isWindowsRuntimeProcess, type NativeProcessRow, type NativeRuntime } from "../native-process-lineage.js";
 import { piPinReadings, piSeatPinReadings, readPiEffectiveModel } from "./effective-model-readers.js";
 import { piSeatPaths } from "../../adapters/pi-runner-protocol.js";
 import { canonicalModelPin, modelsMatch } from "./model-divergence-monitor.js";
 import { isShellForeground } from "../shell-classifier.js";
 
-export interface ProcessRow {
+/** A Windows CIM row also carries its platform and OS executable identity. */
+export interface ProcessRow extends Pick<NativeProcessRow, "platform" | "executableName" | "executablePath"> {
   pid: number;
   ppid: number;
   command: string;
@@ -86,6 +88,52 @@ function commandBasenameIs(name: string): (command: string) => boolean {
   });
 }
 
+/** Windows runtime processes rooted at the live pane, the pane process itself included. The OS image,
+ *  not an argv token, names the runtime. A Windows parent PID can outlive its original process and be
+ *  reused: birth times must establish that each child belongs to the current parent. */
+function findWindowsRuntimePids(processes: ProcessRow[], parentPid: number, runtime: NativeRuntime): number[] {
+  const byParent = new Map<number, ProcessRow[]>();
+  const byPid = new Map(processes.map((row) => [row.pid, row]));
+  for (const row of processes) {
+    const children = byParent.get(row.ppid) ?? [];
+    children.push(row);
+    byParent.set(row.ppid, children);
+  }
+  const out: number[] = [];
+  const root = byPid.get(parentPid);
+  if (root && isWindowsRuntimeProcess(root, runtime)) out.push(root.pid);
+  const queue = [parentPid];
+  const seen = new Set(queue);
+  for (let index = 0; index < queue.length; index += 1) {
+    const pid = queue[index]!;
+    const parentBirth = Date.parse(byPid.get(pid)?.startedAt ?? "");
+    for (const child of byParent.get(pid) ?? []) {
+      if (seen.has(child.pid)) continue;
+      seen.add(child.pid);
+      const childBirth = Date.parse(child.startedAt ?? "");
+      if (!Number.isFinite(parentBirth) || !Number.isFinite(childBirth) || childBirth < parentBirth) continue;
+      if (isWindowsRuntimeProcess(child, runtime)) out.push(child.pid);
+      queue.push(child.pid);
+    }
+  }
+  return out;
+}
+
+function findRuntimePids(processes: ProcessRow[], panePid: number, runtime: NativeRuntime): number[] {
+  return processes.some((row) => row.platform === "win32")
+    ? findWindowsRuntimePids(processes, panePid, runtime)
+    : findDescendants(processes, panePid, commandBasenameIs(runtime === "codex" ? "codex" : "claude"));
+}
+
+/** The session id a Claude process's launch argument names. A Windows command line is parsed as
+ *  argv; a `ps` command line keeps the legacy scan. */
+function claudeLaunchSessionId(row: ProcessRow | undefined): string | undefined {
+  if (row?.platform === "win32") return claudeCommandSessionToken(row.command, "win32") ?? undefined;
+  const command = row?.command ?? "";
+  const match = command.match(/--session-id[= ]([0-9a-f-]{36})/) ?? command.match(/--resume[= ]([0-9a-f-]{36})/);
+  return match?.[1];
+}
+
 /** The pane process's Claude session-id LAUNCH ARGUMENT. It is authoritative only after the caller
  *  verifies the canonical binding and current pane identity. A current-generation sidecar may
  *  supersede it after a provider-internal session rollover. */
@@ -96,13 +144,12 @@ export async function paneClaudeSessionIdArgument(
   const panePid = await deps.getPanePid(sessionTarget);
   if (!panePid) return { ok: false, reason: `no live pane pid for ${sessionTarget}` };
   const processes = await deps.listProcesses();
-  const claudePids = findDescendants(processes, panePid, commandBasenameIs("claude"));
+  const claudePids = findRuntimePids(processes, panePid, "claude-code");
   if (claudePids.length === 0) return { ok: false, reason: `no claude process under the live pane of ${sessionTarget}` };
   const ids = new Set<string>();
   for (const pid of claudePids) {
-    const command = processes.find((p) => p.pid === pid)?.command ?? "";
-    const match = command.match(/--session-id[= ]([0-9a-f-]{36})/) ?? command.match(/--resume[= ]([0-9a-f-]{36})/);
-    if (match?.[1]) ids.add(match[1]);
+    const id = claudeLaunchSessionId(processes.find((p) => p.pid === pid));
+    if (id) ids.add(id);
   }
   if (ids.size === 1) return { ok: true, id: [...ids][0]! };
   if (ids.size > 1) return { ok: false, reason: `multiple claude session ids under the live pane of ${sessionTarget}: ${[...ids].join(", ")}` };
@@ -161,7 +208,14 @@ export async function resolveIdentityVerifiedClaudeRecord(
   }
 
   const processes = await deps.listProcesses();
-  const claudePids = findDescendants(processes, panePid, commandBasenameIs("claude"));
+  const paneProcess = processes.find((row) => row.pid === panePid);
+  if (paneProcess?.platform === "win32") {
+    const paneBirth = Date.parse(paneProcess.startedAt ?? "");
+    if (!Number.isFinite(paneBirth) || paneBirth > observedAt) {
+      return { ok: false, reason: `registered pane process birth does not match identity verification for ${binding.tmuxPane}` };
+    }
+  }
+  const claudePids = findRuntimePids(processes, panePid, "claude-code");
   if (claudePids.length === 0) {
     return { ok: false, reason: `no claude process under verified pane ${binding.tmuxPane}` };
   }
@@ -170,9 +224,8 @@ export async function resolveIdentityVerifiedClaudeRecord(
   }
   const paneIds = new Set<string>();
   for (const pid of claudePids) {
-    const command = processes.find((process) => process.pid === pid)?.command ?? "";
-    const match = command.match(/--session-id[= ]([0-9a-f-]{36})/) ?? command.match(/--resume[= ]([0-9a-f-]{36})/);
-    if (match?.[1]) paneIds.add(match[1]);
+    const id = claudeLaunchSessionId(processes.find((process) => process.pid === pid));
+    if (id) paneIds.add(id);
   }
   if (paneIds.size === 0) {
     return { ok: false, reason: `claude process under verified pane ${binding.tmuxPane} carries no session id` };
@@ -231,7 +284,7 @@ export async function resolveLiveCodexThreadId(
   const panePid = await deps.getPanePid(sessionTarget);
   if (!panePid) return { ok: false, reason: `no live pane pid for ${sessionTarget}` };
   const processes = await deps.listProcesses();
-  const codexPids = findDescendants(processes, panePid, commandBasenameIs("codex"));
+  const codexPids = findRuntimePids(processes, panePid, "codex");
   if (codexPids.length === 0) return { ok: false, reason: `no codex process under the live pane of ${sessionTarget}` };
   const ids = new Set<string>();
   for (const pid of codexPids) {

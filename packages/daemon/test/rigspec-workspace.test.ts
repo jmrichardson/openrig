@@ -12,6 +12,7 @@
 //   - codec round-trip preserves the workspace block on serialize/parse
 
 import { describe, it, expect } from "vitest";
+import { resolve } from "node:path";
 import { RigSpecSchema } from "../src/domain/rigspec-schema.js";
 import { RigSpecCodec } from "../src/domain/rigspec-codec.js";
 
@@ -98,7 +99,7 @@ describe("RigSpec validation — workspace block (PL-007)", () => {
     const normalized = RigSpecSchema.normalize({ ...baseRig, workspace: workspaceBlock } as Record<string, unknown>);
     expect(normalized.workspace).toBeDefined();
     expect(normalized.workspace?.workspaceRoot).toBe("/Users/test/project");
-    expect(normalized.workspace?.repos[0]?.path).toBe("/Users/test/project/main");
+    expect(normalized.workspace?.repos[0]?.path).toBe(resolve("/Users/test/project", "main"));
     expect(normalized.workspace?.repos[1]?.path).toBe("/Users/test/project/internal");
     expect(normalized.workspace?.defaultRepo).toBe("main");
     expect(normalized.workspace?.knowledgeRoot).toBe("/Users/test/knowledge");

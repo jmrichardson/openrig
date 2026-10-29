@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { heartbeatCommand, analyzeHeartbeat } from "../src/commands/heartbeat.js";
+import { heartbeatCommand, analyzeHeartbeat, heartbeatSendCommand } from "../src/commands/heartbeat.js";
 
 const NOW = new Date("2026-04-24T12:00:00Z");
 
@@ -320,5 +320,19 @@ describe("rig heartbeat", () => {
     const parsed = JSON.parse(logs.join("\n"));
     expect(parsed.nudgeResults).toHaveLength(2);
     expect(parsed.nudgeResults.map((result: { id: string }) => result.id).sort()).toEqual(["stalled", "unproven"]);
+  });
+});
+
+describe("heartbeat nudge delivery command", () => {
+  it("sends through rig on the PATH on POSIX", () => {
+    expect(heartbeatSendCommand("dev@rig", "nudge text", "linux")).toEqual(["rig", ["send", "dev@rig", "nudge text"]]);
+    expect(heartbeatSendCommand("dev@rig", "nudge text", "darwin")).toEqual(["rig", ["send", "dev@rig", "nudge text"]]);
+  });
+
+  it("runs this CLI's own entry on Windows, where rig is an npm .cmd shim", () => {
+    const [file, args] = heartbeatSendCommand("dev@rig", "nudge & text", "win32");
+    expect(file).toBe(process.execPath);
+    expect(args[0]).toMatch(/bin-wrapper\.js$/);
+    expect(args.slice(1)).toEqual(["send", "dev@rig", "nudge & text"]);
   });
 });

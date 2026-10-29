@@ -646,14 +646,16 @@ function specSourceLines(spec: FleetSnapshot["specs"][number], snap: FleetSnapsh
 
 function displayPath(path: string, max = 68): string {
   if (path.length <= max) return path;
-  const parts = path.split("/").filter(Boolean);
+  // On Windows the daemon serves native drive/UNC paths; shorten them on their own separator.
+  const sep = process.platform === "win32" && /^(?:[a-z]:\\|\\\\)/i.test(path) ? "\\" : "/";
+  const parts = path.split(sep === "/" ? "/" : /[\\/]/).filter(Boolean);
   const kept: string[] = [];
   while (parts.length > 0) {
     const candidate = [parts.at(-1)!, ...kept];
-    if (`…/${candidate.join("/")}`.length > max) break;
+    if (`…${sep}${candidate.join(sep)}`.length > max) break;
     kept.unshift(parts.pop()!);
   }
-  return `…/${kept.join("/")}`;
+  return `…${sep}${kept.join(sep)}`;
 }
 
 function wrappedList(prefix: string, values: string[], max = 84): ContentLine[] {

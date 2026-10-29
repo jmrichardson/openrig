@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
+import path from "node:path";
 import { createFullTestDb } from "./helpers/test-app.js";
 import { EventBus } from "../src/domain/event-bus.js";
 import { QueueRepository } from "../src/domain/queue-repository.js";
@@ -25,8 +26,9 @@ function fixture() {
   const db = createFullTestDb(); closes.push(() => db.close());
   let queueDown = false;
   const repo = new QueueRepository(db, new EventBus(db), { validateRig: () => !queueDown });
-  const seen = new SeenStore("/s/slack-inbound-seen.jsonl", fsops);
-  const receipts = new InboundReceiptStore("/s/slack-inbound-receipts.jsonl", fsops);
+  // Recovery re-derives these two paths from its stateDir with path.join.
+  const seen = new SeenStore(path.join("/s", "slack-inbound-seen.jsonl"), fsops);
+  const receipts = new InboundReceiptStore(path.join("/s", "slack-inbound-receipts.jsonl"), fsops);
   const dead = new DeadLetterStore<SlackEvent>("/s/dead", fsops);
   const store = new ChannelCoverageStore("/s/coverage", fsops);
   const deps: InboundDeps = { queue: makeQueuePorts(repo), seen, deadLetter: dead, destination: "owner@test",

@@ -7,6 +7,7 @@ import type { ResolvedNodeConfig, QualifiedResource, ResolvedResources } from ".
 import type { ResourceCollision } from "./agent-resolver.js";
 import type { ResolvedStartupFile } from "./runtime-adapter.js";
 import { DEFAULT_CLAUDE_MANAGED_BLOCK_FILE, type ClaudeManagedBlockFile } from "./managed-blocks.js";
+import { projectionResourceDirectory } from "./projection-resource-path.js";
 
 // -- Types --
 
@@ -175,7 +176,7 @@ export function planProjection(input: ProjectionInput): PlanResult {
           // P17 dir-shaped realism: a skill source is a DIRECTORY — compare the
           // representative SKILL.md (readFile on a dir would throw the classifier
           // into a false hash_conflict). File-shaped sources compare as-is.
-          const skillRep = `${entry.absolutePath}/SKILL.md`;
+          const skillRep = nodePath.join(entry.absolutePath, "SKILL.md");
           const compareSource =
             catSingular === "skill" && fsOps.exists(skillRep) ? skillRep : entry.absolutePath;
           entry.classification = classifyResourceProjection(
@@ -305,7 +306,7 @@ export function claudeConflictTargetPath(
 ): string | null {
   switch (category) {
     case "skill":
-      return nodePath.join(cwd, ".claude", "skills", effectiveId, "SKILL.md");
+      return nodePath.join(cwd, ".claude", "skills", projectionResourceDirectory(effectiveId), "SKILL.md");
     case "subagent":
       return sourcePath ? nodePath.join(cwd, ".claude", "agents", nodePath.basename(sourcePath)) : null;
     case "guidance":

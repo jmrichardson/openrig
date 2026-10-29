@@ -23,7 +23,7 @@ import { RigRepository, findLatestUsableSnapshot, findLatestUsableSnapshotsForAl
 import { hasCompleteGuidanceBlock, seatGuidanceFile } from "./restore-guidance.js";
 import { resolveNodeWorkspace } from "./workspace/workspace-resolver.js";
 import { deriveCanonicalSessionName } from "./session-name.js";
-import { buildNativeResumeCommand, buildCodexResumeCore } from "./native-resume-probe.js";
+import { buildNativeResumeCommand, buildCodexResumeCore, printedCodexPostureArg } from "./native-resume-probe.js";
 import { AppliedLaunchObservationStore } from "./applied-launch-observation-store.js";
 import { readReadyFreshLaunchFences } from "./fresh-occupant-relation.js";
 import { tmuxAttachCommand } from "../adapters/tmux-server.js";
@@ -157,14 +157,15 @@ function computeRecoveryGuidance(input: {
     const notes: string[] = [];
 
     const daemonOptOut = codexDaemonOptOut === true;
+    const postureArg = printedCodexPostureArg(codexConfigProfile);
     if (resumeToken) {
-      commands.push(buildCodexResumeCore(resumeToken, codexConfigProfile, undefined, undefined, undefined, undefined, undefined, daemonOptOut));
+      commands.push(buildCodexResumeCore(resumeToken, codexConfigProfile, undefined, undefined, undefined, undefined, postureArg, daemonOptOut));
     }
     if (cwd) {
       commands.push(`cd ${cwd}`);
     }
     if (!resumeToken) {
-      commands.push(buildCodexResumeCore("", codexConfigProfile, true, undefined, undefined, undefined, undefined, daemonOptOut));
+      commands.push(buildCodexResumeCore("", codexConfigProfile, true, undefined, undefined, undefined, postureArg, daemonOptOut));
     }
 
     notes.push("Use workspace and recent prompt text to identify the right conversation.");

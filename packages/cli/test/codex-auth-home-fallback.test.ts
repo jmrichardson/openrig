@@ -18,7 +18,8 @@ vi.mock("node:os", async (importOriginal) => {
 
 const { resolveCodexHome } = await import("../src/lib/codex-auth.js");
 
-describe("resolveCodexHome — falsy HOME falls back to the account home (userInfo), never the cwd", () => {
+// Codex for Windows reads ~/.codex from USERPROFILE, never HOME or userInfo(); codex-auth-lib.test.ts pins that path.
+describe.skipIf(process.platform === "win32")("resolveCodexHome — falsy HOME falls back to the account home (userInfo), never the cwd", () => {
   let savedHome: string | undefined;
   let savedCodexHome: string | undefined;
 

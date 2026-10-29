@@ -19,7 +19,8 @@ function fixture(files: string[], mode = "clean", prior = false) {
  const calls = existsSync(join(dir,"calls")) ? readFileSync(join(dir,"calls"),"utf8").trim().split("\n") : [];
  return { ...result, calls };
 }
-describe("polluter search reports observed execution", () => {
+// Each test runs the shipped POSIX find-polluter.sh with bash and /bin/sh fixtures; Windows has neither.
+describe.skipIf(process.platform === "win32")("polluter search reports observed execution", () => {
  it("does not certify an empty selection", () => { const r=fixture([]); expect(r.status).toBe(2); expect(r.stdout).toContain("no tests ran"); expect(r.calls).toEqual([]); });
  it("does not hide a discovery command failure", () => { const r=fixture(["one.test.ts"],"find-fail"); expect(r.status).toBe(2); expect(r.stdout).toContain("selection failed"); expect(r.calls).toEqual([]); });
  it("counts and executes one matching file", () => { const r=fixture(["one.test.ts"]); expect(r.status).toBe(0); expect(r.stdout).toContain("Found 1 test files"); expect(r.calls).toEqual(["./src/one.test.ts"]); });

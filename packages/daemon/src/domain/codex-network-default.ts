@@ -11,7 +11,10 @@
 // Side effects: Codex startup may write its own state, system-skill and temp files in CODEX_HOME,
 // read its auth store and fetch managed policy. The read and the launch are not atomic.
 
-import { spawn } from "node:child_process";
+import { spawn, execFile } from "node:child_process";
+import path from "node:path";
+import { promisify } from "node:util";
+import { resolveWindowsCodexCommand } from "../adapters/windows-codex-command.js";
 import { shellQuote } from "../adapters/shell-quote.js";
 import type { AppliedLaunchObservation } from "./permission-drift.js";
 
@@ -139,8 +142,13 @@ export function codexNetworkDefaultReader(options: CodexNetworkReaderOptions = {
     const args = ["-c", 'sandbox_mode="workspace-write"', "-c", "features.plugins=false", "-c", "features.apps=false", "app-server"];
     let child: ReturnType<typeof spawn>;
     try {
-      // Its own process group, so cleanup reaches the reader's descendants and nothing else.
-      child = spawn("codex", args, { cwd, env, stdio: ["pipe", "pipe", "ignore"], detached: true });
+      // Its own process group, so cleanup reaches the reader's descendants and nothing else. Windows has no
+      // process groups (stopGroup ends the tree with taskkill /T), and a detached child there gets no console,
+      // so the console program npm's codex.js starts would open a visible one.
+      const command = process.platform === "win32"
+        ? resolveWindowsCodexCommand(env.PATH ?? "", process.execPath, cwd)
+        : { command: "codex", args: [] };
+      child = spawn(command.command, [...command.args, ...args], { cwd, env, stdio: ["pipe", "pipe", "ignore"], detached: process.platform !== "win32", windowsHide: true });
     } catch (error) {
       return { ...no(`codex app-server could not start: ${firstLine(error)}`), elapsedMs: Math.round(performance.now() - started) };
     }
@@ -202,13 +210,16 @@ function converse(child: ReturnType<typeof spawn>, cwd: string, deadlineMs: numb
 
 /** stdin EOF first; then TERM, then KILL, to the reader's own process group while any member remains. */
 export async function stopGroup(child: ReturnType<typeof spawn>, graceMs: number): Promise<void> {
-  child.stdin?.end();
+  // Keep the Windows parent alive until taskkill has walked its descendants. EOF may
+  // make it exit first and leave children that taskkill can no longer discover.
+  if (process.platform !== "win32") child.stdin?.end();
   const pid = child.pid;
   if (pid === undefined) return;
   const reaped = new Promise<void>((resolve) => {
     if (child.exitCode !== null || child.signalCode !== null) resolve();
     else child.once("exit", () => resolve());
   });
+  if (process.platform === "win32") return stopWindowsTree(child, pid, reaped, graceMs);
   for (const signal of [null, "SIGTERM", "SIGKILL"] as const) {
     if (signal) {
       try { process.kill(-pid, signal); } catch { break; }
@@ -219,6 +230,24 @@ export async function stopGroup(child: ReturnType<typeof spawn>, graceMs: number
   let timer: ReturnType<typeof setTimeout> | undefined;
   await Promise.race([reaped, new Promise((resolve) => { timer = setTimeout(resolve, graceMs); })]);
   clearTimeout(timer);
+}
+
+/** Negative PIDs are POSIX process groups, not Windows process identities. stdin EOF gets its moment to finish
+ *  the reader; a still-running tree is then ended with taskkill /T. Best effort, as the POSIX signals are: a
+ *  reader's answer is never discarded for its cleanup. */
+async function stopWindowsTree(child: ReturnType<typeof spawn>, pid: number, reaped: Promise<void>, graceMs: number): Promise<void> {
+  const waitForReap = async () => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([reaped, new Promise((resolve) => { timer = setTimeout(resolve, graceMs); })]);
+    clearTimeout(timer);
+  };
+  await waitForReap();
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  try {
+    await promisify(execFile)(path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "taskkill.exe"),
+      ["/PID", String(pid), "/T", "/F"], { windowsHide: true, timeout: Math.max(5000, graceMs) });
+  } catch { /* the bounded reap wait below still applies */ }
+  await waitForReap();
 }
 
 async function groupGone(pid: number, withinMs: number): Promise<boolean> {

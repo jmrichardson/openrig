@@ -50,7 +50,10 @@ test("legacy YAML inputs refuse with product pointers before changing policy fil
   });
 });
 
-test("authoring apply uses product policy and in-repo sources despite legacy YAML and external canon environment", () => {
+// The authoring apply mode runs rsync, which native Windows does not have (see mirror-skills.test.mjs).
+const RSYNC_ONLY = process.platform === "win32" && "runs rsync, which native Windows does not have";
+
+test("authoring apply uses product policy and in-repo sources despite legacy YAML and external canon environment", { skip: RSYNC_ONLY }, () => {
   withFixture(({ root, legacy, policyBytes }) => {
     const script = join(root, "packages/daemon/scripts/gen-control-plane-json.mjs");
     mkdirSync(dirname(script), { recursive: true });
@@ -72,7 +75,7 @@ test("authoring apply uses product policy and in-repo sources despite legacy YAM
   });
 });
 
-test("authoring apply regenerates from in-repo sources with no external authoring variables", () => {
+test("authoring apply regenerates from in-repo sources with no external authoring variables", { skip: RSYNC_ONLY }, () => {
   withFixture(({ root }) => {
     const script = join(root, "packages/daemon/scripts/gen-control-plane-json.mjs");
     mkdirSync(dirname(script), { recursive: true });

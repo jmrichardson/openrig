@@ -1,9 +1,10 @@
+import { claudeSeatTokenWindowsStep } from "./claude-seat-token.js";
 import { execFile } from "node:child_process";
 import { accessSync, closeSync, constants, openSync, readSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import type Database from "better-sqlite3";
 import type { RigEvent } from "./types.js";
-import { publicSeatEnvironment } from "./seat-launch-environment.js";
+import { publicSeatEnvironment, windowsSeatCli } from "./seat-launch-environment.js";
 import { SEAT_ENV_KEYS_VAR, parseStoredSeatEnv, validateSeatEnvName } from "./seat-env.js";
 import { CLAUDE_PLUGIN_DIRS_ENV, SEAT_NODE_ENV, SEAT_PROJECT_DIR_ENV, seatCorePluginDir } from "./claude-core-plugin-env.js";
 import { seatSkillPluginDirForNode } from "./seat-skill-storage.js";
@@ -16,6 +17,7 @@ import { NO_SESSION_BUS } from "./seat-runtime-dir.js";
 import { effectiveRuntimeHome } from "./seat-runtime-home.js";
 import { claudeSeatTokenFallbackNotice, claudeSeatTokenFileProblem, claudeSeatTokenStep, readClaudeSeatTokenRef, type ClaudeSeatTokenRef } from "./claude-seat-token.js";
 import { OUTRANKING_TOKEN_ENV, projectRootForLocalSettings, settingsFileConflicts, type CredentialConflict, type CredentialPrecedence } from "./claude-credential-precedence.js";
+import { renderWindowsManagedLaunch, windowsPathEntries } from "../adapters/windows-launch.js";
 
 export interface ClaudeLaunchTarget {
   nodeId: string;
@@ -84,7 +86,10 @@ export class ClaudeManagedLaunch {
     /** Reads one variable from a seat's tmux session environment (the daemon's tmux adapter). */
     private readonly readSessionEnv?: (session: string, key: string) => Promise<string | undefined>,
     /** Where the daemon vendors its plugins; default is `plugins` under the OpenRig home (tests). */
-    private readonly pluginsDir?: string) {}
+    private readonly pluginsDir?: string,
+    private readonly platform: NodeJS.Platform = process.platform,
+    /** Windows only: the paired CLI the seat's `rig` runs. Production derives it. */
+    private readonly cliPath?: string) {}
 
   /** Names the seat's rig and member declare in `env:`, plus any one-off `rig up --env` names the
    *  launch recorded on the tmux session. Their values are already in the pane shell, which is
@@ -227,16 +232,27 @@ export class ClaudeManagedLaunch {
     if (!PATH || !HOME || !path.isAbsolute(HOME)) throw new Error("Claude managed launch context is unresolved: managed PATH and absolute HOME are required.");
     // Relative/empty PATH entries are interpreted at the intended seat cwd,
     // including for /usr/bin/env shebangs inside the selected executable.
-    const search = PATH.split(path.delimiter).map(p => path.resolve(cwd, p));
+    // Windows trims and unquotes each entry and skips an empty one, as libuv and PowerShell do.
+    const search = this.platform === "win32"
+      ? windowsPathEntries(PATH).map(p => path.resolve(cwd, p))
+      : PATH.split(path.delimiter).map(p => path.resolve(cwd, p));
     const { configDir } = this.configPaths(cwd, nodeId);
     const env: Record<string, string> = { PATH: search.join(path.delimiter), HOME };
+    if (this.platform === "win32") {
+      // Native loaders and Git Bash require Windows OS paths. Keep USERPROFILE
+      // independent of the seat's selected HOME, as in the native Codex/Pi channel.
+      for (const key of ["SYSTEMROOT", "WINDIR", "COMSPEC", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP", "PROGRAMFILES", "PROGRAMFILES(X86)", "PROGRAMDATA"]) {
+        const entry = Object.entries(process.env).find(([name]) => name.toUpperCase() === key);
+        if (entry?.[1]) env[key] = entry[1];
+      }
+    }
     // Session storage needs a directory, but exporting the default changes
     // Claude's global config selection. Preserve an unset native selection.
     if (CLAUDE_CONFIG_DIR !== undefined) env.CLAUDE_CONFIG_DIR = configDir;
     if (claudeClassicRendererEnvPrefix(this.rendererEnv)) env.CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN = "1";
     let executable: string | undefined;
     for (const dir of search) {
-      const candidate = path.join(dir, "claude");
+      const candidate = path.join(dir, this.platform === "win32" ? "claude.exe" : "claude");
       try { accessSync(candidate, constants.X_OK); if (!statSync(candidate).isFile()) continue; }
       catch { continue; }
       executable = realpathSync(candidate); break;
@@ -286,8 +302,11 @@ export class ClaudeManagedLaunch {
         throw new Error("Claude managed launch context changed during capability discovery/input; retry explicitly.");
       }
     };
+    // Windows seats get the classic route's paired CLI: its `rig` first on PATH, and the
+    // Node entry hooks run because they cannot spawn rig.cmd without a shell.
+    const seatCli = this.platform === "win32" ? windowsSeatCli(this.sessionEnv.OPENRIG_HOME, process.cwd(), this.cliPath) : undefined;
     const help = await new Promise<string>((resolve, reject) => {
-      execFile(context.executable, ["--help"], { cwd, env: context.env, encoding: "utf8", timeout: 5000, maxBuffer: 1024 * 1024 },
+      execFile(context.executable, ["--help"], { cwd, env: context.env, encoding: "utf8", timeout: 5000, maxBuffer: 1024 * 1024, windowsHide: true },
         (error, stdout) => error ? reject(new Error("Claude managed capability query failed; no fallback was selected.")) : resolve(stdout));
     });
     assertCurrent();
@@ -339,6 +358,14 @@ export class ClaudeManagedLaunch {
     const warnings = token?.warnings ?? Object.freeze([]);
     return Object.freeze({ assertCurrent, warnings, configDir: context.configDir, executable: context.executable, executableIsScript: context.executableIsScript, command: (args: readonly string[], launchEnv: Readonly<Record<string, string>> = {}) => {
       assertCurrent();
+      if (seatCli) {
+        const forwardedNames = [...inherited, ...seatKeys.filter(key => !inherited.includes(key)),
+          ...(loadsCorePlugin ? [SEAT_PROJECT_DIR_ENV] : [])]
+          .filter(key => !(key in identity) && !(key in publicEnv));
+        const terminalNames = ["TERM", "COLORTERM", "LANG", "LC_ALL", "LC_CTYPE", "LC_MESSAGES", "LC_COLLATE", "LC_NUMERIC", "LC_TIME", "LC_MONETARY"];
+        const cliEnv = { PATH: `${seatCli.bin}${path.delimiter}${context.env.PATH}`, OPENRIG_CLI_ENTRY: seatCli.entry };
+        return renderWindowsManagedLaunch(context.executable, args, cwd, { ...context.env, ...publicEnv, ...identity, ...cliEnv, ...launchEnv }, [...forwardedNames, ...terminalNames], token ? claudeSeatTokenWindowsStep(token.ref, "$openrigChildEnv", { removeOnFailure: !tokenKept }) : "");
+      }
       const launch = Object.entries(launchEnv).map(([key, value]) => `export ${shellQuote(`${key}=${value}`)}`);
       const keep = [...selectedKeys, ...terminalKeys, "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS",
         ...Object.keys(launchEnv), ...(token ? ["CLAUDE_CODE_OAUTH_TOKEN"] : [])];

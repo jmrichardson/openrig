@@ -11,6 +11,7 @@ import { EventBus } from "../src/domain/event-bus.js";
 import { QueueRepository } from "../src/domain/queue-repository.js";
 import { WorkflowRuntime } from "../src/domain/workflow-runtime.js";
 import { buildExecutionView } from "../src/domain/execution-view.js";
+import { canCreateFileSymlinks } from "../../../test/symlink-capability.mjs";
 
 const example = parse(readFileSync(new URL("../../../docs/reference/project-release-profile.yaml", import.meta.url), "utf8"));
 // Authored outcome inventory: do not derive the expected set from the fixture under test.
@@ -41,7 +42,7 @@ describe("project-owned boundary profile", () => {
     const first = compile();
     expect(first.eligible).toBe(true);
     expect(first.workflowSpec?.steps.map((s) => s.id)).toEqual(ids);
-    expect(first.graphSource).toEqual({ mode: "project-profile", profileSource: `${root}/project.yaml#lifecycle.profiles.release-boundary-v0`, missionSource: null, requiredSteps: ids });
+    expect(first.graphSource).toEqual({ mode: "project-profile", profileSource: `${join(root, "project.yaml")}#lifecycle.profiles.release-boundary-v0`, missionSource: null, requiredSteps: ids });
     expect(first.sources.map((s) => s.kind)).toEqual(["project", "mission"]);
     expect(first.workflowSpec?.steps[0]).toMatchObject({ re_present_after_seconds: 300, re_present_max_seconds: 3600 });
     expect(compileProjectLifecycle({ missionPath: resolve(missionPath, "./mission.yaml"), operationKey: "different" }).compiledInputDigest).toBe(first.compiledInputDigest);
@@ -50,7 +51,8 @@ describe("project-owned boundary profile", () => {
     expect(compile().compiledInputDigest).not.toBe(first.compiledInputDigest);
   });
 
-  it("binds directory aliases to the same source/digest without accepting symlink manifests", () => {
+  // The symlink-manifest case creates a file symlink, which needs SeCreateSymbolicLinkPrivilege on Windows.
+  it.skipIf(!canCreateFileSymlinks)("binds directory aliases to the same source/digest without accepting symlink manifests", () => {
     const alias = join(root, "alias");
     symlinkSync(root, alias, "dir");
     expect(compileProjectLifecycle({ missionPath: join(alias, "missions", "release-0.5.11"), operationKey: "release" })).toEqual(compile());

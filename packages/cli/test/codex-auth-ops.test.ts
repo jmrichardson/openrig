@@ -25,13 +25,19 @@ describe("authStatus (OPR.0.4.1.29 — presence/mode/login-state, NEVER secrets)
     writeAuth(JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: SENTINEL, tokens: { access: SENTINEL } }));
     const r = authStatus(paths, { loginStatus: () => "logged_in" });
     expect(r.activeAuthPresent).toBe(true);
-    expect(r.activeAuthMode).toBe("600");
-    expect(r.activeAuthModeSafe).toBe(true);
+    if (process.platform === "win32") {
+      // POSIX mode bits; Windows uses ACLs, so the mode verdict is unknown there.
+      expect(r.activeAuthModeSafe).toBe("unknown");
+    } else {
+      expect(r.activeAuthMode).toBe("600");
+      expect(r.activeAuthModeSafe).toBe(true);
+    }
     expect(r.loginStatus).toBe("logged_in");
     expect(JSON.stringify(r)).not.toContain(SENTINEL);
   });
 
-  it("flags an unsafe (world-readable) active-auth mode without reading contents", () => {
+  // POSIX mode bits; Windows uses ACLs
+  it.skipIf(process.platform === "win32")("flags an unsafe (world-readable) active-auth mode without reading contents", () => {
     writeAuth(JSON.stringify({ OPENAI_API_KEY: SENTINEL }), 0o644);
     const r = authStatus(paths, { loginStatus: () => "unavailable" });
     expect(r.activeAuthMode).toBe("644");
@@ -53,7 +59,7 @@ describe("authValidate (OPR.0.4.1.29 — mode + parseability, never echo content
   it("passes a 0600 parseable profile and reports only name/path/mode", () => {
     writeProfile("work", JSON.stringify({ OPENAI_API_KEY: SENTINEL }));
     const r = authValidate(paths, "work");
-    expect(r).toMatchObject({ ok: true, name: "work", mode: "600" });
+    expect(r).toMatchObject({ ok: true, name: "work", mode: process.platform === "win32" ? "unknown" : "600" });
     expect(JSON.stringify(r)).not.toContain(SENTINEL);
   });
 

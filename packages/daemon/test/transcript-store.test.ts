@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, chmodSync, existsSync, rmSync, statSync, utimesSync } from "node:fs";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { TranscriptStore } from "../src/domain/transcript-store.js";
 import {
@@ -37,7 +37,8 @@ describe("TranscriptStore", () => {
       expect(existsSync(join(tmpDir, "my-rig"))).toBe(true);
     });
 
-    it("returns false on permission error without throwing", () => {
+    // POSIX directory mode bits; Windows ignores chmod on directories.
+    it.skipIf(process.platform === "win32")("returns false on permission error without throwing", () => {
       const readonlyDir = join(tmpDir, "readonly");
       mkdirSync(readonlyDir);
       chmodSync(readonlyDir, 0o444);
@@ -131,7 +132,7 @@ describe("TranscriptStore", () => {
       const store = new TranscriptStore({ transcriptsRoot: tmpDir });
       const path = store.getTranscriptPath("..", "dev@rig");
       // Path must stay under the root, not resolve to parent
-      expect(path.startsWith(tmpDir + "/")).toBe(true);
+      expect(path.startsWith(tmpDir + sep)).toBe(true);
     });
 
     it("ensureTranscriptDir with '..' rig name returns false", () => {
@@ -694,7 +695,8 @@ describe("TranscriptStore.getIngestHealth — liveness decoupled from mtime", ()
   // r2 HIGH-1: a successful capture whose required WRITE fails must not advertise
   // freshness over the stale on-disk bytes. Liveness is recorded only for a
   // completed healthy tick (after rename / on the unchanged early-return).
-  it("does NOT report capture_fresh when capture succeeds but the required write fails", async () => {
+  // POSIX directory mode bits make the write fail; Windows ignores chmod on directories.
+  it.skipIf(process.platform === "win32")("does NOT report capture_fresh when capture succeeds but the required write fails", async () => {
     const store = new TranscriptStore({ transcriptsRoot: tmpDir, staleAfterMs: 1000 });
     const rig = "hrig";
     const session = "diskfull@hrig";

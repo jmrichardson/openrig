@@ -115,7 +115,9 @@ function snapshot(p: string) {
 
 describe.skipIf(process.getuid?.() === 0)("a project file that can't be read is left as it is", () => {
   for (const target of TARGETS) for (const [label, make] of UNREADABLE) {
-    it(`${target.rel} that is ${label}: untouched through projection and both collector calls; the fragment is skipped with a warning`, async () => {
+    // POSIX mode bits; Windows uses ACLs, so chmod cannot make a file unreadable there.
+    const modeOnly = process.platform === "win32" && label.startsWith("mode ");
+    it.skipIf(modeOnly)(`${target.rel} that is ${label}: untouched through projection and both collector calls; the fragment is skipped with a warning`, async () => {
       const s = seat(target, null);
       make(s.targetPath);
       expect(() => fs.readFileSync(s.targetPath, "utf-8")).toThrow();
@@ -139,7 +141,7 @@ describe.skipIf(process.getuid?.() === 0)("a project file that can't be read is 
       }
     });
 
-    it(`${target.rel} that is ${label}: startNode reaches the harness launch, with the warning in its result`, async () => {
+    it.skipIf(modeOnly)(`${target.rel} that is ${label}: startNode reaches the harness launch, with the warning in its result`, async () => {
       const s = seat(target, null);
       make(s.targetPath);
       const db = createFullTestDb(); dbs.push(db);

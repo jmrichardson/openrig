@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type Database from "better-sqlite3";
 import { createFullTestDb, createTestApp } from "./helpers/test-app.js";
+import { nativePath } from "./helpers/fixture-path.js";
 import { RigSpecCodec } from "../src/domain/rigspec-codec.js";
 
 const RIG_ROOT = "/project/rigs/session-source-roundtrip";
@@ -25,10 +26,10 @@ describe("RigSpec session_source persistence", () => {
     app = createTestApp(db, {
       podInstantiatorFsOps: {
         readFile: (path: string) => {
-          if (path === `${RIG_ROOT}/agents/impl/agent.yaml`) return agentYaml();
+          if (nativePath(path) === nativePath(`${RIG_ROOT}/agents/impl/agent.yaml`)) return agentYaml();
           throw new Error(`Not found: ${path}`);
         },
-        exists: (path: string) => path === `${RIG_ROOT}/agents/impl/agent.yaml`,
+        exists: (path: string) => nativePath(path) === nativePath(`${RIG_ROOT}/agents/impl/agent.yaml`),
       },
     });
   });

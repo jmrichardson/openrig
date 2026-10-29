@@ -233,6 +233,44 @@ describe("LibraryReview", () => {
     });
   });
 
+  it("resolves relative local: refs against the native source path a Windows daemon reports", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/specs/library?kind=agent") {
+        return new Response(JSON.stringify([{
+          id: "agent-vault-specialist", kind: "agent", name: "vault-specialist", version: "1.0", sourceType: "builtin",
+          sourcePath: "C:\\specs\\agents\\apps\\vault-specialist\\agent.yaml",
+          relativePath: "agents/apps/vault-specialist/agent.yaml", updatedAt: new Date().toISOString(),
+        }]), { status: 200 });
+      }
+      if (url === "/api/specs/library/svc-rig-3/review") {
+        return new Response(JSON.stringify({
+          sourceState: "library_item", kind: "rig", name: "secrets-manager", version: "0.2", format: "pod_aware",
+          pods: [{ id: "vault", label: "Vault", members: [{ id: "specialist", agentRef: "local:../../../agents/apps/vault-specialist", runtime: "claude-code", profile: "default" }], edges: [] }],
+          edges: [], graph: { nodes: [], edges: [] }, raw: "name: secrets-manager\n", libraryEntryId: "svc-rig-3",
+          sourcePath: "c:\\specs\\rigs\\launch\\secrets-manager\\rig.yaml",
+        }), { status: 200 });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(createAppTestRouter({
+      initialPath: "/specs/library/svc-rig-3",
+      routes: [
+        { path: "/specs/library/svc-rig-3", component: () => <LibraryReview entryId="svc-rig-3" /> },
+        { path: "/specs/library/agent-vault-specialist", component: () => <div data-testid="vault-agent-drilldown">vault-agent</div> },
+      ],
+    }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("library-review-rig")).toBeDefined();
+    });
+    fireEvent.click(screen.getByTestId("lib-tab-configuration"));
+    await waitFor(() => {
+      expect(screen.getByTestId("lib-member-open-agent-vault-specialist")).toBeDefined();
+    });
+  });
+
   it("renders workflow review with topology graph + steps + Activate as Lens (Workflows in Spec Library v0)", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);

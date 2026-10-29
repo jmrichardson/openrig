@@ -50,6 +50,20 @@ describe("HistoryQuery.searchSession — per-session JSONL by token (L2)", () =>
     expect(argv.some((a) => a.endsWith(`${token}.jsonl`))).toBe(true);
   });
 
+  it("on Windows reads the session JSONL itself when neither rg nor grep runs", async () => {
+    const token = "win-session";
+    writeSessionJsonl("C--Users-me-proj", token, [
+      JSON.stringify({ type: "user", text: "deploy the gateway" }),
+      JSON.stringify({ type: "assistant", text: "the SECRET_MARKER lives here" }),
+    ]);
+    const failing = vi.fn(async () => ({ stdout: "", exitCode: 2 }));
+    const posix = await new HistoryQuery({ transcriptsRoot: "/unused", exec: failing, claudeProjectsRoot: projectsRoot, platform: "linux" }).searchSession(token, "SECRET_MARKER");
+    expect(posix).toMatchObject({ backend: "none", excerpts: [], degraded: { reason: "unreadable" } });
+    const res = await new HistoryQuery({ transcriptsRoot: "/unused", exec: failing, claudeProjectsRoot: projectsRoot, platform: "win32" }).searchSession(token, "SECRET_MARKER");
+    expect(res).toMatchObject({ backend: "read", found: true, insufficient: false, excerpts: [JSON.stringify({ type: "assistant", text: "the SECRET_MARKER lives here" })] });
+    expect(res.degraded).toBeUndefined();
+  });
+
   it("honest not-found (session_not_found) when the token has no session file", async () => {
     const hq = new HistoryQuery({ transcriptsRoot: "/unused", exec: throwExec, claudeProjectsRoot: projectsRoot });
     const res = await hq.searchSession("nonexistent-token", "anything");

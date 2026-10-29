@@ -16,6 +16,7 @@ import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as nodePath from "node:path";
+import * as os from "node:os";
 import { pathToFileURL } from "node:url";
 import { resolveAddress } from "../src/domain/markdown-address.js";
 
@@ -202,7 +203,7 @@ describe("openrig-core plugin — skills (HG-2.1 skill content per agentskills.i
   });
 
   it("executes the addressable-Markdown resolver through a symlinked ancestor", () => {
-    const root = fs.mkdtempSync(nodePath.join(fs.realpathSync("/tmp"), "openrig-loader-"));
+    const root = fs.mkdtempSync(nodePath.join(fs.realpathSync(os.tmpdir()), "openrig-loader-"));
     const actualRoot = nodePath.join(root, "actual");
     const linkedRoot = nodePath.join(root, "linked");
     const relativeScript = nodePath.join("scripts", "resolve-markdown.mjs");
@@ -213,7 +214,7 @@ describe("openrig-core plugin — skills (HG-2.1 skill content per agentskills.i
         nodePath.join(actualRoot, relativeScript),
       );
       fs.writeFileSync(nodePath.join(actualRoot, "guide.md"), "# Guide\n\n## Intent\nLoaded.\n");
-      fs.symlinkSync(actualRoot, linkedRoot, "dir");
+      fs.symlinkSync(actualRoot, linkedRoot, process.platform === "win32" ? "junction" : "dir");
 
       const result = spawnSync(
         process.execPath,
@@ -229,7 +230,7 @@ describe("openrig-core plugin — skills (HG-2.1 skill content per agentskills.i
   });
 
   it.each(["```", "~~~"])("keeps %s fenced examples inside the complete shipped Markdown address", (marker) => {
-    const root = fs.mkdtempSync(nodePath.join(fs.realpathSync("/tmp"), "openrig-loader-fence-"));
+    const root = fs.mkdtempSync(nodePath.join(fs.realpathSync(os.tmpdir()), "openrig-loader-fence-"));
     const script = nodePath.join(PLUGIN_ROOT, "skills", "loading-addressable-markdown", "scripts", "resolve-markdown.mjs");
     const text = [
       "## Instructions", "real before", `${marker}md`, `${marker}not-a-closer`,
@@ -386,12 +387,12 @@ describe("openrig-core plugin — hooks (HG-2.6 + HG-2.7)", () => {
       const content = fs.readFileSync(nodePath.join(PLUGIN_ROOT, "hooks", `${runtime}.json`), "utf-8");
       const config = JSON.parse(content) as { hooks: Record<string, Array<{ hooks: Array<{ command: string }> }>> };
       const refocusEvents = Object.entries(config.hooks)
-        .filter(([, entries]) => entries.some((entry) => entry.hooks.some((hook) => hook.command.includes("refocus.cjs"))))
+        .filter(([, entries]) => entries.some((entry) => entry.hooks.some((hook) => (hook.command.includes("refocus.cjs") || hook.command.endsWith(" refocus")))))
         .map(([event]) => event);
       expect(refocusEvents).not.toContain("SessionStart");
       expect(refocusEvents).toContain("UserPromptSubmit");
       expect(refocusEvents).toContain("PostCompact");
-      expect(content).toContain(`\${${variable}}`);
+      expect(content).toContain(variable === "PLUGIN_ROOT" ? "process.env.PLUGIN_ROOT" : `\${${variable}}`);
     }
     expect(fs.existsSync(nodePath.join(PLUGIN_ROOT, "skills", "refocusing", "SKILL.md"))).toBe(true);
     expect(fs.existsSync(nodePath.join(PLUGIN_ROOT, "skills", "refocusing", "scripts", "trace-to-root.py"))).toBe(true);
@@ -430,8 +431,8 @@ describe("openrig-core plugin — hooks (HG-2.6 + HG-2.7)", () => {
     // is NOT, and nothing in OpenRig sets it). openrig-core projects to <cwd>/.codex/plugins/<id>/, so
     // ${PLUGIN_ROOT} resolves to the plugin dir and the activity-relay hook actually fires.
     const content = fs.readFileSync(nodePath.join(PLUGIN_ROOT, "hooks", "codex.json"), "utf-8");
-    expect(content).toMatch(/\$\{PLUGIN_ROOT\}/);
-    expect(content).toMatch(/PLUGIN_ROOT.*activity-relay\.cjs/);
+    expect(content).toContain("process.env.PLUGIN_ROOT");
+    expect(content).toContain("codex-entry.cjs");
     // Guard against regressing to the unsupported variable.
     expect(content).not.toMatch(/CODEX_PLUGIN_ROOT/);
   });

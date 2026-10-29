@@ -16,7 +16,8 @@ const agents = resolve(here, "../../test-system/scenarios/agents");
 const session = "work-worker@community-harness-rig";
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
-describe("a community harness from a data preset", () => {
+// This integration drives a private POSIX tmux server; native psmux is covered by the Windows acceptance check.
+describe.skipIf(process.platform === "win32")("a community harness from a data preset", () => {
   let scaffold: HermeticScaffold;
   let daemon: ScenarioDaemon;
   let rigRoot: string;

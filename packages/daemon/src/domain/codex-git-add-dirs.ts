@@ -32,12 +32,15 @@ export const resolveCodexGitAddDirs: CodexGitAddDirResolver = async (cwd) => {
     execFile(
       "git",
       ["-C", cwd, "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"],
-      { timeout: GIT_TIMEOUT_MS, encoding: "utf8" },
+      { timeout: GIT_TIMEOUT_MS, encoding: "utf8", windowsHide: true },
       (error, out) => resolve(error ? null : out),
     );
   });
   if (stdout === null) return [];
-  const dirs = [...new Set(stdout.split("\n").filter(Boolean))];
+  const lines = stdout.split("\n").filter(Boolean);
+  // Git for Windows prints forward slashes; normalize to the native form `<cwd>/.git` already has.
+  // POSIX output is used as git printed it.
+  const dirs = [...new Set(process.platform === "win32" ? lines.map((dir) => nodePath.normalize(dir)) : lines)];
   return dirs.filter((dir) => {
     try {
       return fs.statSync(dir).isDirectory();

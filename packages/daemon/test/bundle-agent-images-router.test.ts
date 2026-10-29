@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import nodePath from "node:path";
 import { routeAgentImages, type AgentImagesRouterFsOps, type RouteAgentImagesInput } from "../src/domain/bundle-agent-images-router.js";
 
 // Item 6 / slice-05 Checkpoint 7.3g step 2: bundle-agent-images-router
@@ -32,11 +33,11 @@ function mockFs(initial: { dirs?: string[]; files?: string[] } = {}): AgentImage
 
 /** Convenience: build a complete agent-image fixture (image dir + manifest.yaml file inside). */
 function imageFixture(imageDir: string): { dirs: string[]; files: string[] } {
-  return { dirs: [imageDir], files: [`${imageDir}/manifest.yaml`] };
+  return { dirs: [imageDir], files: [nodePath.join(imageDir, "manifest.yaml")] };
 }
 
-const BUNDLE_ROOT = "/bundle/root";
-const TARGET = "/operator/.openrig/agent-images";
+const BUNDLE_ROOT = nodePath.resolve("/bundle/root");
+const TARGET = nodePath.resolve("/operator/.openrig/agent-images");
 
 function makeInput(overrides?: Partial<RouteAgentImagesInput>): RouteAgentImagesInput {
   return {
@@ -60,28 +61,28 @@ describe("routeAgentImages", () => {
 
   // A2: routes one image: copyDir from sourceAbs (declared dir) to target/<basename>
   it("routes one agent_image: declared dir copied to target/<basename>", () => {
-    const fs = mockFs(imageFixture(`${BUNDLE_ROOT}/agent-images/seat-a`));
+    const fs = mockFs(imageFixture(nodePath.join(BUNDLE_ROOT, "agent-images/seat-a")));
     const result = routeAgentImages(
       makeInput({ declaredAgentImages: ["agent-images/seat-a"] }),
       fs,
     );
     expect(result.routedCount).toBe(1);
     expect(result.records[0]!.status).toBe("routed");
-    expect(result.records[0]!.installedAt).toBe(`${TARGET}/seat-a`);
+    expect(result.records[0]!.installedAt).toBe(nodePath.join(TARGET, "seat-a"));
     expect(fs._copyCalls).toHaveLength(1);
     expect(fs._copyCalls[0]).toEqual({
-      src: `${BUNDLE_ROOT}/agent-images/seat-a`,
-      dest: `${TARGET}/seat-a`,
+      src: nodePath.join(BUNDLE_ROOT, "agent-images/seat-a"),
+      dest: nodePath.join(TARGET, "seat-a"),
     });
   });
 
   // A3: multiple distinct images route correctly
   it("routes multiple distinct agent_images each to target/<basename>", () => {
     const fs = mockFs({
-      dirs: [`${BUNDLE_ROOT}/agent-images/seat-a`, `${BUNDLE_ROOT}/agent-images/seat-b`],
+      dirs: [nodePath.join(BUNDLE_ROOT, "agent-images/seat-a"), nodePath.join(BUNDLE_ROOT, "agent-images/seat-b")],
       files: [
-        `${BUNDLE_ROOT}/agent-images/seat-a/manifest.yaml`,
-        `${BUNDLE_ROOT}/agent-images/seat-b/manifest.yaml`,
+        nodePath.join(BUNDLE_ROOT, "agent-images/seat-a/manifest.yaml"),
+        nodePath.join(BUNDLE_ROOT, "agent-images/seat-b/manifest.yaml"),
       ],
     });
     const result = routeAgentImages(
@@ -126,7 +127,7 @@ describe("routeAgentImages", () => {
   // not a directory. PRD line 197 says declared path is an agent-image
   // DIRECTORY; if operator-declared path is a file, reject.
   it("declared path exists but is a file (not directory) → status=not_directory", () => {
-    const fs = mockFs({ files: [`${BUNDLE_ROOT}/agent-images/seat-as-file`] });
+    const fs = mockFs({ files: [nodePath.join(BUNDLE_ROOT, "agent-images/seat-as-file")] });
     const result = routeAgentImages(
       makeInput({ declaredAgentImages: ["agent-images/seat-as-file"] }),
       fs,
@@ -140,7 +141,7 @@ describe("routeAgentImages", () => {
   // is absent. Consumer skips the image — false-positive routedCount class.
   it("image dir exists but manifest.yaml inside is absent → status=not_manifest", () => {
     const fs = mockFs({
-      dirs: [`${BUNDLE_ROOT}/agent-images/halfimage`],
+      dirs: [nodePath.join(BUNDLE_ROOT, "agent-images/halfimage")],
       // NO manifest.yaml file
     });
     const result = routeAgentImages(
@@ -158,8 +159,8 @@ describe("routeAgentImages", () => {
   it("image dir exists but manifest.yaml inside is itself a directory → status=not_manifest", () => {
     const fs = mockFs({
       dirs: [
-        `${BUNDLE_ROOT}/agent-images/dirmanifest`,
-        `${BUNDLE_ROOT}/agent-images/dirmanifest/manifest.yaml`,
+        nodePath.join(BUNDLE_ROOT, "agent-images/dirmanifest"),
+        nodePath.join(BUNDLE_ROOT, "agent-images/dirmanifest/manifest.yaml"),
       ],
     });
     const result = routeAgentImages(
@@ -176,12 +177,12 @@ describe("routeAgentImages", () => {
   it("two declared images sharing basename → first routed, second conflict (truthful routedCount)", () => {
     const fs = mockFs({
       dirs: [
-        `${BUNDLE_ROOT}/a/seat-a`,
-        `${BUNDLE_ROOT}/b/seat-a`,
+        nodePath.join(BUNDLE_ROOT, "a/seat-a"),
+        nodePath.join(BUNDLE_ROOT, "b/seat-a"),
       ],
       files: [
-        `${BUNDLE_ROOT}/a/seat-a/manifest.yaml`,
-        `${BUNDLE_ROOT}/b/seat-a/manifest.yaml`,
+        nodePath.join(BUNDLE_ROOT, "a/seat-a/manifest.yaml"),
+        nodePath.join(BUNDLE_ROOT, "b/seat-a/manifest.yaml"),
       ],
     });
     const result = routeAgentImages(
@@ -194,12 +195,12 @@ describe("routeAgentImages", () => {
     expect(result.routedCount).toBe(1);
     expect(result.rejectedCount).toBe(1);
     expect(result.records[0]!.status).toBe("routed");
-    expect(result.records[0]!.installedAt).toBe(`${TARGET}/seat-a`);
+    expect(result.records[0]!.installedAt).toBe(nodePath.join(TARGET, "seat-a"));
     expect(result.records[1]!.status).toBe("conflict");
     expect(result.records[1]!.detail).toContain("seat-a");
     expect(result.records[1]!.detail).toContain("collides");
     expect(fs._copyCalls).toHaveLength(1);
-    expect(fs._copyCalls[0]!.src).toBe(`${BUNDLE_ROOT}/a/seat-a`);
+    expect(fs._copyCalls[0]!.src).toBe(nodePath.join(BUNDLE_ROOT, "a/seat-a"));
   });
 
   // A10: mixed list — routed + missing + unsafe + not_directory +
@@ -207,16 +208,16 @@ describe("routeAgentImages", () => {
   it("mixed declared list aggregates correctly across all rejection classes", () => {
     const fs = mockFs({
       dirs: [
-        `${BUNDLE_ROOT}/agent-images/ok`,
-        `${BUNDLE_ROOT}/agent-images/halfimage`, // no manifest.yaml inside
-        `${BUNDLE_ROOT}/agent-images/dup`,
-        `${BUNDLE_ROOT}/elsewhere/dup`,
+        nodePath.join(BUNDLE_ROOT, "agent-images/ok"),
+        nodePath.join(BUNDLE_ROOT, "agent-images/halfimage"), // no manifest.yaml inside
+        nodePath.join(BUNDLE_ROOT, "agent-images/dup"),
+        nodePath.join(BUNDLE_ROOT, "elsewhere/dup"),
       ],
       files: [
-        `${BUNDLE_ROOT}/agent-images/ok/manifest.yaml`,
-        `${BUNDLE_ROOT}/agent-images/seat-as-file`, // file at declared location
-        `${BUNDLE_ROOT}/agent-images/dup/manifest.yaml`,
-        `${BUNDLE_ROOT}/elsewhere/dup/manifest.yaml`,
+        nodePath.join(BUNDLE_ROOT, "agent-images/ok/manifest.yaml"),
+        nodePath.join(BUNDLE_ROOT, "agent-images/seat-as-file"), // file at declared location
+        nodePath.join(BUNDLE_ROOT, "agent-images/dup/manifest.yaml"),
+        nodePath.join(BUNDLE_ROOT, "elsewhere/dup/manifest.yaml"),
       ],
     });
     const result = routeAgentImages(

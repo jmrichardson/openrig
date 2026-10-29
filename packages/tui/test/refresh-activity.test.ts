@@ -57,17 +57,30 @@ describe("production TUI refresh cadence", () => {
 
     const root = await mkdtemp(path.join(tmpdir(), "openrig-tui-refresh-"));
     tempDirs.push(root);
-    const bin = path.join(root, "bin");
-    await mkdir(bin);
-    const rigStub = path.join(bin, "rig");
-    await writeFile(rigStub, `#!/bin/sh
+    let cliEnv: NodeJS.ProcessEnv;
+    if (process.platform === "win32") {
+      // Windows execFile cannot run a PATH shim without a shell; the TUI is handed the CLI entry.
+      const rigStub = path.join(root, "rig.mjs");
+      await writeFile(rigStub, `
+if (process.argv[2] === 'crash-cart') console.log('{"state":"up"}');
+else if (process.argv[2] === 'config') console.log('{"value":"UTC"}');
+else process.exitCode = 1;
+`);
+      cliEnv = { OPENRIG_TUI_CLI_ENTRY: rigStub };
+    } else {
+      const bin = path.join(root, "bin");
+      await mkdir(bin);
+      const rigStub = path.join(bin, "rig");
+      await writeFile(rigStub, `#!/bin/sh
 case "$1" in
   crash-cart) printf '%s\\n' '{"state":"up"}' ;;
   config) printf '%s\\n' '{"value":"UTC"}' ;;
   *) exit 1 ;;
 esac
 `);
-    await chmod(rigStub, 0o755);
+      await chmod(rigStub, 0o755);
+      cliEnv = { PATH: `${bin}${path.delimiter}${process.env["PATH"] ?? ""}` };
+    }
 
     const viteNode = fileURLToPath(new URL("../../../node_modules/vite-node/vite-node.mjs", import.meta.url));
     const entry = fileURLToPath(new URL("../src/main.ts", import.meta.url));
@@ -79,7 +92,7 @@ esac
         ...process.env,
         OPENRIG_HOME: root,
         OPENRIG_TUI_SOCKET: path.join(root, "t.sock"),
-        PATH: `${bin}${path.delimiter}${process.env["PATH"] ?? ""}`,
+        ...cliEnv,
       },
       stdio: ["pipe", "pipe", "pipe"],
     });

@@ -2,7 +2,7 @@ import { serve, type ServerType } from "@hono/node-server";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { endProbeGroupsOnStartupSignal, stopRuntimeProbes } from "./adapters/bounded-probe-exec.js";
-import { closeHttpServer, createDaemonShutdown, DAEMON_SHUTDOWN_RECEIPT, trackHttpServerResponses } from "./daemon-shutdown.js";
+import { closeHttpServer, createDaemonShutdown, DAEMON_SHUTDOWN_RECEIPT, trackHttpServerResponses, startWindowsDaemonControl } from "./daemon-shutdown.js";
 import { readOpenRigEnv, OPENRIG_HOME } from "./openrig-compat.js";
 import { makeOperatorDeliveryEngine } from "./domain/gateway/operator-delivery-engine.js";
 import { resolveDaemonDbPath } from "./daemon-db-path.js";
@@ -321,6 +321,20 @@ export async function startServer(port?: number) {
     bindPlan,
   });
 
+  // Windows SIGTERM cannot drain, so its private stop channel is published before
+  // any listener answers: a daemon that could not publish it never looks started.
+  // The channel accepts a stop only once the CLI has recorded this pid as started.
+  let requestWindowsStop: ((signal: string) => void) | undefined;
+  let closeWindowsControl: (() => Promise<void>) | undefined;
+  if (process.platform === "win32") {
+    try {
+      closeWindowsControl = await startWindowsDaemonControl(OPENRIG_HOME, () => requestWindowsStop?.("Windows control"));
+    } catch (error) {
+      console.error(`[windows-control] ${error instanceof Error ? error.message : String(error)}; the daemon did not start.`);
+      process.exit(1);
+    }
+  }
+
   // Multi-bind via N serve() instances sharing the same Hono app.
   // Hono's serve() targets a single host:port; for multi-bind we spawn
   // one per host. The contextMonitor + watchdog scheduler only start
@@ -396,6 +410,7 @@ export async function startServer(port?: number) {
       // First, while transport still works: let the delivery in flight finish; the rest wait for the next start.
       ["wake-recovery", () => wakeRecovery.stop()],
       ["terminal-following", () => deps.terminalService?.stop()],
+      ["windows-control", () => closeWindowsControl?.()],
       ["timers", () => {
         deps.resumeMetadataRefresher?.stop();
         if (heartbeatTimer) clearInterval(heartbeatTimer);
@@ -431,6 +446,7 @@ export async function startServer(port?: number) {
   disarmStartupSignals();
   process.on("SIGINT", () => shutdown("SIGINT"));
   process.on("SIGTERM", () => shutdown("SIGTERM"));
+  requestWindowsStop = shutdown;
 
   // Backward-compatible single-server return (callers that just need a
   // handle reference; multi-bind shutdown is wired via signal handlers).

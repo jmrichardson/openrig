@@ -1,4 +1,5 @@
-import { spawn } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
+import path from "node:path";
 import { stopGroup } from "../domain/codex-network-default.js";
 import type { ExecFn } from "./tmux.js";
 
@@ -34,7 +35,14 @@ let stopping = false;
 function killRunningProbeGroupsNow(): void {
   for (const child of runningProbes) {
     if (child.pid === undefined) continue;
-    try { process.kill(-child.pid, "SIGKILL"); } catch { /* gone, or no process groups here (Windows) */ }
+    try {
+      if (process.platform === "win32") {
+        if (child.exitCode === null && child.signalCode === null) {
+          execFileSync(path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "taskkill.exe"),
+            ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore", timeout: 3000 });
+        }
+      } else process.kill(-child.pid, "SIGKILL");
+    } catch { /* gone, or taskkill failed (Windows) */ }
   }
 }
 
@@ -105,7 +113,9 @@ export function boundedProbeExec(
       return;
     }
     try {
-      child = spawn(cmd, { shell: true, stdio: ["ignore", "pipe", "pipe"], detached: true, cwd: deps.cwd?.(cmd) });
+      // Windows has no process groups to detach into (stopGroup ends the tree with taskkill /T instead), and a
+      // detached cmd.exe loses its command's piped output and never gives it stdin EOF.
+      child = spawn(cmd, { shell: true, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32", windowsHide: true, cwd: deps.cwd?.(cmd) });
     } catch (err) {
       reject(err);
       return;

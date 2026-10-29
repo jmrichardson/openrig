@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { execFile } from "node:child_process";
+import { join } from "node:path";
 import { Hono } from "hono";
 import { ClaudeCodeAdapter } from "../src/adapters/claude-code-adapter.js";
 import { ClaudeResumeAdapter } from "../src/adapters/claude-resume.js";
@@ -98,7 +99,7 @@ describe("S03 F2 argument/config evidence is not native enforcement", () => {
     const response = await app.request("/whoami?nodeId=node&diagnostics=permission");
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ permissionDrift: { enforcement: { state: "unknown", effective: null },
-      configuration: { observed: { defaultMode: "acceptEdits" }, sourcePath: `${binding.cwd}/.claude/settings.local.json` } } });
+      configuration: { observed: { defaultMode: "acceptEdits" }, sourcePath: join(binding.cwd!, ".claude", "settings.local.json") } } });
     expect(stored.value).toBe("acceptEdits");
   });
 });

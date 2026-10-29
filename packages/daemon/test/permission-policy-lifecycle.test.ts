@@ -13,7 +13,7 @@ import { mockShellCommand } from "./helpers/shell-command-mock.js";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type Database from "better-sqlite3";
 import { mkdtempSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { createDb } from "../src/db/connection.js";
 import { migrate } from "../src/db/migrate.js";
@@ -56,14 +56,14 @@ function agentYaml(name: string): string {
 function fsOps(policyReadable = true) {
   return {
     readFile: (p: string) => {
-      if (p.includes("agents/impl")) return agentYaml("impl");
-      if (p.includes("policies/operator-full.md")) {
+      if (p.includes(join("agents", "impl"))) return agentYaml("impl");
+      if (p.includes(join("policies", "operator-full.md"))) {
         if (!policyReadable) throw new Error("EACCES: unreadable");
         return CUSTOM_POLICY;
       }
       throw new Error(`Not found: ${p}`);
     },
-    exists: (p: string) => p.includes("agents/impl") || (policyReadable && p.includes("policies/operator-full.md")),
+    exists: (p: string) => p.includes(join("agents", "impl")) || (policyReadable && p.includes(join("policies", "operator-full.md"))),
   };
 }
 
@@ -194,7 +194,7 @@ describe("F1 — rig-level custom provenance is RESTART-COMPLETE", () => {
       origin: "custom",
       launchPosture: "full_bypass",
       declaringDir: DECLARING_ROOT,
-      resolvedTarget: `${DECLARING_ROOT}/policies/operator-full.md`,
+      resolvedTarget: resolve(DECLARING_ROOT, "policies/operator-full.md"),
     });
     // member override still wins
     const addOverride = await setup.podInstantiator.addMemberToPod(

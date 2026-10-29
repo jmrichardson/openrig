@@ -44,16 +44,38 @@ it("a fresh install has all six exact plugin hooks trusted before the first seat
   expect(Object.keys(states)).toHaveLength(6);
   // Source-derived Codex0.163 normalized identities, independently calculated with Python sorted JSON/SHA256.
   const expected = {
-  "openrig-core@openrig:hooks/codex.json:session_start:0:0": "sha256:a746b5abb568d50725b08bf39660bbf08d15fa3d3a5961208862e7beaadba43d",
-  "openrig-core@openrig:hooks/codex.json:user_prompt_submit:0:0": "sha256:f56dfb2a70982d6a7ae4a6c4ace58b943e16dcb08fe3bc87d3c8803477f4a5c1",
-  "openrig-core@openrig:hooks/codex.json:user_prompt_submit:1:0": "sha256:c648714b3a02675ba4ea029b8e62dbcd77569afc317ad4f1bc3e8cbfbe7b34ee",
-  "openrig-core@openrig:hooks/codex.json:stop:0:0": "sha256:bb444b151db38aff570d0ceadc2cc84b21afb021f00b15b326aef55a27d87d40",
-  "openrig-core@openrig:hooks/codex.json:post_compact:0:0": "sha256:f4dd49518599c67ac23c80daef3537bb03b02e23a1e8c1da1210534766afefae",
-  "openrig-core@openrig:hooks/codex.json:permission_request:0:0": "sha256:75c66b08f505a22f84def73ecf6d61e98dd1b24ed8ecdcc05306eba3013e64d4"
+  "openrig-core@openrig:hooks/codex.json:session_start:0:0": "sha256:6db12925190721d527fd001e319f32d761090472b5f54baa0e9fd15c887f0447",
+  "openrig-core@openrig:hooks/codex.json:user_prompt_submit:0:0": "sha256:032e9cf8d082066045003dd67421c6f9f610ba5c28cb19fbbdf295616f1ec4a9",
+  "openrig-core@openrig:hooks/codex.json:user_prompt_submit:1:0": "sha256:83f341936bd470b557529e2740e0e6cf869c8a19e82a8383aa661841165c4d8d",
+  "openrig-core@openrig:hooks/codex.json:stop:0:0": "sha256:da247b77b01105f031b0e9877af207c5cbafa608ee554af708626e6603a4891e",
+  "openrig-core@openrig:hooks/codex.json:post_compact:0:0": "sha256:bcfa25937362662c18efd9dc95199749152b7e351d7ad5fb8dea2e8c952f996f",
+  "openrig-core@openrig:hooks/codex.json:permission_request:0:0": "sha256:15e605f5ed9bbea17cc074c330908a098f5713cd4416fe49ff7eafde1d239b9c"
 };
   expect(Object.fromEntries(Object.entries(states).map(([key,value]:[string,any])=>[key,value.trusted_hash]))).toEqual(expected);
   expect(Object.values(states).every((state: any) => state.trusted_content_hash === codexPluginContentHash(shipped))).toBe(true);
   expect(f.calls.map(a=>a.slice(0,2))).toEqual([["plugin","marketplace"],["plugin","add"]]);
+});
+
+it.each(["owned", "disabled", "customized", "unrecorded"])("portable hook migration preserves %s approval boundaries", async choice => {
+  const f = fixture(); await f.adapter().ensureCodexCorePlugin();
+  const current = f.read();
+  const hashes = ["a746b5abb568d50725b08bf39660bbf08d15fa3d3a5961208862e7beaadba43d", "f56dfb2a70982d6a7ae4a6c4ace58b943e16dcb08fe3bc87d3c8803477f4a5c1", "c648714b3a02675ba4ea029b8e62dbcd77569afc317ad4f1bc3e8cbfbe7b34ee", "bb444b151db38aff570d0ceadc2cc84b21afb021f00b15b326aef55a27d87d40", "f4dd49518599c67ac23c80daef3537bb03b02e23a1e8c1da1210534766afefae", "75c66b08f505a22f84def73ecf6d61e98dd1b24ed8ecdcc05306eba3013e64d4"];
+  const events = ["session_start:0", "user_prompt_submit:0", "user_prompt_submit:1", "stop:0", "post_compact:0", "permission_request:0"];
+  const old = Object.fromEntries(events.map((event, i) => [`openrig-core@openrig:hooks/codex.json:${event}:0`, `sha256:${hashes[i]}`]));
+  const contentHash = `sha256:${"a".repeat(64)}`;
+  let text = fs.readFileSync(f.file, "utf8");
+  for (const [key, value] of Object.entries(old)) text = text.replace(current.hooks.state[key].trusted_hash, value);
+  text = text.replaceAll(codexPluginContentHash(shipped), contentHash);
+  const key = Object.keys(old)[0]!;
+  if (choice === "disabled") text = text.replace(`[hooks.state.${JSON.stringify(key)}]`, `[hooks.state.${JSON.stringify(key)}]\nenabled = false`);
+  if (choice === "customized") text = text.replace(old[key]!, "person-selected-command");
+  fs.writeFileSync(f.file, text);
+  const receipt = path.join(f.home, ".openrig-core-hook-trust.json");
+  fs.writeFileSync(receipt, JSON.stringify({ schema: 1, plugin: "openrig-core@openrig", contentHash, declarations: old }));
+  if (choice === "unrecorded") fs.rmSync(receipt);
+  await f.adapter().ensureCodexCorePlugin();
+  if (choice === "owned") expect(f.read().hooks.state).toEqual(current.hooks.state);
+  else expect(fs.readFileSync(f.file, "utf8")).toBe(text);
 });
 it.each(['[plugins."openrig-core@openrig"]\nenabled = false\n','[plugins._default]\nenabled = false\n'])("a disabled plugin stays disabled on restart and upgrade: %s", async config => {
   const f = fixture(config); await f.adapter().ensureCodexCorePlugin(); await f.adapter().ensureCodexCorePlugin();
@@ -179,7 +201,7 @@ it.each(["disabled", "refused", "unknown baseline", "changed script", "changed s
     const f = await legacyUpgrade();
     const header = '[hooks.state."openrig-core@openrig:hooks/codex.json:stop:0:0"]';
     if (condition === "disabled") fs.writeFileSync(f.file, fs.readFileSync(f.file, "utf8").replace(header, `${header}\nenabled = false`));
-    if (condition === "refused") fs.writeFileSync(f.file, fs.readFileSync(f.file, "utf8").replace(/trusted_hash = "sha256:bb444[^"]+"/, 'trusted_hash = "not-the-owned-declaration"'));
+    if (condition === "refused") fs.writeFileSync(f.file, fs.readFileSync(f.file, "utf8").replace(/trusted_hash = "sha256:da247[^"]+"/, 'trusted_hash = "not-the-owned-declaration"'));
     if (condition === "unknown baseline") fs.writeFileSync(f.baseline, "unknown");
     if (condition === "changed script") fs.appendFileSync(path.join(f.cache, "hooks/scripts/refocus.cjs"), "\nmodified");
     if (condition === "changed skill") fs.appendFileSync(path.join(f.cache, "skills/openrig-user/SKILL.md"), "\nmodified");

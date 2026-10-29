@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
 import http from "node:http";
+import nodePath from "node:path";
 import { Command } from "commander";
 import { packageCommand } from "../src/commands/package.js";
 import { DaemonClient } from "../src/client.js";
@@ -479,7 +480,7 @@ describe("rig package", () => {
     const installBody = capturedBodies[capturedBodies.length - 1];
     expect(installBody).toBeTruthy();
     expect(installBody!["sourceRef"]).toBe("/valid/path");
-    expect(installBody!["targetRoot"]).toBe("/my-repo");
+    expect(installBody!["targetRoot"]).toBe(nodePath.resolve("/my-repo"));
     expect(installBody!["runtime"]).toBe("codex");
     expect(installBody!["roleName"]).toBe("worker");
     expect(installBody!["allowMerge"]).toBe(true);

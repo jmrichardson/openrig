@@ -70,7 +70,7 @@ describe("context add local auto-start", () => {
     };
     const post = vi.fn(async () => ({ status: 200, data: { count: 1, entries: [], errors: [] } }));
     const clientFactory = vi.fn(() => ({ post }) as unknown as DaemonClient);
-    const preflightExec = vi.fn(async (cmd: string) => cmd === "tmux -V" ? "tmux 3.6a" : "");
+    const preflightExec = vi.fn(async (cmd: string) => cmd === "tmux -V" ? (process.platform === "win32" ? "tmux 3.4.0\npsmux 3.4.0" : "tmux 3.6a") : "");
     const command = () => new Command().exitOverride().addCommand(contextCommand({ lifecycleDeps, clientFactory, preflightExec }));
     const add = () => command().parseAsync(["node", "rig", "context", "add", source, "--json"]);
     return { lifecycleDeps, clientFactory, preflightExec, post, command, add };
@@ -174,7 +174,7 @@ describe("context add local auto-start", () => {
     f.preflightExec.mockRejectedValue(new Error("tmux missing"));
     await f.add();
     expect(process.exitCode).toBe(1);
-    expect(vi.mocked(console.error).mock.calls.flat().join("\n")).toContain("tmux was not found");
+    expect(vi.mocked(console.error).mock.calls.flat().join("\n")).toMatch(/tmux(\.exe)? was not found/);
     expect(f.lifecycleDeps.spawn).not.toHaveBeenCalled();
   });
 

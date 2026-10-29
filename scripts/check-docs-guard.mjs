@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
 
 /**
  * Exact tracked docs paths allowed outside the three durable roots.
@@ -57,6 +58,8 @@ export function main() {
   process.exitCode = 1;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// A Windows path (C:\...) is a file URL only through pathToFileURL.
+const entryUrl = process.platform === "win32" && process.argv[1] ? pathToFileURL(process.argv[1]).href : `file://${process.argv[1]}`;
+if (import.meta.url === entryUrl) {
   main();
 }

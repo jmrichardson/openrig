@@ -13,7 +13,8 @@
 // slice research validated over the raw socket. The wire protocol here is
 // grounded in the VERBATIM captures preserved at
 // research/herdr-socket-captures/herdr-phase3-*.json:
-//   - socket: ~/.config/herdr/herdr.sock (HERDR_SOCKET_PATH / HERDR_SESSION overrides)
+//   - socket: ~/.config/herdr/herdr.sock (HERDR_SOCKET_PATH / HERDR_SESSION overrides);
+//     native Windows: %APPDATA%\herdr\herdr.sock, whose full path names herdr's named pipe
 //   - framing: newline-delimited JSON (one object per line)
 //   - envelope: request {id,method,params} → success {id,result:{type,…}}
 //     (NOT JSON-RPC 2.0 — there is no `jsonrpc` field; some methods, e.g. ping,
@@ -53,11 +54,23 @@ export interface HerdrTransport {
 export type HerdrTransportFactory = () => HerdrTransport;
 
 /** Resolve the herdr control socket path: env override → per-session → default. */
-export function resolveHerdrSocketPath(env: NodeJS.ProcessEnv = process.env): string {
+export function resolveHerdrSocketPath(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): string {
   if (env["HERDR_SOCKET_PATH"]) return env["HERDR_SOCKET_PATH"] as string;
-  const base = path.join(homedir(), ".config", "herdr");
+  // Windows herdr keeps its directory under XDG_CONFIG_HOME when set, else %APPDATA% (herdr 0.9.3 `herdr status`).
+  const base = platform === "win32"
+    ? path.win32.join(env["XDG_CONFIG_HOME"] || env["APPDATA"] || path.win32.join(homedir(), "AppData", "Roaming"), "herdr")
+    : path.join(homedir(), ".config", "herdr");
+  const join = platform === "win32" ? path.win32.join : path.join;
   const session = env["HERDR_SESSION"];
-  return session ? path.join(base, "sessions", session, "herdr.sock") : path.join(base, "herdr.sock");
+  return session ? join(base, "sessions", session, "herdr.sock") : join(base, "herdr.sock");
+}
+
+/**
+ * Where to connect for a socket path. On Windows the `.sock` file holds only herdr's pid and nonce;
+ * the endpoint is the named pipe named by that full path (connecting to the file fails ENOTSOCK).
+ */
+export function herdrSocketEndpoint(socketPath: string, platform: NodeJS.Platform = process.platform): string {
+  return platform === "win32" ? `\\\\.\\pipe\\${socketPath}` : socketPath;
 }
 
 /** Extract a version token (e.g. from a ping result's `version`, or `herdr --version`). */
@@ -97,10 +110,11 @@ export function unwrapHerdrResponse(raw: unknown): HerdrResult {
 export function createHerdrSocketRpc(
   socketPath: string = resolveHerdrSocketPath(),
   timeoutMs = 5000,
+  platform: NodeJS.Platform = process.platform,
 ): HerdrSocketRpc {
   return (req) =>
     new Promise<HerdrResult>((resolve, reject) => {
-      const conn = net.createConnection({ path: socketPath });
+      const conn = net.createConnection({ path: herdrSocketEndpoint(socketPath, platform) });
       conn.setEncoding("utf8"); // decode across chunks, so a split multi-byte character stays intact
       let buf = "";
       let settled = false;

@@ -18,6 +18,7 @@ import { parse as parseYaml } from "yaml";
 import { compareSpecToLive, topologyFromRigSpec, topologyFromLiveLogicalIds } from "@openrig/daemon/spec-conformance";
 import { classifyNodeVersion } from "../node-support.js";
 import { checkProviderReadiness } from "../provider-auth.js";
+import { WINDOWS_POWERSHELL_PROBE, windowsExecutionPolicyCheck } from "../setup-platform.js";
 
 interface DoctorCheck {
   name: string;
@@ -83,7 +84,7 @@ export function runDoctorChecks(deps: DoctorDeps, providerChecks: DoctorCheck[] 
       status: "fail",
       message: "Daemon dist not found.",
       reason: "The daemon compiled output is required to start the OpenRig daemon process.",
-      fix: "Run 'npm run build:package' from the repo root, or reinstall with 'npm install -g @openrig/cli'.",
+      fix: `Run 'npm run ${platform === "win32" ? "build:package:windows" : "build:package"}' from the repo root, or reinstall with 'npm install -g @openrig/cli'.`,
     });
   }
 
@@ -97,7 +98,7 @@ export function runDoctorChecks(deps: DoctorDeps, providerChecks: DoctorCheck[] 
       status: "fail",
       message: "UI dist not found.",
       reason: "The pre-built UI assets are required for the dashboard to render.",
-      fix: "Run 'npm run build:package' from the repo root, or reinstall with 'npm install -g @openrig/cli'.",
+      fix: `Run 'npm run ${platform === "win32" ? "build:package:windows" : "build:package"}' from the repo root, or reinstall with 'npm install -g @openrig/cli'.`,
     });
   }
 
@@ -117,15 +118,31 @@ export function runDoctorChecks(deps: DoctorDeps, providerChecks: DoctorCheck[] 
     });
   }
 
+  if (platform === "win32") {
+    for (const [name, command, label, fix] of [
+      ["powershell", WINDOWS_POWERSHELL_PROBE, "Windows PowerShell", "Enable native Windows PowerShell. No WSL is required."],
+      ["git", "git --version", "Git for Windows", "Install Git for Windows: winget install --id Git.Git --exact, then reopen your terminal."],
+      ["npm", "npm --version", "npm (native Windows .cmd shim)", "Install Node.js 22 or 24 with npm from https://nodejs.org/en/download."],
+    ] as const) {
+      try {
+        const version = deps.exec(command).trim();
+        checks.push({ name, status: "pass", message: `${label}: ${version}` });
+      } catch (err) {
+        checks.push({ name, status: "fail", message: `${label} unavailable: ${String(err)}`, fix });
+      }
+    }
+    checks.push({ name: "powershell_execution_policy", ...windowsExecutionPolicyCheck(deps.exec) });
+  }
+
   // 4. tmux
-  const tmuxProbe = probeTmuxControl((cmd) => deps.exec(cmd));
+  const tmuxProbe = probeTmuxControl((cmd) => deps.exec(cmd), platform);
   if (tmuxProbe.code === "not_installed") {
     checks.push({
       name: "tmux",
       status: "fail",
-      message: "tmux not found.",
-      reason: "OpenRig uses tmux to manage agent sessions.",
-      fix: "Install tmux: brew install tmux (macOS), apt install tmux (Linux).",
+      message: platform === "win32" ? "psmux tmux.exe alias not found." : "tmux not found.",
+      reason: platform === "win32" ? "OpenRig uses native psmux (tmux.exe) to manage Windows agent sessions; no WSL is required." : "OpenRig uses tmux to manage agent sessions.",
+      fix: platform === "win32" ? "Run rig setup to install portable psmux, or extract https://github.com/psmux/psmux/releases and add its tmux.exe directory to PATH." : "Install tmux: brew install tmux (macOS), apt install tmux (Linux).",
     });
   } else if (tmuxProbe.available && tmuxProbe.version) {
     checks.push({ name: "tmux", status: "pass", message: tmuxProbe.version });
@@ -170,6 +187,9 @@ export function runDoctorChecks(deps: DoctorDeps, providerChecks: DoctorCheck[] 
 
   // 5. cmux shell check (optional but recommended for Open CMUX workflows)
   let shellCmuxPassed = false;
+  if (platform === "win32") {
+    checks.push({ name: "cmux_shell", status: "skipped", message: "cmux is not supported on native Windows; use psmux and rig tui." });
+  } else {
   try {
     deps.exec("cmux capabilities --json");
     shellCmuxPassed = true;
@@ -206,6 +226,7 @@ export function runDoctorChecks(deps: DoctorDeps, providerChecks: DoctorCheck[] 
       });
     }
     void err;
+  }
   }
 
   // 6. Writable state paths (shared with preflight)

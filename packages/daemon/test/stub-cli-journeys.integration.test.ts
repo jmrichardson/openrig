@@ -53,7 +53,9 @@ describe("stub CLI journeys", () => {
     }
   }, 60_000);
 
-  it.each(["normal", "narrow soft-wrap"])("verified send renders in the addressed pane and not its sibling: %s", async (mode) => {
+  it.for(["normal", "narrow soft-wrap"])("verified send renders in the addressed pane and not its sibling: %s", async (mode, { skip }) => {
+    // psmux 3.4.0 ignores capture-pane -J, so soft-wrapped lines are not rejoined for verification
+    if (mode === "narrow soft-wrap" && process.platform === "win32") skip();
     if (mode === "narrow soft-wrap") {
       execFileSync("tmux", ["-S", scaffold!.tmuxSocketPath, "resize-window", "-t", `=${recipient}:`, "-x", "42", "-y", "40"], { env: scaffold!.env });
     }

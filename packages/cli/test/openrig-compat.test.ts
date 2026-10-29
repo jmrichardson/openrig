@@ -25,7 +25,7 @@ describe("openrig-compat", () => {
     const mod = await import("../src/openrig-compat.js");
 
     expect(mod.getOpenRigHome()).toBe("/tmp/custom-openrig-home");
-    expect(mod.getDefaultOpenRigPath("daemon.json")).toBe("/tmp/custom-openrig-home/daemon.json");
+    expect(mod.getDefaultOpenRigPath("daemon.json")).toBe(join("/tmp/custom-openrig-home", "daemon.json"));
   });
 
   it("getOpenRigHome falls back to RIGGED_HOME with warning", async () => {

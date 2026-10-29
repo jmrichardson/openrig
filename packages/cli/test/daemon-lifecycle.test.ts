@@ -186,7 +186,7 @@ describe("Daemon Lifecycle", () => {
     const [cmd, args, opts] = spawnMock.mock.calls[0]!;
     expect(cmd).toBe(process.execPath);
     expect(args[0]).toContain("daemon");
-    expect(args[0]).toContain("dist/index.js");
+    expect(args[0]).toContain(path.join("dist", "index.js"));
     expect(opts.env).toMatchObject({
       OPENRIG_PORT: "7433",
       OPENRIG_DB: "openrig.sqlite",
@@ -478,6 +478,40 @@ describe("Daemon Lifecycle", () => {
       expect(deps.fileSize!(path.join(root, "absent"))).toBe(0);
       expect(deps.readFileFrom!(path.join(root, "absent"), 0)).toBeNull();
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
+  // A `rig` reading daemon.json on Windows makes the replace fail with EPERM until it closes the file.
+  it.each(["win32", "linux"] as const)("publishes daemon.json by rename, waiting out a reader's lock only on Windows (%s)", (value) => {
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    const deps = realDeps();
+    const rename = fs.renameSync;
+    let refusals = 0;
+    const renameSync = vi.spyOn(fs, "renameSync").mockImplementation((from, to) => {
+      if (to === STATE_FILE && refusals < 2) {
+        refusals++;
+        throw Object.assign(new Error("EPERM: operation not permitted, rename"), { code: "EPERM" });
+      }
+      rename(from, to);
+    });
+    fs.mkdirSync(OPENRIG_DIR, { recursive: true });
+    fs.rmSync(STATE_FILE, { force: true });
+    Object.defineProperty(process, "platform", { ...platform, value });
+    try {
+      if (value === "win32") {
+        deps.writeFile(STATE_FILE, "{\"pid\":1}");
+        expect(fs.readFileSync(STATE_FILE, "utf-8")).toBe("{\"pid\":1}");
+        expect(renameSync).toHaveBeenCalledTimes(3);
+      } else {
+        expect(() => deps.writeFile(STATE_FILE, "{\"pid\":2}")).toThrow("EPERM");
+        expect(renameSync).toHaveBeenCalledTimes(1);
+        expect(fs.existsSync(STATE_FILE)).toBe(false);
+      }
+      expect(fs.readdirSync(OPENRIG_DIR).filter((name) => name.startsWith("daemon.json.") && name.endsWith(".tmp"))).toEqual([]);
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+      renameSync.mockRestore();
+      fs.rmSync(STATE_FILE, { force: true });
+    }
   });
 
   // Test 5: stop reads pid from daemon.json, sends SIGTERM, removes daemon.json
@@ -937,14 +971,34 @@ describe("Daemon Lifecycle", () => {
       spawn: spawnFn,
     });
 
-    tailLogs(deps, { follow: true });
+    tailLogs(deps, { follow: true }, "linux");
 
-    // Should spawn tail -f on the log file
+    // The installed Node runtime follows logs without a Unix tail dependency.
     expect(spawnFn).toHaveBeenCalledOnce();
     const [cmd, args] = spawnFn.mock.calls[0]!;
-    expect(cmd).toBe("tail");
-    expect(args).toContain("-f");
+    expect(cmd).toBe(process.execPath);
+    expect(args).toContain("--follow");
     expect(args).toContain(LOG_FILE);
+  });
+
+  it("tailLogs uses the paired portable Node reader on POSIX too", () => {
+    const child = { pid: 1, unref: vi.fn(), on: vi.fn() };
+    const spawnFn = vi.fn(() => child as unknown as ChildProcess);
+    tailLogs(mockDeps({ exists: vi.fn((p: string) => p === LOG_FILE), spawn: spawnFn }), { follow: false }, "darwin");
+    expect(spawnFn.mock.calls[0]![0]).toBe(process.execPath);
+    expect(spawnFn.mock.calls[0]![1]).toEqual([expect.stringMatching(/log-tail.js$/), LOG_FILE]);
+    expect(child.unref).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])("tailLogs on Windows follows with the installed Node, in the foreground (follow=%s)", (follow) => {
+    const child = { pid: 1, unref: vi.fn(), on: vi.fn() };
+    const spawnFn = vi.fn(() => child as unknown as ChildProcess);
+    tailLogs(mockDeps({ exists: vi.fn((p: string) => p === LOG_FILE), spawn: spawnFn }), { follow }, "win32");
+    const [cmd, args] = spawnFn.mock.calls[0]!;
+    expect(cmd).toBe(process.execPath);
+    expect(args[0]).toMatch(/log-tail.js$/);
+    expect(args.slice(1)).toEqual(follow ? [LOG_FILE, "--follow"] : [LOG_FILE]);
+    expect(child.unref).not.toHaveBeenCalled();
   });
 
   // Test 17: pid alive + healthz failure -> running with healthy=false, daemon.json preserved
@@ -1636,10 +1690,10 @@ describe("buildDaemonEnv", () => {
         process.env["OPENRIG_HOME"] = "/Users/example/.openrig-populated";
         const populatedState = getDefaultOpenRigPath("daemon.json");
         const populatedLog = getDefaultOpenRigPath("daemon.log");
-        expect(blankState).toBe("/Users/example/.openrig-blank/daemon.json");
-        expect(populatedState).toBe("/Users/example/.openrig-populated/daemon.json");
-        expect(blankLog).toBe("/Users/example/.openrig-blank/daemon.log");
-        expect(populatedLog).toBe("/Users/example/.openrig-populated/daemon.log");
+        expect(blankState).toBe(path.join("/Users/example/.openrig-blank", "daemon.json"));
+        expect(populatedState).toBe(path.join("/Users/example/.openrig-populated", "daemon.json"));
+        expect(blankLog).toBe(path.join("/Users/example/.openrig-blank", "daemon.log"));
+        expect(populatedLog).toBe(path.join("/Users/example/.openrig-populated", "daemon.log"));
         expect(blankState).not.toBe(populatedState);
         expect(blankLog).not.toBe(populatedLog);
       } finally {
@@ -1655,7 +1709,7 @@ describe("buildDaemonEnv", () => {
       try {
         process.env["OPENRIG_HOME"] = "";
         const result = getOpenRigHome();
-        expect(result).toBe(`${homedir()}/.openrig`);
+        expect(result).toBe(path.join(homedir(), ".openrig"));
       } finally {
         if (saved === undefined) delete process.env["OPENRIG_HOME"];
         else process.env["OPENRIG_HOME"] = saved;
@@ -1698,12 +1752,12 @@ describe("buildDaemonEnv", () => {
         expect(blank.OPENRIG_DIR).not.toBe(populated.OPENRIG_DIR);
 
         // STATE_FILE / LOG_FILE — derived as path.join(OPENRIG_DIR, "daemon.{json,log}")
-        expect(blank.STATE_FILE).toBe("/Users/example/.openrig-vm-blank-fresh/daemon.json");
-        expect(populated.STATE_FILE).toBe("/Users/example/.openrig-vm-populated-fresh/daemon.json");
+        expect(blank.STATE_FILE).toBe(path.join("/Users/example/.openrig-vm-blank-fresh", "daemon.json"));
+        expect(populated.STATE_FILE).toBe(path.join("/Users/example/.openrig-vm-populated-fresh", "daemon.json"));
         expect(blank.STATE_FILE).not.toBe(populated.STATE_FILE);
 
-        expect(blank.LOG_FILE).toBe("/Users/example/.openrig-vm-blank-fresh/daemon.log");
-        expect(populated.LOG_FILE).toBe("/Users/example/.openrig-vm-populated-fresh/daemon.log");
+        expect(blank.LOG_FILE).toBe(path.join("/Users/example/.openrig-vm-blank-fresh", "daemon.log"));
+        expect(populated.LOG_FILE).toBe(path.join("/Users/example/.openrig-vm-populated-fresh", "daemon.log"));
         expect(blank.LOG_FILE).not.toBe(populated.LOG_FILE);
       } finally {
         if (saved === undefined) delete process.env["OPENRIG_HOME"];

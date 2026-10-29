@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { ContextPackLibraryService } from "../src/domain/context-packs/context-pack-library-service.js";
 import { contextPacksRoutes } from "../src/routes/context-packs.js";
+import { canCreateFileSymlinks } from "../../../test/symlink-capability.mjs";
 
 const MANIFEST = `
 name: world-install
@@ -119,7 +120,8 @@ describe("GET /library/by-ref/profile — situation-composed delivery (Atom 4b)"
     expect(body.budget!.overageTokens).toBeGreaterThan(0);
   });
 
-  it("r1 RIDER 1: every piece carries BYTE provenance — a symlinked read is reported, labels never lie about where bytes came from", async () => {
+  // Creating a file symlink needs SeCreateSymbolicLinkPrivilege on Windows.
+  it.skipIf(!canCreateFileSymlinks)("r1 RIDER 1: every piece carries BYTE provenance — a symlinked read is reported, labels never lie about where bytes came from", async () => {
     // r1's live probe on 4a: a symlink inside the seat root returned an
     // out-of-root secret while the source label stayed 'seat' — accurate about
     // the REF, wrong about the BYTES. Q2-Amendment 1 binds per-piece source
@@ -190,7 +192,8 @@ describe("GET /library/by-ref/profile — situation-composed delivery (Atom 4b)"
     expect(body.provenanceWarnings).toEqual([]);
   });
 
-  it("r1 pre-judgment (2): a DANGLING symlink is its own NAMED failure, never a garbled provenance error", async () => {
+  // Creating a file symlink needs SeCreateSymbolicLinkPrivilege on Windows.
+  it.skipIf(!canCreateFileSymlinks)("r1 pre-judgment (2): a DANGLING symlink is its own NAMED failure, never a garbled provenance error", async () => {
     const { symlinkSync } = await import("node:fs");
     const seatDir = join(tmp, "topology", "rigs", "r1", "seats", "s1");
     rmSync(join(seatDir, "RECAP.md"));
@@ -686,7 +689,8 @@ describe("synthetic world graph — the seat RECAP composes through the real rou
     expect(body.skipped).toEqual([{ atomId: "recap", address: "seat:RECAP.md" }]);
   });
 
-  it("POST-COMPACTION still fails LOUD for a dangling RECAP link, a missing seat directory, or no seat grant", async () => {
+  // Creating a file symlink needs SeCreateSymbolicLinkPrivilege on Windows.
+  it.skipIf(!canCreateFileSymlinks)("POST-COMPACTION still fails LOUD for a dangling RECAP link, a missing seat directory, or no seat grant", async () => {
     buildApp(false);
     symlinkSync(join(tmp, "nowhere.md"), join(tmp, "topology", "rigs", "r1", "seats", "s1", "RECAP.md"));
     const dangling = await app.request(profileUrl("situation=post-compaction&runtime=claude&rig=r1&seat=s1"));

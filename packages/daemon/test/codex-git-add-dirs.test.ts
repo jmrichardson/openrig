@@ -99,12 +99,13 @@ describe("Codex fresh launch git add-dirs (issue #121)", () => {
     expect(fs.statSync(nodePath.join(worktree, ".git")).isFile()).toBe(true);
     const dirs = addDirs(await freshLaunchCommand(worktree));
     expect(dirs).not.toContain(nodePath.join(worktree, ".git"));
-    expect(dirs).toContain(worktreeGitDir);
+    expect(dirs).toContain(nodePath.normalize(worktreeGitDir));
     expect(dirs).toContain(nodePath.join(repo, ".git"));
     for (const dir of dirs) expect(fs.statSync(dir).isDirectory()).toBe(true);
   });
 
-  it.each(["metadata ", "metadata\t"])("preserves whitespace in separate Git metadata directory %j", async (name) => {
+  // Windows paths cannot end in a space or tab, so such a metadata directory cannot exist there.
+  it.skipIf(process.platform === "win32").each(["metadata ", "metadata\t"])("preserves whitespace in separate Git metadata directory %j", async (name) => {
     const repo = nodePath.join(root, "separate repo");
     const metadata = nodePath.join(root, name);
     fs.mkdirSync(repo);
@@ -352,7 +353,7 @@ describe("resolveCodexGitAddDirs (issue #121)", () => {
   it("linked worktree: worktree git dir and common git dir, both existing directories", async () => {
     const { resolveCodexGitAddDirs } = await import("../src/domain/codex-git-add-dirs.js");
     const { repo, worktree, worktreeGitDir } = linkedWorktree();
-    expect(await resolveCodexGitAddDirs(worktree)).toEqual([worktreeGitDir, nodePath.join(repo, ".git")]);
+    expect(await resolveCodexGitAddDirs(worktree)).toEqual([nodePath.normalize(worktreeGitDir), nodePath.join(repo, ".git")]);
   });
 
   it("malformed .git file (gitdir points nowhere): [], never the file", async () => {
@@ -363,7 +364,8 @@ describe("resolveCodexGitAddDirs (issue #121)", () => {
     expect(await resolveCodexGitAddDirs(broken)).toEqual([]);
   });
 
-  it("unreadable .git (not ENOENT): []", async () => {
+  // POSIX mode bits; Windows uses ACLs
+  it.skipIf(process.platform === "win32")("unreadable .git (not ENOENT): []", async () => {
     const { resolveCodexGitAddDirs } = await import("../src/domain/codex-git-add-dirs.js");
     const parent = nodePath.join(root, "locked");
     fs.mkdirSync(parent);

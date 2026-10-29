@@ -241,6 +241,42 @@ describe("classifyPaneRuntimeMatch", () => {
   it("a shell for a terminal (infrastructure) node is expected — MATCH", () => {
     expect(classifyPaneRuntimeMatch("zsh", "terminal")).toBe("match");
   });
+
+  it.each(["pwsh.exe", "powershell.exe", "cmd.exe", String.raw`C:\Program Files\PowerShell\7\pwsh.exe`])(
+    "treats a native shell %s as a contradiction for an agent, not a terminal",
+    (command) => {
+      expect(classifyPaneRuntimeMatch(command, "claude-code", "win32")).toBe("mismatch");
+      expect(classifyPaneRuntimeMatch(command, "codex", "win32")).toBe("mismatch");
+      // Pi and OMP run behind the OpenRig runner (`node`), so a bare shell contradicts them too, as on POSIX.
+      expect(classifyPaneRuntimeMatch(command, "pi", "win32")).toBe("mismatch");
+      expect(classifyPaneRuntimeMatch(command, "omp", "win32")).toBe("mismatch");
+      expect(classifyPaneRuntimeMatch("node.exe", "pi", "win32")).toBe("match");
+      expect(classifyPaneRuntimeMatch(command, "terminal", "win32")).toBe("match");
+    },
+  );
+
+  it("uses the native executable basename rather than directory or substring mentions", () => {
+    expect(classifyPaneRuntimeMatch(String.raw`C:\Program Files\codex tools\claude.exe`, "codex", "win32")).toBe("mismatch");
+    expect(classifyPaneRuntimeMatch(String.raw`C:\Program Files\claude tools\CODEX.EXE`, "claude-code", "win32")).toBe("mismatch");
+    expect(classifyPaneRuntimeMatch(String.raw`C:\Tools\codex-reporter.exe`, "claude-code", "win32")).toBe("match");
+    expect(classifyPaneRuntimeMatch(String.raw`C:\Tools\claude-monitor.exe`, "codex", "win32")).toBe("match");
+  });
+
+  // Linux and macOS keep the original substring rules and shell set.
+  it("on POSIX, a Codex binary not named exactly codex still contradicts a Claude seat", () => {
+    expect(classifyPaneRuntimeMatch("codex-aarch64-a", "claude-code", "darwin")).toBe("mismatch");
+    expect(classifyPaneRuntimeMatch("codex-aarch64-a", "codex", "darwin")).toBe("match");
+    expect(classifyPaneRuntimeMatch(".claude-unwrapp", "claude-code", "linux")).toBe("match");
+  });
+
+  it.each(["nu", "ksh", "pwsh", "powershell"])("on POSIX, foreground %s is not a contradiction for an agent", (command) => {
+    expect(classifyPaneRuntimeMatch(command, "claude-code", "linux")).toBe("match");
+    expect(classifyPaneRuntimeMatch(command, "codex", "linux")).toBe("match");
+  });
+
+  it.each(["dash", "-tcsh", "csh", "ZSH"])("on POSIX, foreground %s is still a contradiction for an agent", (command) => {
+    expect(classifyPaneRuntimeMatch(command, "claude-code", "linux")).toBe("mismatch");
+  });
 });
 
 describe("SeatIdentityReconciler.reconcileAll", () => {

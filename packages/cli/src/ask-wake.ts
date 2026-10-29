@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { resolveWindowsCodexCommand } from "@openrig/daemon/windows-launch";
 
 export interface WakeRunResult {
   stdout: string;
@@ -62,8 +63,17 @@ export function buildWakeCommand(runtime: "claude" | "codex", token: string, que
 
 /** Default runner: execFile with a hard timeout. Resolving means the child
  *  exited (back-to-cold) — we never retain a handle. */
-export const defaultWakeRunner: WakeRunner = (cmd, args, opts) =>
-  new Promise((resolve) => {
+export const defaultWakeRunner: WakeRunner = async (cmd, args, opts) => {
+  if (process.platform === "win32" && cmd === "codex") {
+    try {
+      const resolved = resolveWindowsCodexCommand(process.env["PATH"] ?? "", process.execPath);
+      cmd = resolved.command;
+      args = [...resolved.args, ...args];
+    } catch (error) {
+      return { stdout: "", stderr: error instanceof Error ? error.message : String(error), code: null, timedOut: false };
+    }
+  }
+  return new Promise<WakeRunResult>((resolve) => {
     execFile(cmd, args, { timeout: opts.timeoutMs, maxBuffer: 64 * 1024 * 1024 }, (err, stdout, stderr) => {
       const e = err as (NodeJS.ErrnoException & { killed?: boolean; signal?: string }) | null;
       const timedOut = !!(e && e.killed && e.signal === "SIGTERM");
@@ -75,6 +85,7 @@ export const defaultWakeRunner: WakeRunner = (cmd, args, opts) =>
       });
     });
   });
+};
 
 /** Default file locator for the size advisory: scan ~/.claude/projects/<cwd>/<token>.jsonl. */
 export function defaultWakeFileLocator(token: string): { path: string; sizeBytes: number } | null {

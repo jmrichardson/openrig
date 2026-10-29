@@ -249,7 +249,7 @@ describe("ATOM 3 — durable compose into the Atom-2 ref store", () => {
     const outside = join(tmp, "outside");
     mkdirSync(outside);
     mkdirSync(userRoot);
-    symlinkSync(outside, join(userRoot, "linked"));
+    symlinkSync(outside, join(userRoot, "linked"), process.platform === "win32" ? "junction" : "dir");
     let err = captureError(() => service().composeFromFiles({
       outRef: "linked/escape",
       sources: [{ path: a, label: "a.md" }],

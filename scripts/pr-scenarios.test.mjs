@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { test } from 'node:test';
 import { reducedEnvRestart } from '../packages/test-system/ci/reduced-env-restart.mjs';
 import assert from 'node:assert/strict';
@@ -302,7 +303,7 @@ for (const failure of [null, 'after-restart', 'before-private-panes', 'after-pri
           events.push('send'); marker = args[3]; return { stdout: '{}' };
         }
         assert.equal(env.TMUX, undefined); assert.equal(env.TMUX_TMPDIR, undefined);
-        assert.ok(!env.PATH.includes('/fixture/bin'));
+        assert.ok(!env.PATH.includes(join('/fixture', 'bin')));
         blind++; events.push(killed ? 'gone-blind' : 'blind' + blind);
         if (killed) goneRestart = true;
         if (failure === (killed ? 'gone-restart' : blind === 1 ? 'after-restart' : 'second-restart')) throw new Error('synthetic restart failure');
@@ -317,7 +318,7 @@ for (const failure of [null, 'after-restart', 'before-private-panes', 'after-pri
         { code: 13, stdout: '', stderr: 'permission denied' });
       return { stdout: args[0] !== '-S' ? '' : row('worker', '%1', '111') + (killed ? '' : row('peer', '%2', '112')) };
     };
-    const daemon = { port: 12345, readEnv: { PATH: '/fixture/bin:/usr/bin:/bin', TMUX: 'synthetic', TMUX_TMPDIR: '/fixture' },
+    const daemon = { port: 12345, readEnv: { PATH: join('/fixture', 'bin') + ':/usr/bin:/bin', TMUX: 'synthetic', TMUX_TMPDIR: '/fixture' },
       sigterm: async () => {}, restart: async () => {
         const stage = killed ? 'gone-recovery' : 'recovery-restart'; events.push(stage);
         if (failure === stage) throw new Error('synthetic restart failure');

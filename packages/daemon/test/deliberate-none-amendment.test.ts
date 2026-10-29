@@ -7,6 +7,7 @@
 // P1 (HONESTY CRUX) and P2 (POSTURE-IDENTITY) are the ruled form's pin-required
 // invariants for this lane; P3 (write-on-explicit-selection-only) is Lane-B's.
 import { describe, expect, it } from "vitest";
+import { join } from "node:path";
 import {
   resolvePermissionPolicyAttachment,
   validatePermissionPolicyRef,
@@ -27,9 +28,9 @@ profiles:
 
 function fsOps(): AgentResolverFsOps {
   return {
-    exists: (p) => p.includes("agents/impl"),
+    exists: (p) => p.includes(join("agents", "impl")),
     readFile: (p) => {
-      if (p.includes("agents/impl")) return AGENT_YAML;
+      if (p.includes(join("agents", "impl"))) return AGENT_YAML;
       throw new Error(`not found: ${p}`);
     },
   };

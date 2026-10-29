@@ -57,6 +57,8 @@ function yamlFile(path: string, optional = false): Record<string, any> | null {
 }
 function inside(root: string, path: string): string {
   const actual = realpathSync(path), rel = relative(realpathSync(root), actual);
+  // Windows relative() separates segments with "\".
+  if (process.platform === "win32" && rel.startsWith("..\\")) throw new Error("scope escapes its project: " + path);
   if (rel === ".." || rel.startsWith("../") || isAbsolute(rel)) throw new Error("scope escapes its project: " + path);
   return actual;
 }

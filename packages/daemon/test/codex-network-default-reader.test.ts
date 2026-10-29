@@ -4,6 +4,7 @@ import nodePath from "node:path";
 import { spawn } from "node:child_process";
 import { afterEach, describe, it, expect } from "vitest";
 import { codexNetworkDefaultReader } from "../src/domain/codex-network-default.js";
+import { installWindowsNpmCodex } from "./helpers/windows-npm-codex.js";
 
 // #275 — the production reader against a fake `codex` on a temporary PATH. The fake speaks the
 // app-server JSON-lines exchange from the architecture review's 0.160.0 records and behaves as
@@ -62,10 +63,12 @@ function fakeCodex(mode: Record<string, unknown>) {
   const home = nodePath.join(root, "home");
   fs.mkdirSync(bin); fs.mkdirSync(cwd); fs.mkdirSync(home);
   fs.writeFileSync(nodePath.join(bin, "codex"), FAKE_CODEX, { mode: 0o755 });
-  fs.writeFileSync(nodePath.join(bin, "mode.json"), JSON.stringify({ config: FLOOR_CONFIG, requirements: { requirements: null }, ...mode }));
-  const launchPath = `${bin}:${process.env.PATH}`;
-  const read = (file: string) => JSON.parse(fs.readFileSync(nodePath.join(bin, file), "utf8"));
-  return { bin, cwd, home, codexHome: nodePath.join(home, ".codex"), launchPath, read, exists: (file: string) => fs.existsSync(nodePath.join(bin, file)) };
+  // The fake's files live beside its script: on Windows that is npm Codex's package entry.
+  const dir = process.platform === "win32" ? installWindowsNpmCodex(bin, FAKE_CODEX) : bin;
+  fs.writeFileSync(nodePath.join(dir, "mode.json"), JSON.stringify({ config: FLOOR_CONFIG, requirements: { requirements: null }, ...mode }));
+  const launchPath = `${bin}${nodePath.delimiter}${process.env.PATH}`;
+  const read = (file: string) => JSON.parse(fs.readFileSync(nodePath.join(dir, file), "utf8"));
+  return { dir, cwd, home, codexHome: nodePath.join(home, ".codex"), launchPath, read, exists: (file: string) => fs.existsSync(nodePath.join(dir, file)) };
 }
 
 const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
@@ -121,7 +124,7 @@ describe("#275 codexNetworkDefaultReader (fake codex)", () => {
     const f = fakeCodex({ grandchild: true });
     const result = await codexNetworkDefaultReader({ launchPath: f.launchPath, graceMs: 200 })(f.cwd);
     expect(result.apply).toBe(true);
-    const grandchild = Number(fs.readFileSync(nodePath.join(f.bin, "grandchild.pid"), "utf8"));
+    const grandchild = Number(fs.readFileSync(nodePath.join(f.dir, "grandchild.pid"), "utf8"));
     // Group cleanup is bounded; allow the OS to finish reaping the orphaned descendant.
     await expect.poll(() => alive(grandchild), { timeout: 2_000 }).toBe(false);
   });

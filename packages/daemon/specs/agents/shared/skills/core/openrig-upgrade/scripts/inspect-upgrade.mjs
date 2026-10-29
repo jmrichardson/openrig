@@ -1,11 +1,36 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
 
 const rig = process.env.OPENRIG_RIG_BIN || "rig";
 
+// Native Windows cannot spawn the rig.cmd/rig.ps1 shims without a shell. A Windows
+// seat names its CLI entry; elsewhere it is the entry of the @openrig/cli install
+// whose npm rig.cmd shim is on PATH. This Node runs the entry directly.
+function windowsCliEntry() {
+  if (process.env.OPENRIG_CLI_ENTRY) return process.env.OPENRIG_CLI_ENTRY;
+  for (const dir of (process.env.PATH || "").split(path.delimiter)) {
+    if (!dir || !fs.existsSync(path.join(dir, "rig.cmd"))) continue;
+    const pkg = path.join(dir, "node_modules", "@openrig", "cli");
+    try {
+      const manifest = JSON.parse(fs.readFileSync(path.join(pkg, "package.json"), "utf8"));
+      if (manifest.name === "@openrig/cli" && typeof manifest.bin?.rig === "string") return path.join(pkg, manifest.bin.rig);
+    } catch {
+      // Not an npm global prefix; keep looking.
+    }
+  }
+  return undefined;
+}
+
+function spawnRig(args, options) {
+  const entry = !process.env.OPENRIG_RIG_BIN && process.platform === "win32" && windowsCliEntry();
+  return entry ? spawnSync(process.execPath, [entry, ...args], options) : spawnSync(rig, args, options);
+}
+
 function probe(name, args, next) {
-  const result = spawnSync(rig, args, { encoding: "utf8" });
+  const result = spawnRig(args, { encoding: "utf8" });
   const stdout = result.stdout?.trim() || "";
   const stderr = result.stderr?.trim() || "";
   if (result.status === 0) {

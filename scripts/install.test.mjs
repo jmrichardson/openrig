@@ -6,6 +6,10 @@ import path from "node:path";
 import http from "node:http";
 import { spawn, spawnSync } from "node:child_process";
 
+if (process.platform === "win32") {
+  await import("./install-windows.cases.mjs");
+} else {
+
 const script = path.join(import.meta.dirname, "install.sh");
 const source = fs.readFileSync(script, "utf8");
 const nodeAdvice = [
@@ -82,6 +86,18 @@ for (const tool of ["node", "npm"]) test(`missing ${tool} reports the prerequisi
   assert.match(r.stderr, new RegExp(`Missing prerequisite: ${tool}`));
   for (const text of nodeAdvice) assert.ok(r.stderr.includes(text), text);
   assert.match(r.stderr, /FAILED \[1\/4\].*exit 127/);
+  assert.deepEqual(f.calls(), []);
+});
+
+test("a Windows_NT shell is sent to install.ps1 before any tool runs", t => {
+  const f = fixture(t, { OS: "Windows_NT" });
+  for (const args of [[], ["--dry-run"]]) {
+    const r = f.run(...args);
+    assert.equal(r.status, 2);
+    assert.equal(r.stdout, "");
+    assert.ok(r.stderr.includes("powershell -NoProfile -ExecutionPolicy Bypass -File .\\install.ps1 -DryRun"), r.stderr);
+    assert.match(r.stderr, /only for macOS and Linux/);
+  }
   assert.deepEqual(f.calls(), []);
 });
 
@@ -211,3 +227,5 @@ test("a setup that finishes ready keeps today's closing line and no summary", t 
   assert.match(r.stdout, /Follow the next steps printed by rig setup/);
   assert.ok(!r.stderr.includes("SETUP NOT COMPLETE"), r.stderr);
 });
+
+}

@@ -93,7 +93,7 @@ describe("ATOM 2 — recursive path-addressed discovery (spec §2 refs)", () => 
     writePackAt(root, "system/baseline", "system-baseline");
     if (collision) writePackAt(root, "baseline", "operator-baseline");
     const alias = join(tmp, "system-alias");
-    symlinkSync(join(root, "system"), alias, "dir");
+    symlinkSync(join(root, "system"), alias, process.platform === "win32" ? "junction" : "dir");
     const service = new ContextPackLibraryService({
       roots: [
         { path: root, sourceType: "user_file" },
@@ -187,8 +187,8 @@ describe("ATOM 2 — recursive path-addressed discovery (spec §2 refs)", () => 
     expect(service.list().map((e) => e.relativePath).sort()).toEqual(["packs/a", "packs/b"]);
     const a = service.getByRef("packs/a");
     const b = service.getByRef("packs/b");
-    expect(a!.sourcePath.endsWith("packs/a")).toBe(true);
-    expect(b!.sourcePath.endsWith("packs/b")).toBe(true);
+    expect(a!.sourcePath.endsWith(join("packs", "a"))).toBe(true);
+    expect(b!.sourcePath.endsWith(join("packs", "b"))).toBe(true);
   });
 
   it("GUARD PROBE 2 (canonical): same ref across roots is last-root-wins EVERYWHERE — one list row, count one, resolve to the last entry", () => {
@@ -266,7 +266,7 @@ describe("ATOM 2 — recursive path-addressed discovery (spec §2 refs)", () => 
     writePackAt(root, "real/target", "target");
     // a symlink elsewhere in the tree must not create a second discovery path
     const { symlinkSync } = require("node:fs") as typeof import("node:fs");
-    symlinkSync(join(root, "real"), join(root, "alias"));
+    symlinkSync(join(root, "real"), join(root, "alias"), process.platform === "win32" ? "junction" : "dir");
     const service = lib();
     const result = service.scan();
     expect(result.count).toBe(1);

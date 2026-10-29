@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   createFullTestDb,
@@ -74,9 +75,9 @@ describe("R2 bootstrap provenance fault probe", () => {
       const setup = createTestApp(db, {
         adapters: { "claude-code": adapter },
         podInstantiatorFsOps: {
-          exists: (path: string) => path.includes("agents/impl"),
+          exists: (path: string) => path.includes(join("agents", "impl")),
           readFile: (path: string) => {
-            if (path.includes("agents/impl")) return AGENT_YAML;
+            if (path.includes(join("agents", "impl"))) return AGENT_YAML;
             throw new Error(`not found: ${path}`);
           },
         },
@@ -123,9 +124,9 @@ describe("R2 bootstrap provenance fault probe", () => {
       const setup = createTestApp(db, {
         adapters: { "claude-code": adapter },
         podInstantiatorFsOps: {
-          exists: (path: string) => path.includes("agents/impl"),
+          exists: (path: string) => path.includes(join("agents", "impl")),
           readFile: (path: string) => {
-            if (path.includes("agents/impl")) return AGENT_YAML;
+            if (path.includes(join("agents", "impl"))) return AGENT_YAML;
             throw new Error(`not found: ${path}`);
           },
         },
@@ -160,9 +161,9 @@ describe("R2 bootstrap provenance fault probe", () => {
       const setup = createTestApp(db, {
         adapters: { "claude-code": adapter },
         podInstantiatorFsOps: {
-          exists: (path) => path.includes("agents/impl"),
+          exists: (path) => path.includes(join("agents", "impl")),
           readFile: (path) => {
-            if (path.includes("agents/impl")) return AGENT_YAML;
+            if (path.includes(join("agents", "impl"))) return AGENT_YAML;
             throw new Error(`not found: ${path}`);
           },
         },

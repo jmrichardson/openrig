@@ -17,7 +17,8 @@ import type { ComposedPane, ComposedView, OpenViewResult, TerminalProvider } fro
 const local = (seat: string, readOnly = false): ViewMemberInput => ({ seat, label: seat, tmuxSession: seat, host: null, readOnly, alive: true });
 
 describe("#707 local tiles run the tmux the daemon resolves", () => {
-  it("a provider PATH without tmux fails the bare command; the resolved path attaches, keeping -r", () => {
+  // Runs the composed pane command through /bin/sh, as the POSIX terminal providers do; Windows has no /bin/sh.
+  it.skipIf(process.platform === "win32")("a provider PATH without tmux fails the bare command; the resolved path attaches, keeping -r", () => {
     const root = mkdtempSync(join(tmpdir(), "openrig-707-"));
     const narrow = join(root, "provider-path"); // the provider's PATH: no tmux here
     const elsewhere = join(root, "elsewhere"); // where the daemon found tmux

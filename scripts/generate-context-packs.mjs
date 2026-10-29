@@ -23,6 +23,7 @@
 //   node scripts/generate-context-packs.mjs --version=0.5.3
 // Overridable for tests: OPENRIG_SKILLS_SOURCE, OPENRIG_PACKS_OUT, OPENRIG_PACKAGE_VERSION.
 
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -235,8 +236,27 @@ function findStaticPackDirs(dir, rel = "") {
 // reference document has one source and still ships as a pack file (the copy
 // below dereferences it). Any other symlink fails the build.
 const REFERENCE_DOCS = path.join(REPO, "docs/reference");
+// Git for Windows checks a committed symlink out as a plain file holding the link text unless
+// core.symlinks is on, and it is off by default. The index still records such a file as a link
+// (mode 120000), so it is read through that text and held to the same docs/reference rule.
+const GIT_SYMLINK_FILES = process.platform === "win32" ? gitSymlinkFiles(STATIC_SOURCE) : new Set();
+function gitSymlinkFiles(dir) {
+  const listed = spawnSync("git", ["ls-files", "-s", "-z"], { cwd: dir, encoding: "utf8", windowsHide: true });
+  if (listed.status !== 0) return new Set();
+  return new Set(listed.stdout.split("\0").filter((entry) => entry.startsWith("120000 "))
+    .map((entry) => path.resolve(dir, entry.slice(entry.indexOf("\t") + 1))));
+}
+// The file whose bytes a static pack file ships: itself, or the reference document its link text names.
+function staticSourceFile(file) {
+  if (!GIT_SYMLINK_FILES.has(file) || !fs.lstatSync(file).isFile()) return file;
+  const target = path.resolve(path.dirname(file), fs.readFileSync(file, "utf8").trim());
+  if (!fs.existsSync(target) || !fs.realpathSync(target).startsWith(fs.realpathSync(REFERENCE_DOCS) + path.sep) || !fs.statSync(target).isFile()) {
+    throw new Error(`static pack symlink ${file} must point to a file under docs/reference/`);
+  }
+  return target;
+}
 function isStaticContentFile(dir, entry) {
-  if (entry.isFile()) return true;
+  if (entry.isFile()) return Boolean(staticSourceFile(path.join(dir, entry.name)));
   if (!entry.isSymbolicLink()) return false;
   const target = fs.realpathSync(path.join(dir, entry.name));
   if (!target.startsWith(fs.realpathSync(REFERENCE_DOCS) + path.sep) || !fs.statSync(target).isFile()) {
@@ -291,7 +311,7 @@ function scanStaticSource() {
       const childRel = rel ? `${rel}/${entry.name}` : entry.name;
       const child = path.join(dir, entry.name);
       if (entry.isDirectory()) walk(child, childRel);
-      else if (isStaticContentFile(dir, entry)) files.push({ path: childRel, bytes: fs.readFileSync(child) });
+      else if (isStaticContentFile(dir, entry)) files.push({ path: childRel, bytes: fs.readFileSync(staticSourceFile(child)) });
     }
   };
   walk(STATIC_SOURCE);
@@ -415,7 +435,7 @@ async function main() {
         : path.join(SOURCE, pack.ref.replace(/^skills\//, ""), rel);
       const dstAbs = path.join(packDir, rel);
       fs.mkdirSync(path.dirname(dstAbs), { recursive: true });
-      fs.copyFileSync(srcAbs, dstAbs);
+      fs.copyFileSync(staticSourceFile(srcAbs), dstAbs);
     }
     fs.writeFileSync(path.join(packDir, "manifest.yaml"), pack.manifestYaml);
   }

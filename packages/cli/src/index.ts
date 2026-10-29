@@ -43,6 +43,7 @@ import { slackCommand, type SlackDeps } from "./commands/slack.js";
 import { projectCommand, type ProjectDeps } from "./commands/project.js";
 import { viewCommand, type ViewDeps } from "./commands/view.js";
 import { terminalCommand, type TerminalDeps } from "./commands/terminal.js";
+import { operatorCommand } from "./commands/operator.js";
 import { watchdogCommand, type WatchdogDeps } from "./commands/watchdog.js";
 import { workflowCommand, type WorkflowDeps } from "./commands/workflow.js";
 import { startCommand, type StartDeps } from "./commands/start.js";
@@ -214,6 +215,7 @@ export function createProgram(depsOverride?: ProgramDeps): Command {
   program.addCommand(projectCommand(depsOverride?.projectDeps));
   program.addCommand(viewCommand(depsOverride?.viewDeps));
   program.addCommand(terminalCommand(depsOverride?.terminalDeps));
+  program.addCommand(operatorCommand());
   program.addCommand(watchdogCommand(depsOverride?.watchdogDeps));
   program.addCommand(workflowCommand(depsOverride?.workflowDeps));
   program.addCommand(captureCommand(depsOverride?.captureDeps));

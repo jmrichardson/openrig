@@ -49,7 +49,8 @@ it.each(["not-a-url", "http://user:synthetic-secret@localhost:1234", "http://loc
   expect(publicSeatEnvironment({ OPENRIG_HOME: f.env.OPENRIG_HOME, OPENRIG_URL: value })).toEqual({ OPENRIG_HOME: f.env.OPENRIG_HOME });
   expect(f.warn).toHaveBeenCalledTimes(1); expect(JSON.stringify(f.warn.mock.calls)).not.toContain(value);
 });
-it("A/B: rig need not be on the daemon PATH; the linked CLI belongs to this install", async () => {
+// The POSIX launch platform links rig as a file symlink that sh's `command -v` finds; win32 writes rig shims instead.
+it.skipIf(process.platform === "win32")("A/B: rig need not be on the daemon PATH; the linked CLI belongs to this install", async () => {
   const f = fixture(); f.env.PATH = "/usr/bin:/bin";
   const command = await f.launch.command("seat@rig", "/bin/sh -c 'command -v rig'");
   const rig = (await f.run(command)).stdout.trim();
@@ -61,7 +62,8 @@ it("A: a missing paired CLI does not introduce a launch refusal", async () => {
   const launch = new (SeatLaunchEnvironment as any)(f.tmux, f.env, f.root, path.join(f.root, "missing-cli")) as SeatLaunchEnvironment;
   expect(await launch.command("seat@rig", "claude")).toBe("claude"); expect(f.warn).toHaveBeenCalledTimes(1);
 });
-it("B: the owned rig-only directory leaves node/python/git/claude order intact", async () => {
+// POSIX launch platform: a symlinked rig ahead of PATH tools, listed by sh's `command -v`.
+it.skipIf(process.platform === "win32")("B: the owned rig-only directory leaves node/python/git/claude order intact", async () => {
   const f = fixture();
   const cmd = "/bin/sh -c 'for tool in rig node python git claude; do command -v \"$tool\"; done'";
   const paths = (await f.run(await f.launch.command("seat@rig", cmd))).stdout.trim().split("\n");
@@ -98,14 +100,16 @@ it.each(["fresh", "resume", "fork"] as const)("C: %s uses the probe's separate N
   expect(observed.path.split(":").slice(1).join(":")).toBe(userPath);
 });
 
-it("B: the default resolver links this workspace's built CLI, not its PATH-first rig", async () => {
+// POSIX launch platform: rig is a file symlink found by sh's `command -v`.
+it.skipIf(process.platform === "win32")("B: the default resolver links this workspace's built CLI, not its PATH-first rig", async () => {
   const f = fixture();
   const launch = new SeatLaunchEnvironment(f.tmux as any, f.env, f.root);
   const rig = (await f.run(await launch.command("seat@rig", "/bin/sh -c 'command -v rig'"))).stdout.trim();
   expect(readlinkSync(rig)).toBe(realpathSync(path.resolve(import.meta.dirname, "../../cli/dist/bin-wrapper.js")));
   expect(f.warn).not.toHaveBeenCalled();
 });
-it("B: a reused link remains rig-only; unexpected contents are preserved and fall back", async () => {
+// POSIX launch platform: rig is a file symlink found by sh's `command -v`.
+it.skipIf(process.platform === "win32")("B: a reused link remains rig-only; unexpected contents are preserved and fall back", async () => {
   const f = fixture(), command = "/bin/sh -c 'command -v rig'";
   const rig = (await f.run(await f.launch.command("seat@rig", command))).stdout.trim();
   expect((await f.run(await f.launch.command("seat@rig", command))).stdout.trim()).toBe(rig);

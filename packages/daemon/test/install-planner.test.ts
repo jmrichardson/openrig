@@ -3,6 +3,7 @@ import path from "node:path";
 import { InstallPlanner } from "../src/domain/install-planner.js";
 import { PackageResolver, type FsOps } from "../src/domain/package-resolver.js";
 import { parseManifest, normalizeManifest } from "../src/domain/package-manifest.js";
+import { fixtureKey } from "./helpers/fixture-path.js";
 
 const BASIC_MANIFEST = `
 schema_version: 1
@@ -34,13 +35,13 @@ const BASIC_SOURCE_FILES: Record<string, string | true> = {
 function mockFs(files: Record<string, string | true>, listFilesMap?: Record<string, string[]>): FsOps {
   return {
     readFile: vi.fn((p: string) => {
-      const v = files[p];
+      const v = files[fixtureKey(files, p) ?? p];
       if (typeof v === "string") return v;
       throw new Error(`ENOENT: ${p}`);
     }),
-    exists: vi.fn((p: string) => p in files),
+    exists: vi.fn((p: string) => fixtureKey(files, p) !== undefined),
     listFiles: listFilesMap
-      ? vi.fn((dirPath: string) => listFilesMap[dirPath] ?? ["SKILL.md"])
+      ? vi.fn((dirPath: string) => listFilesMap[fixtureKey(listFilesMap, dirPath) ?? dirPath] ?? ["SKILL.md"])
       : undefined,
   };
 }
@@ -175,12 +176,12 @@ exports:
     // Claude Code — guidance is agents_md which defers on claude-code, so only check skill
     const ccPlan = planner.plan(resolved, "/repo", "claude-code");
     const ccSkill = ccPlan.entries.find((e) => e.exportType === "skill");
-    expect(ccSkill!.targetPath).toContain(".claude/skills/foo");
+    expect(ccSkill!.targetPath).toContain(path.join(".claude/skills/foo"));
 
     // Codex
     const cxPlan = planner.plan(resolved, "/repo", "codex");
     const cxSkill = cxPlan.entries.find((e) => e.exportType === "skill");
-    expect(cxSkill!.targetPath).toContain(".agents/skills/foo");
+    expect(cxSkill!.targetPath).toContain(path.join(".agents/skills/foo"));
   });
 
   // Test 8: Plan separates actionable vs deferred vs conflicts
@@ -283,11 +284,11 @@ roles:
 
     const ccPlan = planner.plan(resolved, "/repo", "claude-code");
     const ccAgent = ccPlan.entries.find((e) => e.exportType === "agent");
-    expect(ccAgent!.targetPath).toMatch(/\.claude\/agents\/reviewer\.yaml$/);
+    expect(ccAgent!.targetPath.split(path.sep).join("/")).toMatch(/\.claude\/agents\/reviewer\.yaml$/);
 
     const cxPlan = planner.plan(resolved, "/repo", "codex");
     const cxAgent = cxPlan.entries.find((e) => e.exportType === "agent");
-    expect(cxAgent!.targetPath).toMatch(/\.agents\/reviewer\.yaml$/);
+    expect(cxAgent!.targetPath.split(path.sep).join("/")).toMatch(/\.agents\/reviewer\.yaml$/);
   });
 
   // Test 19: sourcePath set on file-backed entries, undefined on requirements
@@ -324,7 +325,7 @@ requirements:
 
     const skill = plan.entries.find((e) => e.exportType === "skill");
     expect(skill!.sourcePath).toBeDefined();
-    expect(skill!.sourcePath).toContain("skills/foo");
+    expect(skill!.sourcePath).toContain(path.join("skills/foo"));
 
     const guidance = plan.entries.find((e) => e.exportType === "guidance" && !e.deferred);
     expect(guidance!.sourcePath).toBeDefined();
@@ -497,8 +498,8 @@ exports:
     expect(skillEntries.some((e) => e.exportName === "review/SKILL.md")).toBe(true);
     expect(skillEntries.some((e) => e.exportName === "review/helper.md")).toBe(true);
     // Check target paths
-    expect(skillEntries.find((e) => e.exportName === "review/SKILL.md")!.targetPath).toContain(".claude/skills/review/SKILL.md");
-    expect(skillEntries.find((e) => e.exportName === "review/helper.md")!.targetPath).toContain(".claude/skills/review/helper.md");
+    expect(skillEntries.find((e) => e.exportName === "review/SKILL.md")!.targetPath).toContain(path.join(".claude/skills/review/SKILL.md"));
+    expect(skillEntries.find((e) => e.exportName === "review/helper.md")!.targetPath).toContain(path.join(".claude/skills/review/helper.md"));
   });
 
   // Test 21: Incompatible runtime -> throws
@@ -568,7 +569,7 @@ exports:
     const planner = new InstallPlanner(mockFs({}));
 
     expect(() => planner.plan(resolved, "/repo", "claude-code")).toThrow(
-      "Source file not found: /pkg/skills/foo/SKILL.md",
+      `Source file not found: ${path.join("/pkg/skills/foo/SKILL.md")}`,
     );
   });
 
@@ -591,7 +592,7 @@ exports:
     const planner = new InstallPlanner(mockFs({}));
 
     expect(() => planner.plan(resolved, "/repo", "codex")).toThrow(
-      "Source file not found: /pkg/guidance/AGENTS.md",
+      `Source file not found: ${path.join("/pkg/guidance/AGENTS.md")}`,
     );
   });
 
@@ -612,7 +613,7 @@ exports:
     const planner = new InstallPlanner(mockFs({}));
 
     expect(() => planner.plan(resolved, "/repo", "codex")).toThrow(
-      "Source file not found: /pkg/agents/reviewer.yaml",
+      `Source file not found: ${path.join("/pkg/agents/reviewer.yaml")}`,
     );
   });
 

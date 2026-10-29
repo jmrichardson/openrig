@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { createServer, type Server, type Socket } from "node:net";
 import { mkdtempSync, rmSync, existsSync, unlinkSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { tmpdir } from "node:os";
 import { runGatewayProcess, type GatewayProcessHandle } from "../src/domain/gateway/gateway-process.js";
 import { DispatchBuffer } from "../src/domain/gateway/dispatch-buffer.js";
@@ -53,7 +53,8 @@ describe("A4a runGatewayProcess (in-process brain)", () => {
 
   it("connects, exposes a live dispatcher, and stop() tears down", async () => {
     home = mkdtempSync(join(tmpdir(), "a4a-proc-"));
-    const sockPath = join(home, "g.sock");
+    // Node IPC on Windows listens on a named pipe, not a filesystem path.
+    const sockPath = process.platform === "win32" ? `\\\\.\\pipe\\${basename(home)}` : join(home, "g.sock");
     const stub = await startStub(sockPath, true);
     handle = runGatewayProcess({ socketPath: sockPath, home, reconnectMs: 100 });
     await waitFor(() => handle!.connected() && handle!.connection()?.dispatcher.connectorId === "slack-1");
@@ -65,7 +66,8 @@ describe("A4a runGatewayProcess (in-process brain)", () => {
 
   it("re-dials after an outage and REPLAYS the un-Acked decision (no-loss through the brain)", async () => {
     home = mkdtempSync(join(tmpdir(), "a4a-proc-"));
-    const sockPath = join(home, "g.sock");
+    // Node IPC on Windows listens on a named pipe, not a filesystem path.
+    const sockPath = process.platform === "win32" ? `\\\\.\\pipe\\${basename(home)}` : join(home, "g.sock");
 
     // round 1: connector never acks; dispatch d1 -> retained durably.
     const stub1 = await startStub(sockPath, false);

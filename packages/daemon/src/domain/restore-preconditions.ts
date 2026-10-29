@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { SnapshotData, RestoreValidationBlocker, RigServicesRecord } from "./types.js";
 import { resolveSnapshotRestoreTopology } from "./restore-topology.js";
 import { resolveActiveSnapshotSession } from "./active-occupant.js";
@@ -13,11 +14,14 @@ export function validatePreRestore(
     freshLogicalIds?: string[];
     /** The runtime each seat has now, by logical id. A seat not listed is read as its saved runtime. */
     currentRuntimes?: Record<string, string | null | undefined>;
+    /** The host platform whose path forms count as paths; tests inject it. */
+    platform?: NodeJS.Platform;
   },
 ): { blockers: RestoreValidationBlocker[]; warnings: string[] } {
   const blockers: RestoreValidationBlocker[] = [];
   const warnings: string[] = [];
   const exists = opts.fsOps?.exists ?? (() => true);
+  const platform = opts.platform ?? process.platform;
 
   const add = (blocker: RestoreValidationBlocker) => blockers.push(blocker);
   const nodes = Array.isArray(data.nodes) ? data.nodes : null;
@@ -136,12 +140,12 @@ export function validatePreRestore(
       // Validate the file replay will actually deliver (#261: built-ins follow the running install).
       const file = reanchorBuiltinStartupFile(storedFile, undefined, undefined, exists);
       if (!file.required) {
-        if (pathLike(file.absolutePath) && !exists(file.absolutePath)) {
+        if (pathLike(file.absolutePath, platform) && !exists(file.absolutePath)) {
           warnings.push(`Restore pre-validation: optional startup file missing for ${node.logicalId}: ${file.absolutePath}`);
         }
         continue;
       }
-      if (pathLike(file.ownerRoot) && !exists(file.ownerRoot)) {
+      if (pathLike(file.ownerRoot, platform) && !exists(file.ownerRoot)) {
         add({
           code: "startup_owner_root_missing",
           severity: "critical",
@@ -153,7 +157,7 @@ export function validatePreRestore(
           remediation: "Restore the agent/source root or capture a new snapshot with reachable startup context.",
         });
       }
-      if (pathLike(file.absolutePath) && !exists(file.absolutePath)) {
+      if (pathLike(file.absolutePath, platform) && !exists(file.absolutePath)) {
         add({
           code: "required_startup_file_missing",
           severity: "critical",
@@ -178,10 +182,10 @@ export function validatePreRestore(
     // stay critical above.
     for (const storedEntry of startupCtx.projectionEntries ?? []) {
       const entry = reanchorShippedProjectionEntry(storedEntry, undefined, exists);
-      if (pathLike(entry.sourcePath) && !exists(entry.sourcePath)) {
+      if (pathLike(entry.sourcePath, platform) && !exists(entry.sourcePath)) {
         warnings.push(`projection_drift: source root missing for ${node.logicalId}: ${entry.sourcePath} (projection will be skipped at startup; session continuity is unaffected)`);
       }
-      if (pathLike(entry.absolutePath) && !exists(entry.absolutePath)) {
+      if (pathLike(entry.absolutePath, platform) && !exists(entry.absolutePath)) {
         warnings.push(`projection_drift: entry missing for ${node.logicalId}: ${entry.absolutePath} (projection will be skipped at startup; session continuity is unaffected)`);
       }
     }
@@ -189,7 +193,7 @@ export function validatePreRestore(
 
   const servicesRecord = opts.servicesRecord ?? null;
   if (servicesRecord) {
-    if (pathLike(servicesRecord.rigRoot) && !exists(servicesRecord.rigRoot)) {
+    if (pathLike(servicesRecord.rigRoot, platform) && !exists(servicesRecord.rigRoot)) {
       add({
         code: "service_rig_root_missing",
         severity: "critical",
@@ -199,7 +203,7 @@ export function validatePreRestore(
         remediation: "Restore the service rig root or update the services record before retrying restore.",
       });
     }
-    if (pathLike(servicesRecord.composeFile) && !exists(servicesRecord.composeFile)) {
+    if (pathLike(servicesRecord.composeFile, platform) && !exists(servicesRecord.composeFile)) {
       add({
         code: "service_compose_file_missing",
         severity: "critical",
@@ -214,11 +218,17 @@ export function validatePreRestore(
   return { blockers, warnings };
 }
 
-function pathLike(value: unknown): value is string {
+function pathLike(value: unknown, platform: NodeJS.Platform): value is string {
   return typeof value === "string" && value.trim().length > 0 && (
     value.startsWith("/")
     || value.startsWith("./")
     || value.startsWith("../")
     || value.startsWith("~")
+    // Windows drive, UNC, rooted and backslash-relative forms; on POSIX these are ordinary names.
+    || (platform === "win32" && (
+      path.win32.isAbsolute(value)
+      || value.startsWith(".\\")
+      || value.startsWith("..\\")
+    ))
   );
 }

@@ -7,6 +7,7 @@ import { CodexRuntimeAdapter } from "../src/adapters/codex-runtime-adapter.js";
 import { ClaudeCodeAdapter } from "../src/adapters/claude-code-adapter.js";
 import { mergeManagedBlock } from "../src/domain/managed-blocks.js";
 import { excludeNewGeneratedFiles } from "../src/domain/generated-file-hygiene.js";
+import { projectionResourceDirectory } from "../src/domain/projection-resource-path.js";
 import type { NodeBinding } from "../src/domain/runtime-adapter.js";
 import type { ProjectionEntry } from "../src/domain/projection-planner.js";
 import type { TmuxAdapter } from "../src/adapters/tmux.js";
@@ -22,6 +23,10 @@ const fsOps = {
   listFiles: walk, statMode: (p: string) => fs.statSync(p).mode, chmod: fs.chmodSync, copyFile: fs.copyFileSync,
 };
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+// NUL-delimited, so Git does not C-quote the path (Windows paths carry "\").
+const checkIgnore = (cwd: string, file: string) => execFileSync("git", ["-C", cwd, "check-ignore", "--stdin", "-z"], { input: `${file}\0`, encoding: "utf8" });
+// "*" and "?" are invalid in Windows file names; the other glob characters stay in every fixture.
+const globChars = process.platform === "win32" ? "" : "*?";
 
 describe("generated file Git hygiene", () => {
   let root: string;
@@ -65,8 +70,8 @@ describe("generated file Git hygiene", () => {
 
   it.each(["openrig-core", "shared:openrig-core"])("keeps only newly generated %s plugin files out of git add", async effectiveId => {
     write("source/.codex-plugin/plugin.json", '{"name":"core"}', root);
-    write("source/scripts/a [literal]*?.sh", "echo core", root);
-    const pluginDir = `.codex/plugins/${effectiveId}`;
+    write(`source/scripts/a [literal]${globChars}.sh`, "echo core", root);
+    const pluginDir = `.codex/plugins/${projectionResourceDirectory(effectiveId)}`;
     const userPlugin = write(`${pluginDir}/user.txt`);
     const ignore = write(".gitignore", "# User rules\n/local-only/\n");
     const ignoreBefore = fs.readFileSync(ignore);
@@ -108,13 +113,15 @@ describe("generated file Git hygiene", () => {
   it("preserves arbitrary exclude bytes and escapes exact paths from a subdirectory", () => {
     const original = Buffer.from([35, 255, 13, 10, ...Buffer.from("/custom\r\n# no final newline")]);
     fs.writeFileSync(excludePath(repo), original);
-    const generated = write("sub/.codex/plugins/openrig-core/a [literal]*?!#.md");
+    const generated = write(`sub/.codex/plugins/openrig-core/a [literal]${globChars}!#.md`);
     excludeNewGeneratedFiles(path.join(repo, "sub"), [generated]);
     const after = fs.readFileSync(excludePath(repo));
     expect(after.subarray(0, original.length)).toEqual(original);
-    expect(git(repo, "check-ignore", "--", generated).trim()).toBe(generated);
-    write("sub/.codex/plugins/openrig-core/a lOTHERx!#.md");
-    expect(git(repo, "status", "--porcelain", "-uall")).toContain("sub/.codex/plugins/openrig-core/a lOTHERx!#.md");
+    expect(checkIgnore(repo, generated)).toBe(`${generated}\0`);
+    // What the pattern would match if its glob characters were left unescaped.
+    const decoy = `a l${globChars ? "OTHERx" : ""}!#.md`;
+    write(`sub/.codex/plugins/openrig-core/${decoy}`);
+    expect(git(repo, "status", "--porcelain", "-uall")).toContain(`sub/.codex/plugins/openrig-core/${decoy}`);
     excludeNewGeneratedFiles(path.join(repo, "sub"), [generated]);
     expect(fs.readFileSync(excludePath(repo))).toEqual(after);
   });
@@ -156,7 +163,7 @@ describe("generated file Git hygiene", () => {
   ] as const)("preserves current sibling %s plugin conflicts with Git case matching (ignorecase=%s)", (effectiveId, ignoreCase) => {
     git(repo, "config", "core.ignorecase", String(ignoreCase));
     const linked = path.join(root, "linked"); git(repo, "worktree", "add", "-q", "-b", "linked", linked);
-    const name = `.codex/plugins/${effectiveId}/payload.txt`;
+    const name = `.codex/plugins/${projectionResourceDirectory(effectiveId)}/payload.txt`;
     write(name, "User", linked);
     const generated = write(ignoreCase ? name.replace("payload", "PAYLOAD") : name);
     const warnings = excludeNewGeneratedFiles(repo, [generated]);
@@ -170,7 +177,7 @@ describe("generated file Git hygiene", () => {
     const linked = path.join(root, "linked"); git(bare, "worktree", "add", "-q", "-b", "linked", linked);
     const file = write(".codex/plugins/openrig-core/payload.txt", "Managed", linked);
     expect(excludeNewGeneratedFiles(linked, [file])).toEqual([]);
-    expect(git(linked, "check-ignore", "--", file).trim()).toBe(file);
+    expect(checkIgnore(linked, file)).toBe(`${file}\0`);
   });
 
   it.each(["other", "other:openrig-core", "shared:openrig-core-extra"])("does not automatically exclude plugin namespace %s", async effectiveId => {
@@ -179,7 +186,7 @@ describe("generated file Git hygiene", () => {
     const result = await project([other]);
     expect(result.warnings?.join(" ")).toContain("untracked");
     git(repo, "add", "-A");
-    expect(git(repo, "ls-files", "-z")).toBe(`.codex/plugins/${effectiveId}/payload.txt\0`);
+    expect(git(repo, "ls-files", "-z")).toBe(`.codex/plugins/${projectionResourceDirectory(effectiveId)}/payload.txt\0`);
   });
 
   it("leaves a recreated tracked path visible and supports non-Git workspaces", () => {
@@ -216,7 +223,8 @@ describe("generated file Git hygiene", () => {
     expect(fs.readFileSync(path.join(repo, ".codex/plugins/openrig-core/payload.txt"), "utf8")).toBe("Managed");
   });
 
-  it("batches index and metadata reads regardless of plugin file count", () => {
+  // Intercepts git with a PATH shebang script; Windows cannot execute extensionless script shims
+  it.skipIf(process.platform === "win32")("batches index and metadata reads regardless of plugin file count", () => {
     const linked = path.join(root, "linked"); git(repo, "worktree", "add", "-q", "-b", "linked", linked);
     const files = Array.from({ length: 24 }, (_, i) => write(`.codex/plugins/openrig-core/file${i}`));
     const beforePath = process.env.PATH;
@@ -250,7 +258,7 @@ catch(e) { process.stderr.write(e.stderr||''); process.exit(e.status||1); }
     const tracked = write("AGENTS.md"); git(repo, "add", "AGENTS.md");
     const generated = write(".codex/plugins/openrig-core/payload.txt");
     expect(excludeNewGeneratedFiles(repo, [generated, tracked])).toEqual([]);
-    expect(git(repo, "check-ignore", "--", generated).trim()).toBe(generated);
+    expect(checkIgnore(repo, generated)).toBe(`${generated}\0`);
     expect(git(repo, "ls-files", "--", "AGENTS.md").trim()).toBe("AGENTS.md");
   });
 
@@ -266,7 +274,8 @@ catch(e) { process.stderr.write(e.stderr||''); process.exit(e.status||1); }
     expect(git(linked, "ls-files", "-z")).toBe(userFile + "\0");
   });
 
-  it("uses one overall Git deadline and leaves excludes unchanged when it expires", () => {
+  // Intercepts git with a PATH shebang script; Windows cannot execute extensionless script shims
+  it.skipIf(process.platform === "win32")("uses one overall Git deadline and leaves excludes unchanged when it expires", () => {
     const beforePath = process.env.PATH;
     const realGit = execFileSync("/bin/sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
     const bin = path.join(root, "slow-bin"); fs.mkdirSync(bin);

@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { describe, it, expect } from "vitest";
 import { createViewState, emptySnapshot, computeExplorerRows } from "../src/state.js";
 import { parseCommand } from "../src/grammar.js";
@@ -133,12 +134,44 @@ describe("unchanged rig up invocation and terminal handoff", () => {
     const request = { source: "custom-team", folder: "/work/Team's $(literal)", host: "remote-box" };
     const command = launchProcess(request, "http://127.0.0.1:7499", { OPENRIG_HOME: "/isolated", OPENRIG_HOST_SELECTED: "prior" }, "/node", ["/cli/bin-wrapper.js"]);
     expect(command).toEqual({ executable: "/node", args: ["/cli/bin-wrapper.js", "up", "--cwd", request.folder, "--host", "remote-box", "--", "custom-team"], env: { OPENRIG_HOME: "/isolated", OPENRIG_HOST_SELECTED: "prior", OPENRIG_URL: "http://127.0.0.1:7499" } });
-    expect(launchCommand(request)).toContain("--cwd '");
+    expect(launchCommand(request, "linux")).toContain("--cwd '");
     expect(launchArgs({ ...request, host: "" })).not.toContain("--host");
     expect(launchProcess({ ...request, host: "local" }, "http://localhost:7499", { OPENRIG_HOST_SELECTED: "remote" }, "rig").env.OPENRIG_HOST_SELECTED).toBe("local");
     expect(() => launchArgs({ ...request, folder: "" })).toThrow("absolute working folder");
     expect(() => launchArgs({ ...request, folder: "relative" })).toThrow("absolute working folder");
   });
+  it("checks the working folder with the TUI host's path rules, without rewriting it", () => {
+    for (const folder of ["C:\\Work\\Team's $(literal)", "C:/Work/Team", "\\\\server\\share\\Team", "/srv/Team"]) {
+      expect(launchArgs({ source: "custom-team", folder, host: "local" }, "win32")).toEqual(["up", "--cwd", folder, "--", "custom-team"]);
+    }
+    expect(() => launchArgs({ source: "custom-team", folder: "Work\\Team", host: "local" }, "win32")).toThrow("absolute working folder");
+    for (const platform of ["linux", "darwin"] as const) {
+      for (const folder of ["C:\\Work\\Team", "C:/Work/Team", "\\\\server\\share\\Team", "\\work\\team"]) {
+        for (const host of ["local", "remote-box"]) expect(() => launchArgs({ source: "custom-team", folder, host }, platform)).toThrow("absolute working folder");
+      }
+    }
+  });
+  it("scopes the PowerShell host selection to the launch line and escapes every quote PowerShell closes on", () => {
+    const folder = "C:\\Work\\Bob\u2019s Team's $(literal)";
+    const quoted = "'C:\\Work\\Bob\u2019\u2019s Team''s $(literal)'";
+    expect(launchCommand({ source: "custom-team", folder, host: "local" }, "win32")).toBe(
+      `& { $prior = $env:OPENRIG_HOST_SELECTED; $env:OPENRIG_HOST_SELECTED = 'local'; try { & 'rig' 'up' '--cwd' ${quoted} '--' 'custom-team' } finally { $env:OPENRIG_HOST_SELECTED = $prior } }`,
+    );
+    expect(launchCommand({ source: "custom-team", folder, host: "remote-box" }, "win32")).toBe(`& 'rig' 'up' '--cwd' ${quoted} '--host' 'remote-box' '--' 'custom-team'`);
+  });
+  it.runIf(process.platform === "win32")("runs the PowerShell launch line as one rig up and then restores the session's host selection", () => {
+    const folder = "C:\\Work\\Bob\u2019s Team's $(literal)";
+    const script = [
+      "[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)",
+      "$env:OPENRIG_HOST_SELECTED = 'prior'",
+      "function rig { [Console]::Out.Write(((@($args) + @(\"host=$env:OPENRIG_HOST_SELECTED\")) -join [char]0) + [char]0) }",
+      launchCommand({ source: "custom-team", folder, host: "local" }, "win32"),
+      "[Console]::Out.Write(\"after=$env:OPENRIG_HOST_SELECTED\")",
+    ].join("\n");
+    const output = execFileSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")],
+      { encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "pipe"], timeout: 30_000 });
+    expect(output.split("\0")).toEqual(["up", "--cwd", folder, "--", "custom-team", "host=local", "after=prior"]);
+  }, 40_000);
 
   it.each([0, 1, null])("does not turn exit %s into a success claim or erase the CLI's partial output", async code => {
     const events: string[] = [];

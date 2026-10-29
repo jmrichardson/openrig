@@ -118,7 +118,8 @@ describe("extractPiUsageFacts (Pi 0.87.1, session format v3)", () => {
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
-  it("readPiSessionEntryIds: a FIFO parent is refused at once, with no writer or with one streaming past the limit", async () => {
+  // Windows has no FIFO special file (no mkfifo) and no /dev/zero: its named pipes live under \\.\pipe\, never at a session path.
+  it.skipIf(process.platform === "win32")("readPiSessionEntryIds: a FIFO parent is refused at once, with no writer or with one streaming past the limit", async () => {
     const dir = mkdtempSync(nodePath.join(process.env.TMPDIR ?? tmpdir(), "pi-fifo-"));
     try {
       const fifo = nodePath.join(dir, "parent.jsonl");

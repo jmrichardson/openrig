@@ -246,6 +246,8 @@ describe("SeatLifecycleService.effortReport: four values, each from its own sour
   let transcript: string | null;
   let sidecarSession: string | null;
   let logsThread: string | undefined;
+  let processEnv: { CODEX_HOME?: string; HOME?: string; USERPROFILE?: string };
+  let threadHomes: string[];
 
   beforeEach(() => {
     db = createFullTestDb();
@@ -255,6 +257,8 @@ describe("SeatLifecycleService.effortReport: four values, each from its own sour
     transcript = null;
     sidecarSession = null;
     logsThread = undefined;
+    processEnv = { CODEX_HOME: "/scratch/.codex" };
+    threadHomes = [];
     const tmux = { getPanePid: async () => 100 } as unknown as TmuxAdapter;
     service = new SeatLifecycleService({
       db, rigRepo, sessionRegistry, eventBus: new EventBus(db), tmuxAdapter: tmux, listProcesses: () => rows,
@@ -338,6 +342,29 @@ describe("SeatLifecycleService.effortReport: four values, each from its own sour
     expect(await service.effortReport("dev-codex@eff")).toMatchObject({ observed: { state: "observed", value: "low", outcome: "accepted" } });
     logsThread = undefined;
     expect(await service.effortReport("dev-codex@eff")).toMatchObject({ observed: { state: "not_verified" } });
+  });
+
+  it("reads a fresh Codex's own logs under the home its process names: CODEX_HOME, HOME, or a Windows USERPROFILE", async () => {
+    codexSeat({ authored: "low" });
+    transcript = file("rollout-a.jsonl", [
+      { type: "turn_context", timestamp: at(5), payload: { turn_id: "a1", effort: "low" } },
+      { type: "event_msg", timestamp: at(7), payload: { type: "task_complete", turn_id: "a1" } },
+    ]);
+    running(`-c model_reasoning_effort="low" -C /w`);
+    logsThread = "019a-thread";
+    for (const [env, home] of [
+      [{ CODEX_HOME: "/scratch/.codex", HOME: "/home/seat" }, "/scratch/.codex"],
+      [{ HOME: "/home/seat", USERPROFILE: "/profile/seat" }, join("/home/seat", ".codex")],
+      [{ USERPROFILE: "/profile/seat" }, join("/profile/seat", ".codex")],
+    ] as const) {
+      processEnv = env;
+      expect(await service.effortReport("dev-codex@eff")).toMatchObject({ observed: { state: "observed", value: "low" } });
+      expect(threadHomes.at(-1)).toBe(home);
+    }
+    processEnv = {};
+    threadHomes = [];
+    expect(await service.effortReport("dev-codex@eff")).toMatchObject({ observed: { state: "not_verified" } });
+    expect(threadHomes).toEqual([]);
   });
 
   it("joins a Claude process to its sidecar session by argv, or by a recorded resume rotation", async () => {

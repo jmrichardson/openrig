@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { ClaudeCodeAdapter, type ClaudeAdapterFsOps } from "../src/adapters/claude-code-adapter.js";
 import type { NodeBinding, ResolvedStartupFile } from "../src/domain/runtime-adapter.js";
 import type { TmuxAdapter } from "../src/adapters/tmux.js";
+import nodePath from "node:path";
 
 // P20 atom 3b — RECORD-AT-APPLY. The discrimination (conflict-detector) and the
 // enable path (rigspec-instantiator wiring pin) are inert unless the projector
@@ -85,7 +86,7 @@ describe("P20 record-at-apply — the adapter records the manifest on skill_inst
     expect(recorded).toHaveLength(1);
     // target == the actual write path (cwd/.claude/skills/<skill-dir>/SKILL.md),
     // which is exactly what a later projection will classify.
-    expect(recorded[0]!.target).toBe("/project/.claude/skills/my-skill/SKILL.md");
+    expect(recorded[0]!.target).toBe(nodePath.join("/project", ".claude", "skills", "my-skill", "SKILL.md"));
     // content == the bytes written (so hashContent(recorded) == the target's future hash).
     expect(recorded[0]!.content).toBe(CONTENT);
   });

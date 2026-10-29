@@ -16,6 +16,10 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const GATE_SCRIPT = fileURLToPath(new URL("./gate-lane.mjs", import.meta.url));
+// npm links Windows workspaces with junctions, which need no symlink privilege.
+const DIR_LINK = process.platform === "win32" ? "junction" : undefined;
+// The injected npm below is a POSIX shell script on a ":"-separated PATH.
+const FAKE_NPM_IS_SH = process.platform === "win32" && "the fake npm is a POSIX shell script";
 
 function write(path, text) {
   mkdirSync(dirname(path), { recursive: true });
@@ -38,7 +42,7 @@ function makeRepo() {
   };
   write(join(root, "package-lock.json"), `${JSON.stringify({ name: "fixture", lockfileVersion: 3, packages }, null, 2)}\n`);
   mkdirSync(join(root, "node_modules/@openrig"), { recursive: true });
-  symlinkSync("../../packages/cli", join(root, "node_modules/@openrig/cli"));
+  symlinkSync("../../packages/cli", join(root, "node_modules/@openrig/cli"), DIR_LINK);
   git(root, "init", "-q");
   git(root, "config", "user.email", "gate@example.invalid");
   git(root, "config", "user.name", "Gate Test");
@@ -126,7 +130,7 @@ test("candidate binding: only the canonical verdict path may be present and the 
   assert.equal(verdict.gate, "pass");
 });
 
-test("candidate binding: HEAD drift during the gate refuses before writing a verdict", async () => {
+test("candidate binding: HEAD drift during the gate refuses before writing a verdict", { skip: FAKE_NPM_IS_SH }, async () => {
   const root = makeRepo();
   const verdictPath = join(root, "gate-lane-verdict.json");
   const fakeBin = mkdtempSync(join(tmpdir(), "gate-fake-npm-"));
@@ -167,7 +171,7 @@ test("candidate binding: HEAD drift during the gate refuses before writing a ver
   assert.equal(existsSync(verdictPath), false, "a drifted run writes no verdict");
 });
 
-test("candidate binding: Git-visible input added during the gate refuses before writing a verdict", async () => {
+test("candidate binding: Git-visible input added during the gate refuses before writing a verdict", { skip: FAKE_NPM_IS_SH }, async () => {
   const root = makeRepo();
   const verdictPath = join(root, "gate-lane-verdict.json");
   const fakeBin = mkdtempSync(join(tmpdir(), "gate-fake-npm-"));

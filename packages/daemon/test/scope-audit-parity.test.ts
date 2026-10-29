@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 
 import {
@@ -12,6 +13,7 @@ import {
   NOTES_FILE_PRECEDENCE,
   resolveNotesFile as resolveDaemonNotesFile,
 } from "../src/domain/scope/node-file.js";
+import { hasPython3 } from "./helpers/refocus-hook-fakes.js";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "..", "..", "..");
 const TRACE_TO_ROOT = path.join(
@@ -136,11 +138,11 @@ describe("scope-audit CLI/daemon parity (CI-FAILING)", () => {
       const files = PRODUCTION_CODE_ROOTS.flatMap((root) =>
         enumerateCodeFiles(path.join(REPO_ROOT, root)),
       );
-      const relativeFiles = new Set(files.map((file) => path.relative(REPO_ROOT, file)));
+      const relativeFiles = new Set(files.map((file) => path.relative(REPO_ROOT, file).split(path.sep).join("/")));
       for (const resolver of NOTES_RESOLVER_FILES) expect(relativeFiles.has(resolver), resolver).toBe(true);
 
       const violations = files.flatMap((file) => {
-        const relative = path.relative(REPO_ROOT, file);
+        const relative = path.relative(REPO_ROOT, file).split(path.sep).join("/");
         if (NOTES_RESOLVER_FILES.has(relative)) return [];
         return privateNotesReaderLines(fs.readFileSync(file, "utf8"))
           .map((line) => `${relative}: ${line.trim()}`);
@@ -173,7 +175,7 @@ describe("scope-audit CLI/daemon parity (CI-FAILING)", () => {
 
 describe("mission notes resolver parity", () => {
   it("runs the same current/legacy precedence matrix through both twins", async () => {
-    const root = fs.mkdtempSync(path.join(process.env.TMPDIR ?? "/tmp", "scope-notes-parity-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "scope-notes-parity-"));
     const cli = await import(path.join(REPO_ROOT, "packages/cli/src/lib/scope/scope-fs.ts"));
     try {
       expect(NODE_FILE_PRECEDENCE).toEqual(["SPEC.md", "README.md"]);

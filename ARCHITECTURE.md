@@ -27,7 +27,9 @@ the right skills and context.
 | `packages/test-system` | none (not an npm workspace) | The stub-agent scenario library, the CI scenario harness, live-model eval cases | Not shipped |
 
 **What bundles what.** `packages/cli/package.json` publishes `LICENSE`, `dist`, `daemon`, `ui`,
-`tui` and `scripts`. `scripts/build-package.sh` (the CLI's `prepublishOnly`) builds the daemon, UI,
+`tui` and `scripts`. `scripts/build-package.sh` (the CLI's `prepublishOnly`; on native Windows,
+`npm run build:package:windows` runs it under Git for Windows' bash through
+`scripts/run-package-build.mjs`) builds the daemon, UI,
 TUI and CLI, then assembles them inside `packages/cli/`: the daemon's `dist`, `assets`, `specs` and
 `policies`, the generated context packs and a copy of `docs/reference/` go under `daemon/`; the UI
 build goes to `ui/dist`; the TUI build goes to `tui/dist`. So `docs/reference/` ships to every

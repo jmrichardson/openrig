@@ -8,10 +8,11 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { fakePythonEnv } from "./helpers/refocus-hook-fakes.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const HOOK = resolve(HERE, "../assets/plugins/openrig-core/hooks/scripts/refocus.cjs");
@@ -30,10 +31,6 @@ function makeHome(): { home: string; stateDir: string } {
   const home = join(root, "home");
   const stateDir = join(home, "refocus");
   mkdirSync(stateDir, { recursive: true });
-  // Isolate occupant state from trace resolution (covered by refocus-context-ref).
-  const trace = join(home, "trace-success");
-  writeFileSync(trace, '#!/bin/sh\nprintf "WORK TRACE: fixture intent\\n"\n');
-  chmodSync(trace, 0o755);
   return { home, stateDir };
 }
 
@@ -59,7 +56,8 @@ function runHook(home: string, input: Record<string, unknown>, event = "UserProm
       OPENRIG_REFOCUS_TREES: "work",
       OPENRIG_REFOCUS_WORK_NODE: home,
       OPENRIG_WORKSPACE_ROOT: home,
-      PYTHON: join(home, "trace-success"),
+      // Isolate occupant state from trace resolution (covered by refocus-context-ref).
+      ...fakePythonEnv(home, 'require("node:fs").writeSync(1, "WORK TRACE: fixture intent\\n");\nprocess.exit(0);'),
     },
     timeout: 15_000,
   });
@@ -209,5 +207,20 @@ describe("refocus occupant-generation baseline", () => {
       expect(entry.length).toBeLessThan(SEAT_KEY.length + 2 + 64 + 2 + 8 + 6);
       expect(entry).toMatch(/^[A-Za-z0-9@._\-#]+(__[0-9a-f]{8})?\.json$/);
     }
+  });
+});
+
+// A Windows hook seldom has HOME; its state then belongs under the profile folder, which os.homedir() reads.
+describe.runIf(process.platform === "win32")("refocus state home on Windows", () => {
+  it("falls back to the profile folder, not a drive-relative /tmp, when neither OPENRIG_HOME nor HOME is set", () => {
+    root = mkdtempSync(join(tmpdir(), "refocus-profile-"));
+    const res = spawnSync(process.execPath, [HOOK], {
+      encoding: "utf8",
+      input: JSON.stringify({ hook_event_name: "UserPromptSubmit" }),
+      env: { ...process.env, OPENRIG_HOME: undefined, HOME: undefined, USERPROFILE: root, OPENRIG_SESSION_NAME: SEAT, OPENRIG_REFOCUS_ENABLED: "1" },
+      timeout: 15_000,
+    });
+    expect(res.status, res.stderr).toBe(0);
+    expect(existsSync(SENTINEL(join(root, ".openrig", "refocus")))).toBe(true);
   });
 });

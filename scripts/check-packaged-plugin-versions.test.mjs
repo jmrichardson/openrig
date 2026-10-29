@@ -1,3 +1,5 @@
+import { packageBuildShell } from "./package-build-shell.mjs";
+import { canCreateFileSymlinks } from "../test/symlink-capability.mjs";
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -37,11 +39,13 @@ test('changed packaged plugin content requires a strictly newer version', t => {
   rmSync(join(plugin, 'new-hook.js'));
   rmSync(join(plugin, 'skills/SKILL.md'));
   assert.throws(() => checkPackagedPluginVersions(dir, baseline), /not greater/);
+  if (canCreateFileSymlinks) {
   symlinkSync('first', join(plugin, 'skills/SKILL.md'));
   const linked = { release: 'previous', plugins: snapshotPlugins(dir) };
   rmSync(join(plugin, 'skills/SKILL.md'));
   symlinkSync('second', join(plugin, 'skills/SKILL.md'));
   assert.throws(() => checkPackagedPluginVersions(dir, linked), /not greater/);
+  }
   version('0.1.10', '0.1.9');
   assert.throws(() => checkPackagedPluginVersions(dir, baseline), /versions disagree/);
   version('0.1.10-preview');
@@ -50,7 +54,7 @@ test('changed packaged plugin content requires a strictly newer version', t => {
   assert.throws(() => checkPackagedPluginVersions(dir, baseline), /plugin missing/);
 });
 
-test('plugin roots and consumed manifests are not followed through links', t => {
+test('plugin roots and consumed manifests are not followed through links', { skip: !canCreateFileSymlinks }, t => {
   const dir = mkdtempSync(join(tmpdir(), 'plugin-link-test-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const root = join(dir, 'package/daemon/assets/plugins');
@@ -85,14 +89,16 @@ test('documented CLI snapshot refresh preserves the old fixture on failure', t =
   const source = readFileSync(new URL('./check-packaged-plugin-versions.mjs', import.meta.url), 'utf8');
   const command = source.slice(source.indexOf('// node scripts/'), source.indexOf('// Check an exact candidate'))
     .trim().split('\n').map(line => line.replace(/^\/\/ ?/, '')).join('\n');
-  const run = () => spawnSync('sh', ['-c', command], { cwd: dir, encoding: 'utf8' });
-  assert.equal(run().status, 0, 'documented refresh must generate a usable replacement');
+  const run = () => spawnSync(process.platform === 'win32' ? packageBuildShell('win32', process.env) : 'sh', ['-c', command], { cwd: dir, encoding: 'utf8' });
+  const initial = run();
+  assert.equal(initial.status, 0, 'documented refresh must generate a usable replacement: ' + initial.stderr);
   const refreshed = readFileSync(join(dir, fixture));
   assert.equal(JSON.parse(refreshed).plugins.core.version, '0.1.18');
   assert.equal(JSON.parse(refreshed).release, '0.7.1');
   rmSync(join(dir, 'release.tgz'));
   assert.notEqual(run().status, 0);
   assert.deepEqual(readFileSync(join(dir, fixture)), refreshed, 'failed generation must retain the previous baseline');
+  if (!canCreateFileSymlinks) return; // The remaining control requires file symlink privilege.
   rmSync(join(pkg, 'package.json'));
   writeFileSync(join(dir, 'metadata.json'), '{"version":"0.7.1"}');
   symlinkSync(join(dir, 'metadata.json'), join(pkg, 'package.json'));

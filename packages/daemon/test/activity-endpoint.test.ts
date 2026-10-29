@@ -23,7 +23,8 @@ describe("activity-endpoint (OPR.0.4.3.28 B2)", () => {
     expect(fs.existsSync(tokenPath)).toBe(true);
     expect(fs.readFileSync(tokenPath, "utf-8").trim()).toBe(token);
     // mode-guarded (owner-only)
-    expect(fs.statSync(tokenPath).mode & 0o777).toBe(0o600);
+    // POSIX mode bits; Windows uses ACLs
+    if (process.platform !== "win32") expect(fs.statSync(tokenPath).mode & 0o777).toBe(0o600);
   });
 
   it("REUSES the persisted token across calls (stable across daemon restarts)", () => {
@@ -35,7 +36,8 @@ describe("activity-endpoint (OPR.0.4.3.28 B2)", () => {
   it("writes + reads back the endpoint snapshot {baseUrl, token}", () => {
     writeActivityEndpointFile(stateDir, { baseUrl: "http://127.0.0.1:7433", token: "abc123" });
     const endpointPath = nodePath.join(stateDir, "activity-endpoint.json");
-    expect(fs.statSync(endpointPath).mode & 0o777).toBe(0o600);
+    // POSIX mode bits; Windows uses ACLs
+    if (process.platform !== "win32") expect(fs.statSync(endpointPath).mode & 0o777).toBe(0o600);
     const read = readActivityEndpointFile(stateDir);
     expect(read).toEqual({ baseUrl: "http://127.0.0.1:7433", token: "abc123" });
   });

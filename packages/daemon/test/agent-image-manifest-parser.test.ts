@@ -24,6 +24,12 @@ lineage:
 `;
 
 describe("parseAgentImageManifest", () => {
+  // Windows path rules; elsewhere these are ordinary relative names (see path-safety.test.ts).
+  it.skipIf(process.platform !== "win32").each(["C:notes.md", "C:\\notes.md", "C:/notes.md", "\\notes.md", "\\\\server\\share\\notes.md"])("rejects rooted image file paths: %s", (path) => {
+    expect(() => parseAgentImageManifest(validManifest.replace("cwd-delta.md", JSON.stringify(path)), "/manifest.yaml"))
+      .toThrow(/relative path inside the image/);
+  });
+
   it("parses a valid manifest into the typed shape", () => {
     const m = parseAgentImageManifest(validManifest, "/test/manifest.yaml");
     expect(m.name).toBe("driver-release-primed");

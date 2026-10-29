@@ -8,9 +8,10 @@ import { parse as parseToml } from "smol-toml";
 import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import { CodexRuntimeAdapter, type CodexAdapterFsOps } from "../src/adapters/codex-runtime-adapter.js";
 import type { NodeBinding, ResolvedStartupFile } from "../src/domain/runtime-adapter.js";
+import { SeatLaunchEnvironment } from "../src/domain/seat-launch-environment.js";
 import type { ProjectionPlan, ProjectionEntry } from "../src/domain/projection-planner.js";
 import type { TmuxAdapter } from "../src/adapters/tmux.js";
-import { seedCodexThreads } from "./helpers/codex-state.js";
+import { CODEX_LAUNCH_DEFAULTS, seedCodexThreads } from "./helpers/codex-state.js";
 import { execFileSync } from "node:child_process";
 import { provenCodexResume } from "./helpers/codex-resume-proof.js";
 import { codexCommandResumeToken } from "../src/domain/native-process-lineage.js";
@@ -48,24 +49,32 @@ function mockTmux(overrides?: Partial<TmuxAdapter>): TmuxAdapter {
 }
 
 function mockFs(files?: Record<string, string>): CodexAdapterFsOps {
-  const store: Record<string, string> = { ...files };
+  // Model the host filesystem: Windows accepts both slash spellings for a path.
+  const store = new Map(Object.entries(files ?? {}).map(([p, content]) => [nodePath.normalize(p), content]));
   return {
-    readFile: (p: string) => { if (p in store) return store[p]!; throw new Error(`Not found: ${p}`); },
-    writeFile: (p: string, c: string) => { store[p] = c; },
-    exists: (p: string) => p in store,
+    readFile: (p: string) => {
+      const content = store.get(nodePath.normalize(p));
+      if (content !== undefined) return content;
+      throw new Error(`Not found: ${p}`);
+    },
+    writeFile: (p: string, c: string) => { store.set(nodePath.normalize(p), c); },
+    exists: (p: string) => store.has(nodePath.normalize(p)),
     mkdirp: () => {},
-    listFiles: (dir: string) => Object.keys(store).filter((k) => k.startsWith(dir + "/")).map((k) => k.slice(dir.length + 1)),
-    _store: store,
-  } as CodexAdapterFsOps & { _store: Record<string, string> };
+    listFiles: (dir: string) => {
+      const prefix = nodePath.normalize(dir) + nodePath.sep;
+      return [...store.keys()].filter(k => k.startsWith(prefix)).map(k => k.slice(prefix.length));
+    },
+  };
 }
 
 /** Model file and directory Git markers through the adapter's filesystem seam. */
 function mockProjectFs(files: Record<string, string>, markers: Record<string, "file" | "directory">): CodexAdapterFsOps {
   const ops = mockFs(files);
   const exists = ops.exists;
-  ops.exists = (path) => path in markers || exists(path);
+  const marker = (p: string) => Object.entries(markers).find(([key]) => nodePath.normalize(key) === nodePath.normalize(p))?.[1];
+  ops.exists = (path) => marker(path) !== undefined || exists(path);
   ops.statMode = (path) => {
-    const kind = markers[path];
+    const kind = marker(path);
     if (!kind) throw new Error(`Cannot stat ${path}`);
     return kind === "directory" ? fs.constants.S_IFDIR : fs.constants.S_IFREG;
   };
@@ -101,7 +110,7 @@ function expectedFreshLaunchCommand(options: { cwd?: string; model?: string; eff
   const queueDirArg = options.queueRoot === null ? "" : ` --add-dir ${quote(options.queueRoot ?? testQueueRoot())}`;
   const modelArg = options.model ? ` -m ${quote(options.model)}` : "";
   const effortArg = options.effort ? ` -c ${quote(`model_reasoning_effort="${options.effort}"`)}` : "";
-  return `codex -s workspace-write '-c' 'check_for_update_on_startup=false' -C ${quote(cwd)}${gitDirArg}${queueDirArg}${modelArg}${effortArg}`;
+  return `codex${process.platform === "win32" ? " --no-alt-screen" : ""} -s workspace-write ${CODEX_LAUNCH_DEFAULTS} -C ${quote(cwd)}${gitDirArg}${queueDirArg}${modelArg}${effortArg}`;
 }
 
 // A resume and a fork add the same git metadata dir as the fresh launch, after the conversation id (`gitCwd` null: none,
@@ -114,14 +123,14 @@ function expectedResumeCommand(token = "sess-456", queueRoot: string | null = te
   const queueDirArg = queueRoot === null ? "" : ` --add-dir ${quote(queueRoot)}`;
   const modelArg = model ? ` -m ${quote(model)}` : "";
   const effortArg = effort ? ` -c ${quote(`model_reasoning_effort="${effort}"`)}` : "";
-  return `codex -s workspace-write '-c' 'check_for_update_on_startup=false'${modelArg}${effortArg} resume ${quote(token)}${queueDirArg}${gitDirOption(gitCwd)}`;
+  return `codex${process.platform === "win32" ? " --no-alt-screen" : ""} -s workspace-write ${CODEX_LAUNCH_DEFAULTS}${modelArg}${effortArg} resume ${quote(token)}${queueDirArg}${gitDirOption(gitCwd)}`;
 }
 
 function expectedForkCommand(parentId = "parent-thread-id", options: { model?: string; effort?: string; queueRoot?: string | null; gitCwd?: string | null } = {}): string {
   const queueDirArg = options.queueRoot === null ? "" : ` --add-dir ${quote(options.queueRoot ?? testQueueRoot())}`;
   const modelArg = options.model ? ` -m ${quote(options.model)}` : "";
   const effortArg = options.effort ? ` -c ${quote(`model_reasoning_effort="${options.effort}"`)}` : "";
-  return `codex -s workspace-write '-c' 'check_for_update_on_startup=false'${modelArg}${effortArg} fork${queueDirArg} ${quote(parentId)}${gitDirOption(options.gitCwd === undefined ? "/project" : options.gitCwd)}`;
+  return `codex${process.platform === "win32" ? " --no-alt-screen" : ""} -s workspace-write ${CODEX_LAUNCH_DEFAULTS}${modelArg}${effortArg} fork${queueDirArg} ${quote(parentId)}${gitDirOption(options.gitCwd === undefined ? "/project" : options.gitCwd)}`;
 }
 
 function expectedProfileFreshLaunchCommand(profile: string, options: { cwd?: string; model?: string; queueRoot?: string | null } = {}): string {
@@ -129,12 +138,12 @@ function expectedProfileFreshLaunchCommand(profile: string, options: { cwd?: str
   const gitDirArg = ` --add-dir ${quote(nodePath.join(cwd, ".git"))}`;
   const queueDirArg = options.queueRoot === null ? "" : ` --add-dir ${quote(options.queueRoot ?? testQueueRoot())}`;
   const modelArg = options.model ? ` -m ${quote(options.model)}` : "";
-  return `codex -p ${quote(profile)} '-c' 'check_for_update_on_startup=false' -C ${quote(cwd)}${gitDirArg}${queueDirArg}${modelArg}`;
+  return `codex${process.platform === "win32" ? " --no-alt-screen" : ""} -p ${quote(profile)} ${CODEX_LAUNCH_DEFAULTS} -C ${quote(cwd)}${gitDirArg}${queueDirArg}${modelArg}`;
 }
 
 function expectedProfileResumeCommand(profile: string, token = "sess-456", queueRoot: string | null = testQueueRoot(), gitCwd: string | null = "/project"): string {
   const queueDirArg = queueRoot === null ? "" : ` --add-dir ${quote(queueRoot)}`;
-  return `codex -p ${quote(profile)} '-c' 'check_for_update_on_startup=false' resume ${quote(token)}${queueDirArg}${gitDirOption(gitCwd)}`;
+  return `codex${process.platform === "win32" ? " --no-alt-screen" : ""} -p ${quote(profile)} ${CODEX_LAUNCH_DEFAULTS} resume ${quote(token)}${queueDirArg}${gitDirOption(gitCwd)}`;
 }
 
 beforeEach(() => {
@@ -184,7 +193,8 @@ function createCodexLogsDb(homeDir: string, pid: number, threadId: string, dbNam
 }
 
 describe("Codex runtime adapter", () => {
-  it("launches the probed executable despite a different login-shell PATH", async () => {
+  // The classic `env PATH=… codex` launch, used when no seat launch environment is given (POSIX shell syntax).
+  it.skipIf(process.platform === "win32")("launches the probed executable despite a different login-shell PATH", async () => {
     const root = fs.mkdtempSync(nodePath.join(os.tmpdir(), "codex-launch-path-"));
     try {
       const selected = nodePath.join(root, "selected tools");
@@ -197,6 +207,44 @@ describe("Codex runtime adapter", () => {
       await adapter.launchHarness(makeBinding(), { name: "operator@example-rig" });
       const command = vi.mocked(tmux.sendText).mock.calls[0]![1];
       const output = execFileSync("/bin/sh", ["-c", command], { env: { ...process.env, PATH: stale + ":/usr/bin:/bin" }, encoding: "utf8" });
+      expect(output).toBe("selected");
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+  it("launches the probed executable despite a different login-shell PATH through the seat launch environment", async () => {
+    const root = fs.mkdtempSync(nodePath.join(os.tmpdir(), "codex-launch-path-"));
+    try {
+      const selected = nodePath.join(root, "selected tools");
+      const stale = nodePath.join(root, "stale");
+      fs.mkdirSync(selected); fs.mkdirSync(stale);
+      for (const [directory, label] of [[selected, "selected"], [stale, "stale"]] as const) {
+        const pkg = nodePath.join(directory, "node_modules", "@openai", "codex");
+        fs.mkdirSync(nodePath.join(pkg, "bin"), { recursive: true });
+        const source = `#!/usr/bin/env node\nprocess.stdout.write(${JSON.stringify(label)});\n`;
+        fs.writeFileSync(nodePath.join(pkg, "bin", "codex.js"), source);
+        fs.writeFileSync(nodePath.join(pkg, "package.json"), JSON.stringify({ name: "@openai/codex", bin: { codex: "bin/codex.js" } }));
+        fs.writeFileSync(nodePath.join(directory, "codex.cmd"), '@"%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js" %*');
+        fs.writeFileSync(nodePath.join(directory, "codex"), source, { mode: 0o755 });
+      }
+      const cli = nodePath.join(root, "rig.js");
+      fs.writeFileSync(cli, "// paired CLI fixture\n", { mode: 0o755 });
+      const identity: Record<string, string> = {
+        OPENRIG_NODE_ID: "n1", OPENRIG_SESSION_NAME: "r01-qa",
+      };
+      const tmux = mockTmux({
+        getSessionEnv: vi.fn(async (_session: string, key: string) => identity[key]),
+      });
+      const launchPath = [selected, nodePath.dirname(process.execPath)].join(nodePath.delimiter);
+      const seatLaunchEnvironment = new SeatLaunchEnvironment(tmux, {
+        OPENRIG_HOME: nodePath.join(root, "home"), PATH: launchPath,
+      }, root, cli, undefined, process.platform === "win32" ? "win32" : "posix");
+      const adapter = new CodexRuntimeAdapter({ tmux, fsOps: mockFs(), launchPath, seatLaunchEnvironment, sleep: async () => {} });
+      expect((await adapter.launchHarness(makeBinding(root), { name: "operator@example-rig" })).ok).toBe(true);
+      const command = vi.mocked(tmux.sendShellCommand).mock.calls[0]![1];
+      const env = { ...process.env, PATH: [stale, nodePath.dirname(process.execPath)].join(nodePath.delimiter) };
+      const output = process.platform === "win32"
+        ? execFileSync(nodePath.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
+          ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(command, "utf16le").toString("base64")], { env, encoding: "utf8" })
+        : execFileSync("/bin/sh", ["-c", command], { env, encoding: "utf8" });
       expect(output).toBe("selected");
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
@@ -503,8 +551,7 @@ describe("Codex runtime adapter", () => {
 
     await adapter.deliverStartup([file], makeBinding());
 
-    const store = (fs as unknown as { _store: Record<string, string> })._store;
-    const content = store["/project/AGENTS.md"]!;
+    const content = fs.readFile("/project/AGENTS.md");
     expect(content).toContain("BEGIN OpenRig MANAGED BLOCK: openrig-start.md");
     expect(content).not.toContain("BEGIN OpenRig MANAGED BLOCK: using-openrig.md");
     expect(content).toContain("New guidance");
@@ -585,8 +632,7 @@ describe("Codex runtime adapter", () => {
     await adapter.deliverStartup([file], makeBinding());
     await adapter.deliverStartup([file], makeBinding());
 
-    const store = (fs as unknown as { _store: Record<string, string> })._store;
-    const content = store["/project/AGENTS.md"]!;
+    const content = fs.readFile("/project/AGENTS.md");
     const blockCount = (content.match(/BEGIN OpenRig MANAGED BLOCK/g) ?? []).length;
     expect(blockCount).toBe(1); // exactly one block, not two
   });
@@ -606,6 +652,163 @@ describe("Codex runtime adapter", () => {
     expect(result.ok).toBe(true);
     const sendText = tmux.sendText as ReturnType<typeof vi.fn>;
     expect(sendText).toHaveBeenCalledWith("r01-qa", expectedFreshLaunchCommand());
+  });
+
+  it.runIf(process.platform === "win32")("launchHarness keeps a Windows sandbox the user's Codex config already chose", async () => {
+    const tmux = mockTmux();
+    const codexHome = nodePath.resolve("/codex-home");
+    const adapter = new CodexRuntimeAdapter({
+      tmux,
+      fsOps: mockFs({ [nodePath.join(codexHome, "config.toml")]: '[windows]\nsandbox = "elevated"\n' }),
+      codexHome,
+      listProcesses: () => [],
+      sleep: async () => {},
+    });
+
+    const result = await adapter.launchHarness(makeBinding(), { name: "dev-qa@test-rig" });
+
+    expect(result.ok).toBe(true);
+    const sent = (tmux.sendText as ReturnType<typeof vi.fn>).mock.calls.map((call) => String(call[1])).join("\n");
+    expect(sent).toContain("'-c' 'check_for_update_on_startup=false'");
+    expect(sent).not.toContain("prefer_mxc");
+  });
+
+  it.runIf(process.platform === "win32")("launchHarness reads the selected profile-v2 file for the Windows sandbox", async () => {
+    const tmux = mockTmux();
+    const codexHome = nodePath.resolve("/codex-home");
+    const adapter = new CodexRuntimeAdapter({
+      tmux,
+      fsOps: mockFs({ [nodePath.join(codexHome, "locked.config.toml")]: '[windows]\nsandbox = "elevated"\n' }),
+      codexHome,
+      listProcesses: () => [],
+      sleep: async () => {},
+      verifyProfilePreflight: async (profile) => ({ ok: true, profile }),
+    });
+
+    const result = await adapter.launchHarness({ ...makeBinding(), codexConfigProfile: "locked" }, { name: "dev-qa@test-rig" });
+
+    expect(result.ok).toBe(true);
+    const sent = (tmux.sendText as ReturnType<typeof vi.fn>).mock.calls.map((call) => String(call[1])).join("\n");
+    expect(sent).toContain("-p 'locked'");
+    expect(sent).not.toContain("prefer_mxc");
+  });
+
+  const executionPolicy = "-c 'shell_environment_policy.set.PSExecutionPolicyPreference=RemoteSigned'";
+  /** An adapter over a Codex home holding `files`, whose seat launch environment records each launch's target. */
+  function sandboxAdapter(files: Record<string, string>) {
+    const tmux = mockTmux();
+    const codexHome = nodePath.resolve("/codex-home");
+    const command = vi.fn(async (_session: string, cmd: string, _target?: Record<string, unknown>) => cmd);
+    const adapter = new CodexRuntimeAdapter({
+      tmux,
+      fsOps: mockFs(Object.fromEntries(Object.entries(files).map(([name, content]) => [nodePath.join(codexHome, name), content]))),
+      codexHome,
+      seatLaunchEnvironment: { command } as unknown as SeatLaunchEnvironment,
+      listProcesses: () => [],
+      sleep: async () => {},
+      verifyProfilePreflight: async (profile) => ({ ok: true, profile }),
+    });
+    const sent = () => (tmux.sendText as ReturnType<typeof vi.fn>).mock.calls.map((call) => String(call[1])).join("\n");
+    return { adapter, command, sent };
+  }
+
+  it.runIf(process.platform === "win32").each([
+    ["no layer sets it", {}, undefined, true],
+    ["config.toml sets it", { "config.toml": '[shell_environment_policy.set]\nPSExecutionPolicyPreference = "AllSigned"\n' }, undefined, false],
+    ["the selected profile's file sets it", { "locked.config.toml": '[shell_environment_policy]\nset = { PSExecutionPolicyPreference = "Bypass" }\n' }, "locked", false],
+  ])("launchHarness sets the seat shell's execution policy unless the user's Codex config does: %s", async (_label, files, profile, policy) => {
+    const { adapter, sent } = sandboxAdapter(files);
+    const result = await adapter.launchHarness({ ...makeBinding(), ...(profile ? { codexConfigProfile: profile } : {}) }, { name: "dev-qa@test-rig" });
+    expect(result.ok).toBe(true);
+    expect(sent()).toContain("'-c' 'check_for_update_on_startup=false'");
+    expect(sent().includes(executionPolicy)).toBe(policy);
+  });
+
+  it.runIf(process.platform === "win32")("reads a Codex config layer it cannot read as absent, for a launch and a relaunch", async () => {
+    const tmux = mockTmux();
+    const codexHome = nodePath.resolve("/codex-home");
+    const command = vi.fn(async (_session: string, cmd: string, _target?: Record<string, unknown>) => cmd);
+    const configToml = nodePath.join(codexHome, "config.toml");
+    const fsOps = mockFs({ [configToml]: '[windows]\nsandbox = "elevated"\n' });
+    const readFile = fsOps.readFile;
+    // config.toml is there but unreadable, as one locked by its ACL or by another process.
+    fsOps.readFile = (p: string) => {
+      if (nodePath.normalize(p) === nodePath.normalize(configToml)) throw Object.assign(new Error(`EACCES: ${p}`), { code: "EACCES" });
+      return readFile(p);
+    };
+    const adapter = new CodexRuntimeAdapter({
+      tmux, fsOps, codexHome, seatLaunchEnvironment: { command } as unknown as SeatLaunchEnvironment,
+      listProcesses: () => [], sleep: async () => {},
+    });
+    expect((await adapter.launchHarness(makeBinding(), { name: "dev-qa@test-rig" })).ok).toBe(true);
+    const sent = (tmux.sendText as ReturnType<typeof vi.fn>).mock.calls.map((call) => String(call[1])).join("\n");
+    expect(sent).toContain("-c 'features.prefer_mxc=true'");
+    expect(sent).toContain(executionPolicy);
+    // A relaunch repeats the running Codex's overrides and, with no readable elevated choice, stages no Node.
+    const running = { networkOverride: false, daemonOptOut: false, addDirs: [], windowsSandboxOverride: true };
+    const relaunch = await adapter.buildResumeCommand(makeBinding(), { name: "dev-qa@test-rig", resumeToken: "sess-456", running });
+    expect(relaunch).toMatchObject({ ok: true, core: expect.stringContaining("-c 'features.prefer_mxc=true'") });
+    expect(relaunch).toMatchObject({ core: expect.not.stringContaining("PSExecutionPolicyPreference") });
+    expect(command.mock.calls.map(([, , target]) => target?.codexElevatedSandbox)).toEqual([undefined, undefined]);
+  });
+
+  it.runIf(process.platform === "win32").each([
+    ["elevated in config.toml", { "config.toml": '[windows]\nsandbox = "elevated"\n' }, undefined, true],
+    ["elevated in the selected profile's file", { "config.toml": '[windows]\nsandbox = "unelevated"\n', "locked.config.toml": '[windows]\nsandbox = "elevated"\n' }, "locked", true],
+    // MXC wins only where it is available; elsewhere Codex runs elevated.
+    ["the legacy elevated feature, with OpenRig's MXC preference", { "config.toml": "[features]\nelevated_windows_sandbox = true\n" }, undefined, true],
+    ["no choice, so OpenRig prefers MXC", {}, undefined, false],
+  ])("a launch in Codex's elevated sandbox asks for a sandbox-readable Node for the seat's rig: %s", async (_label, files, profile, elevated) => {
+    const { adapter, command } = sandboxAdapter(files);
+    const binding = { ...makeBinding(), ...(profile ? { codexConfigProfile: profile } : {}) };
+    expect((await adapter.launchHarness(binding, { name: "dev-qa@test-rig" })).ok).toBe(true);
+    expect((await adapter.buildResumeCommand(binding, { name: "dev-qa@test-rig", resumeToken: "sess-456" })).ok).toBe(true);
+    expect(command).toHaveBeenCalledTimes(2);
+    for (const [, , target] of command.mock.calls) {
+      expect(target).toMatchObject({ codexCwd: "/project", runtime: "codex" });
+      expect(target?.codexElevatedSandbox).toBe(elevated ? true : undefined);
+    }
+  });
+
+  it.runIf(process.platform === "win32")("a relaunch keeps the running Codex's overrides, and stages a Node wherever its config is elevated", async () => {
+    const { adapter, command } = sandboxAdapter({ "config.toml": '[windows]\nsandbox = "elevated"\n' });
+    const running = { networkOverride: false, daemonOptOut: false, addDirs: [] };
+    const kept = await adapter.buildResumeCommand(makeBinding(), { name: "dev-qa@test-rig", resumeToken: "sess-456", running: { ...running, windowsExecutionPolicyOverride: true } });
+    const lacked = await adapter.buildResumeCommand(makeBinding(), { name: "dev-qa@test-rig", resumeToken: "sess-456", running });
+    // A Codex started with OpenRig's MXC preference still runs elevated where MXC is unavailable.
+    const mxc = await adapter.buildResumeCommand(makeBinding(), { name: "dev-qa@test-rig", resumeToken: "sess-456", running: { ...running, windowsSandboxOverride: true } });
+    expect(kept).toMatchObject({ ok: true, core: expect.stringContaining(executionPolicy) });
+    expect(lacked).toMatchObject({ ok: true, core: expect.not.stringContaining("PSExecutionPolicyPreference") });
+    expect(mxc).toMatchObject({ ok: true, core: expect.stringContaining("-c 'features.prefer_mxc=true'") });
+    expect(command.mock.calls.map(([, , target]) => target?.codexElevatedSandbox)).toEqual([true, true, true]);
+  });
+
+  it.skipIf(process.platform === "win32")("a POSIX launch adds no Windows override and stages no Node, whatever the Codex config says", async () => {
+    const { adapter, command } = sandboxAdapter({ "config.toml": '[windows]\nsandbox = "elevated"\n' });
+    expect((await adapter.launchHarness(makeBinding(), { name: "dev-qa@test-rig" })).ok).toBe(true);
+    expect(command.mock.calls[0]![1]).toBe(expectedFreshLaunchCommand());
+    expect(command.mock.calls[0]![2]).toEqual({ codexCwd: "/project", nodeId: "n1", generation: undefined, runtime: "codex" });
+  });
+
+  it("verifyResumeInPane clears a native terminal reply from the resumed composer, and fails when that is unverified", async () => {
+    for (const [composer, ok] of [[{ ok: true as const }, true], [{ ok: false as const, code: "native_composer_unverified", message: "Native startup terminal response removal unverified." }, false]] as const) {
+      const proof = provenCodexResume("thread-1");
+      const prepareWindowsCodexComposer = vi.fn(async () => composer);
+      const tmux = mockTmux({ terminalKind: "psmux", getPanePid: proof.getPanePid, prepareWindowsCodexComposer, capturePaneContent: vi.fn(async () => "OpenAI Codex (v0.0.0)\n› Ask Codex to do anything") } as Partial<TmuxAdapter>);
+      const adapter = new CodexRuntimeAdapter({ tmux, fsOps: mockFs(), listProcesses: proof.listProcesses as never, readResumeEvidence: proof.readResumeEvidence, sleep: async () => {} });
+      const result = await adapter.verifyResumeInPane("r01-qa", "thread-1");
+      expect(prepareWindowsCodexComposer).toHaveBeenCalledWith("r01-qa");
+      expect(result.ok).toBe(ok);
+      if (!ok) expect(result).toEqual({ ok: false, error: "Native startup terminal response removal unverified." });
+    }
+  });
+
+  it("verifyResumeInPane leaves the composer alone when the resume is not proven", async () => {
+    const prepareWindowsCodexComposer = vi.fn(async () => ({ ok: true as const }));
+    const tmux = mockTmux({ prepareWindowsCodexComposer, getPaneCommand: vi.fn(async () => "zsh"), capturePaneContent: vi.fn(async () => "$ ") } as Partial<TmuxAdapter>);
+    const adapter = new CodexRuntimeAdapter({ tmux, fsOps: mockFs(), listProcesses: () => [], sleep: async () => {} });
+    expect((await adapter.verifyResumeInPane("r01-qa", "thread-1")).ok).toBe(false);
+    expect(prepareWindowsCodexComposer).not.toHaveBeenCalled();
   });
 
   it("launchHarness passes the requested Codex model on fresh launch", async () => {
@@ -1349,6 +1552,24 @@ describe("Codex runtime adapter", () => {
     });
   });
 
+  it.each([["2026-10-17T12:00:01.000Z", true], ["2026-10-17T11:59:59.000Z", false]] as const)("captures native Windows Codex with a valid parent birth order (%s)", async (startedAt, expected) => {
+    const readThreadIdByPid = vi.fn((pid: number) => pid === 901 ? "019d45bc-117d-78a3-a4ad-6fb186e5a86d" : undefined);
+    const executablePath = "C:\\Program Files\\Codex\\codex.exe";
+    const adapter = new CodexRuntimeAdapter({
+      tmux: mockTmux({ getPanePid: vi.fn(async () => 900) }), fsOps: mockFs(),
+      listProcesses: () => [
+        { pid: 900, ppid: 1, command: "powershell.exe", platform: "win32", startedAt: "2026-10-17T12:00:00.000Z" },
+        { pid: 901, ppid: 900, command: `"${executablePath}" -s workspace-write`, executablePath, executableName: "codex.exe", platform: "win32", startedAt },
+      ],
+      readThreadIdByPid, sleep: async () => {},
+    });
+    const result = await adapter.launchHarness(makeBinding(), { name: "dev-qa@test-rig" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("launch failed");
+    expect(result.resumeToken).toBe(expected ? "019d45bc-117d-78a3-a4ad-6fb186e5a86d" : undefined);
+    expect(readThreadIdByPid).toHaveBeenCalledTimes(expected ? 1 : 0);
+  });
+
   it("launchHarness captures a fresh Codex thread id from a nested wrapper -> vendor codex process tree", async () => {
     const tmux = mockTmux({
       getPanePid: vi.fn(async () => 900),
@@ -1373,6 +1594,32 @@ describe("Codex runtime adapter", () => {
       resumeType: "codex_id",
       appliedLaunch: CODEX_FLOOR_EFFECT,
     });
+  });
+
+  // A ps row is matched by any argv token whose basename is codex, whatever its OS name (ucomm).
+  it.each([
+    ["a Homebrew cask whose OS name is its image", [
+      { pid: 901, ppid: 900, command: "codex -s workspace-write -C /project", executableName: "codex-aarch64-ap" },
+    ], 901],
+    ["an npm vendor binary under a path with a space", [
+      { pid: 901, ppid: 900, command: "node /Users/x/Library/Caches/fnm_multishells/1/bin/codex -s workspace-write -C /project", executableName: "node" },
+      { pid: 902, ppid: 901, command: "/Users/x/Library/Application Support/fnm/node-versions/v22.11.0/installation/lib/node_modules/@openai/codex/vendor/aarch64-apple-darwin/codex/codex -s workspace-write -C /project", executableName: "codex" },
+    ], 902],
+  ] as const)("launchHarness captures a fresh Codex thread id from %s", async (_shape, children, nativePid) => {
+    const threadId = "019d45bc-117d-78a3-a4ad-6fb186e5a86d";
+    const tried: number[] = [];
+    const adapter = new CodexRuntimeAdapter({
+      tmux: mockTmux({ getPanePid: vi.fn(async () => 900) }), fsOps: mockFs(),
+      listProcesses: () => [{ pid: 900, ppid: 1, command: "-zsh", executableName: "zsh" }, ...children],
+      readThreadIdByPid: (pid) => { tried.push(pid); return pid === nativePid ? threadId : undefined; },
+      sleep: async () => {},
+    });
+
+    const result = await adapter.launchHarness(makeBinding(), { name: "dev-qa@test-rig" });
+
+    expect(result).toMatchObject({ ok: true, resumeToken: threadId, resumeType: "codex_id" });
+    // The deepest Codex is tried first.
+    expect(tried[0]).toBe(nativePid);
   });
 
   it("launchHarness captures a fresh Codex thread id from the child process home directory", async () => {
@@ -1448,7 +1695,7 @@ describe("Codex runtime adapter", () => {
   });
 
   it("keeps the resume identity readable with a spaced shared-docs root", async () => {
-    const sharedDocsRoot = "/configured/shared docs";
+    const sharedDocsRoot = nodePath.resolve("/configured/shared docs");
     vi.stubEnv("OPENRIG_SHARED_DOCS_ROOT", sharedDocsRoot);
     const proof = provenCodexResume("sess-456");
     const tmux = mockTmux({ getPanePid: proof.getPanePid });
@@ -1460,7 +1707,7 @@ describe("Codex runtime adapter", () => {
     const command = vi.mocked(tmux.sendText).mock.calls[0]![1];
     // ps joins argv with spaces; it does not retain the shell's quotes around each path.
     expect(codexCommandResumeToken(command.replace(/'/g, ""))).toBe("sess-456");
-    expect(command).toContain(`resume 'sess-456' --add-dir '${testQueueRoot(sharedDocsRoot)}' --add-dir '/project/.git'`);
+    expect(command).toContain(`resume 'sess-456' --add-dir '${testQueueRoot(sharedDocsRoot)}'${gitDirOption('/project')}`);
   });
 
   it("launchHarness sends correct resume command", async () => {
@@ -1946,11 +2193,9 @@ describe("Codex runtime adapter", () => {
 
     await adapter.deliverStartup([], makeBinding("/tmp/workspace"));
 
-    const store = (fsWithHome as unknown as { _store: Record<string, string> })._store;
-    const content = store["/home/tester/.codex/config.toml"];
-    expect(content).toBeDefined();
-    expect(content).toContain('[projects."/tmp/workspace"]');
-    expect(content).toContain('trust_level = "trusted"');
+    const content = fsWithHome.readFile("/home/tester/.codex/config.toml");
+    const projects = parseToml(content).projects as Record<string, { trust_level: string }>;
+    expect(projects[nodePath.resolve("/tmp/workspace")]?.trust_level).toBe("trusted");
   });
 
   it("GAP-7 routes workspace trust and runtime config fragments through the injected Codex home", async () => {
@@ -1978,10 +2223,11 @@ describe("Codex runtime adapter", () => {
     await adapter.deliverStartup([], makeBinding("/tmp/workspace"));
     await adapter.project(plan, makeBinding("/tmp/workspace"));
 
-    const store = (fsWithHome as unknown as { _store: Record<string, string> })._store;
-    expect(store["/daemon-codex/config.toml"]).toContain('[projects."/tmp/workspace"]');
-    expect(store["/daemon-codex/config.toml"]).toContain("[mcp_servers.test]");
-    expect(store["/daemon-home/.codex/config.toml"]).toBeUndefined();
+    const content = fsWithHome.readFile("/daemon-codex/config.toml");
+    const projects = parseToml(content).projects as Record<string, { trust_level: string }>;
+    expect(projects[nodePath.resolve("/tmp/workspace")]?.trust_level).toBe("trusted");
+    expect(content).toContain("[mcp_servers.test]");
+    expect(fsWithHome.exists("/daemon-home/.codex/config.toml")).toBe(false);
   });
 
   it("deliverStartup does not inject Codex MCP servers without runtime resources", async () => {
@@ -1993,8 +2239,7 @@ describe("Codex runtime adapter", () => {
 
     await adapter.deliverStartup([], makeBinding("/tmp/workspace"));
 
-    const store = (fsWithHome as unknown as { _store: Record<string, string> })._store;
-    const content = store["/home/tester/.codex/config.toml"];
+    const content = fsWithHome.readFile("/home/tester/.codex/config.toml");
     expect(content).toContain('[projects."/tmp/workspace"]');
     expect(content).toContain('trust_level = "trusted"');
     expect(content).not.toContain('[mcp_servers.exa]');
@@ -2004,8 +2249,8 @@ describe("Codex runtime adapter", () => {
   // #2029: Codex saves project trust with literal-quoted keys. Finding the table by key means no second table for the
   // same project, which Codex rejects as a duplicate key and then refuses to start.
   it.each([
-    ["a literal-quoted table Codex saved", "[projects.'/tmp/workspace']\ntrust_level = 'trusted'\n", 1],
-    ["an inline entry", "[projects]\n'/tmp/workspace' = { trust_level = 'trusted' }\n", 0],
+    ["a literal-quoted table Codex saved", `[projects.'${nodePath.resolve("/tmp/workspace")}']\ntrust_level = 'trusted'\n`, 1],
+    ["an inline entry", `[projects]\n'${nodePath.resolve("/tmp/workspace")}' = { trust_level = 'trusted' }\n`, 0],
   ])("deliverStartup reuses %s for the project's trust and adds no duplicate", async (_name, existing, tables) => {
     const fs = mockFs({ "/home/tester/.codex/config.toml": existing });
     const fsWithHome = { ...fs, homedir: "/home/tester" };
@@ -2013,9 +2258,9 @@ describe("Codex runtime adapter", () => {
 
     await adapter.deliverStartup([], makeBinding("/tmp/workspace"));
 
-    const content = (fsWithHome as unknown as { _store: Record<string, string> })._store["/home/tester/.codex/config.toml"]!;
-    expect((parseToml(content) as Record<string, any>).projects["/tmp/workspace"].trust_level).toBe("trusted");
-    expect(content.match(/^\[projects\.['"]\/tmp\/workspace['"]\]/gm)?.length ?? 0).toBe(tables);
+    const content = fsWithHome.readFile("/home/tester/.codex/config.toml")!;
+    expect((parseToml(content) as Record<string, any>).projects[nodePath.resolve("/tmp/workspace")].trust_level).toBe("trusted");
+    expect(content.match(/^\[projects\./gm)?.length ?? 0).toBe(tables);
   });
 
   it("deliverStartup leaves a project-table example in a person's multi-line instructions exact and writes the real trust", async () => {
@@ -2023,9 +2268,9 @@ describe("Codex runtime adapter", () => {
     const fs = mockFs({ "/home/tester/.codex/config.toml": existing });
     const fsWithHome = { ...fs, homedir: "/home/tester" };
     await new CodexRuntimeAdapter({ tmux: mockTmux(), fsOps: fsWithHome }).deliverStartup([], makeBinding("/tmp/workspace"));
-    const parsed = parseToml((fsWithHome as unknown as { _store: Record<string, string> })._store["/home/tester/.codex/config.toml"]!) as Record<string, any>;
+    const parsed = parseToml(fsWithHome.readFile("/home/tester/.codex/config.toml")!) as Record<string, any>;
     expect(parsed.developer_instructions).toBe((parseToml(existing) as Record<string, any>).developer_instructions);
-    expect(parsed.projects["/tmp/workspace"].trust_level).toBe("trusted");
+    expect(parsed.projects[nodePath.resolve("/tmp/workspace")].trust_level).toBe("trusted");
   });
 
   // An earlier OpenRig's double-quoted table beside Codex's own is a duplicate Codex won't start with. Each launch leaves it
@@ -2038,7 +2283,7 @@ describe("Codex runtime adapter", () => {
     const adapter = new CodexRuntimeAdapter({ tmux: mockTmux(), fsOps: fsWithHome });
     await adapter.deliverStartup([], makeBinding("/tmp/workspace"));
     await adapter.deliverStartup([], makeBinding("/tmp/workspace"));
-    expect((fsWithHome as unknown as { _store: Record<string, string> })._store["/home/tester/.codex/config.toml"]).toBe(existing);
+    expect(fsWithHome.readFile("/home/tester/.codex/config.toml")).toBe(existing);
   });
 
   it("applies codex_config_fragment runtime resources to the global Codex config idempotently", async () => {
@@ -2072,8 +2317,7 @@ describe("Codex runtime adapter", () => {
 
     expect(first).toEqual({ projected: ["codex-default-config"], skipped: [], failed: [] });
     expect(second).toEqual({ projected: ["codex-default-config"], skipped: [], failed: [] });
-    const store = (fsWithHome as unknown as { _store: Record<string, string> })._store;
-    const content = store["/home/tester/.codex/config.toml"];
+    const content = fsWithHome.readFile("/home/tester/.codex/config.toml");
     expect(content).toContain('[projects."/tmp/workspace"]');
     expect(content).toContain('trust_level = "trusted"');
     expect(content.match(/\[mcp_servers\.exa\]/g)?.length ?? 0).toBe(1);
@@ -2116,9 +2360,8 @@ describe("Codex runtime adapter", () => {
       })],
       startup: { files: [], actions: [] }, conflicts: [], noOps: [], diagnostics: [],
     };
-    const store = (fsWithHome as unknown as { _store: Record<string, string> })._store;
     const project = () => adapter.project(plan, makeBinding("/tmp/workspace"));
-    return { project, read: () => store["/home/tester/.codex/config.toml"]! };
+    return { project, read: () => fsWithHome.readFile("/home/tester/.codex/config.toml") };
   }
 
   it("keeps a user-owned MCP table and its values when the fragment names the same table", async () => {
@@ -2539,8 +2782,7 @@ describe("Codex runtime adapter", () => {
 
     const result = await adapter.project(plan, makeBinding());
 
-    const store = (fs as unknown as { _store: Record<string, string> })._store;
-    expect(store["/project/AGENTS.md"]).toBeUndefined();
+    expect(fs.exists("/project/AGENTS.md")).toBe(false);
     // ProjectionResult contract: rig-role must appear in `skipped`, NOT `projected`.
     expect(result.skipped).toContain("rig-role");
     expect(result.projected).not.toContain("rig-role");
@@ -2588,9 +2830,9 @@ describe("Codex runtime adapter", () => {
 
     await adapter.project(plan, makeBinding());
 
-    const store = (fs as unknown as { _store: Record<string, string> })._store;
-    expect(store["/project/AGENTS.md"]).toContain("BEGIN OpenRig MANAGED BLOCK: using-openrig.md");
-    expect(store["/project/AGENTS.md"]).toContain("hub guidance");
+    const content = fs.readFile("/project/AGENTS.md");
+    expect(content).toContain("BEGIN OpenRig MANAGED BLOCK: using-openrig.md");
+    expect(content).toContain("hub guidance");
   });
 
   it("deliverStartup skips rig-role guidance_merge; delivered is NOT incremented (honest metrics)", async () => {
@@ -2607,8 +2849,7 @@ describe("Codex runtime adapter", () => {
     // StartupDeliveryResult contract: skip does NOT count as delivered.
     expect(result.delivered).toBe(0);
     expect(result.failed).toEqual([]);
-    const store = (fs as unknown as { _store: Record<string, string> })._store;
-    expect(store["/project/AGENTS.md"]).toBeUndefined();
+    expect(fs.exists("/project/AGENTS.md")).toBe(false);
     expect(logSpy).toHaveBeenCalledWith(
       expect.stringContaining("skip: effectiveId is rig-role")
     );

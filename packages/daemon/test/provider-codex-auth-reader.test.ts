@@ -76,4 +76,21 @@ describe("readCodexAuthMetadata — daemon-local, secret-safe", () => {
     expect(meta.seats).toHaveLength(1);
     expect(meta.seats[0].seat).toBe("seat-1");
   });
+
+  it("without CODEX_HOME reads <home>/.codex, where Windows names the home by USERPROFILE, as Codex does, never HOME", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "codexuser-"));
+    const codex = path.join(home, ".codex");
+    fs.mkdirSync(path.join(codex, "auth-profiles"), { recursive: true });
+    try {
+      fs.writeFileSync(path.join(codex, "auth-profiles", "alpha.json"), "{}");
+      expect(readCodexAuthMetadata({ USERPROFILE: home } as NodeJS.ProcessEnv, "win32").profiles).toEqual(["alpha"]);
+      expect(readCodexAuthMetadata({ HOME: dir, USERPROFILE: home } as NodeJS.ProcessEnv, "win32").profiles).toEqual(["alpha"]);
+      expect(readCodexAuthMetadata({ HOME: home, USERPROFILE: dir } as NodeJS.ProcessEnv, "win32").profilesRead).toEqual({ status: "absent" });
+      expect(readCodexAuthMetadata({ HOME: home } as NodeJS.ProcessEnv, "linux").profiles).toEqual(["alpha"]);
+      // POSIX never reads USERPROFILE: HOME, else the account home (provider-codex-auth-reader-home.test.ts).
+      expect(readCodexAuthMetadata({ HOME: dir, USERPROFILE: home } as NodeJS.ProcessEnv, "linux").profilesRead).toEqual({ status: "absent" });
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
 });

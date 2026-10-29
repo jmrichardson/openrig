@@ -40,6 +40,7 @@ export function tuiCommand(io: FrontDoorIo & {
   loadRegistry?: () => Promise<TuiCommandEntry[]>;
   sharedTarget?: () => Promise<string>;
   attachShared?: (target: string) => Promise<number>;
+  platform?: NodeJS.Platform;
 } = {}): Command {
   const cmd = new Command("tui")
     .description("open the status dashboard, not agent chat (--shared is the OpenRig view fallback)")
@@ -72,14 +73,17 @@ export function tuiCommand(io: FrontDoorIo & {
   cmd
     .action(async (opts: { shared?: boolean }) => {
       const stdoutIsTTY = io.stdoutIsTTY ?? process.stdout.isTTY === true;
-      if (!stdoutIsTTY || (opts.shared && !(io.stdinIsTTY ?? process.stdin.isTTY === true))) {
+      // On Windows piped stdin cannot drive the standalone TUI either, and must never
+      // leave an interactive process waiting.
+      const win32 = (io.platform ?? process.platform) === "win32";
+      if (!stdoutIsTTY || ((opts.shared || win32) && !(io.stdinIsTTY ?? process.stdin.isTTY === true))) {
         // Same TTY-awareness on stdout as the bare-`rig` front door — degrade, never
         // launch the interactive TUI into a redirected/piped stdout.
         const err = io.err ?? ((l: string) => process.stderr.write(l + "\n"));
         const exit = io.exit ?? ((c: number) => process.exit(c));
         for (const line of USAGE_LINES) err(line);
         err("");
-        err("mission control needs an interactive terminal (shared entry requires TTY input and output)");
+        err(win32 ? "mission control needs interactive TTY input and output" : "mission control needs an interactive terminal (shared entry requires TTY input and output)");
         exit(1);
         return;
       }

@@ -13,6 +13,8 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { authCommand } from "../src/commands/auth.js";
 import { resolveCodexHome, authSave, authSwitch, copyOntoFresh } from "../src/lib/codex-auth.js";
+import { resolveWindowsCodexCommand } from "@openrig/daemon/windows-launch";
+import { canCreateFileSymlinks } from "../../../test/symlink-capability.mjs";
 
 // Distinctive, grep-proof: if this string ever lands in command output, the secret boundary broke.
 const SENTINEL = "SENTINEL_TOKEN_LEAK_a1b2c3d4_DO_NOT_PRINT";
@@ -45,11 +47,23 @@ beforeEach(() => {
   // Fake `codex` on PATH that emits the sentinel on stdout AND stderr, non-zero exit.
   // defaultLoginStatus spawns it with stdio:"ignore" → both streams discarded → no leak path.
   binDir = fs.mkdtempSync(path.join(os.tmpdir(), "codexauth-bin-"));
-  const shim = path.join(binDir, "codex");
-  fs.writeFileSync(shim, `#!/bin/sh\necho "${SENTINEL}"\necho "${SENTINEL}" 1>&2\nexit 3\n`, { mode: 0o755 });
-  fs.chmodSync(shim, 0o755);
+  if (process.platform === "win32") {
+    // Windows resolves Codex through its npm launcher layout (codex.cmd + @openai/codex entry), run by Node.
+    const pkg = path.join(binDir, "node_modules", "@openai", "codex");
+    fs.mkdirSync(path.join(pkg, "bin"), { recursive: true });
+    fs.writeFileSync(path.join(pkg, "package.json"), JSON.stringify({ name: "@openai/codex", bin: { codex: "bin/codex.js" } }));
+    fs.writeFileSync(
+      path.join(pkg, "bin", "codex.js"),
+      `console.log(${JSON.stringify(SENTINEL)});\nconsole.error(${JSON.stringify(SENTINEL)});\nprocess.exitCode = 3;\n`,
+    );
+    fs.writeFileSync(path.join(binDir, "codex.cmd"), `@ECHO off\r\nnode "%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js" %*\r\n`);
+  } else {
+    const shim = path.join(binDir, "codex");
+    fs.writeFileSync(shim, `#!/bin/sh\necho "${SENTINEL}"\necho "${SENTINEL}" 1>&2\nexit 3\n`, { mode: 0o755 });
+    fs.chmodSync(shim, 0o755);
+  }
   origPath = process.env.PATH;
-  process.env.PATH = `${binDir}:${origPath ?? ""}`;
+  process.env.PATH = `${binDir}${path.delimiter}${origPath ?? ""}`;
 });
 
 afterEach(() => {
@@ -89,7 +103,10 @@ describe("rig auth LEAK-HUNT keystone (OPR.0.4.1.29)", () => {
     expect(fs.readFileSync(path.join(home, "auth-profiles", "work.json"), "utf8")).toContain(SENTINEL);
     expect(fs.readFileSync(path.join(home, "auth-profiles", "broken.json"), "utf8")).toContain(SENTINEL);
     // The shim leaks on BOTH streams when captured — proving stdio:"ignore" is what protects us.
-    const probe = spawnSync("codex", ["login", "status"], { encoding: "utf8" });
+    const codex = process.platform === "win32"
+      ? resolveWindowsCodexCommand(process.env.PATH ?? "", process.execPath)
+      : { command: "codex", args: [] };
+    const probe = spawnSync(codex.command, [...codex.args, "login", "status"], { encoding: "utf8" });
     expect(`${probe.stdout}${probe.stderr}`).toContain(SENTINEL);
   });
 
@@ -173,7 +190,7 @@ describe("rig auth LEAK-HUNT — hardlink + symlinked-parent escapes (rev1-r2)",
     fs.rmSync(p.profileDir, { recursive: true, force: true });
     const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), "codexauth-outdir-"));
     expect(outsideDir.startsWith(h + path.sep)).toBe(false); // genuinely outside CODEX_HOME
-    fs.symlinkSync(outsideDir, p.profileDir); // auth-profiles -> /outside/dir
+    fs.symlinkSync(outsideDir, p.profileDir, process.platform === "win32" ? "junction" : "dir"); // auth-profiles -> /outside/dir
     expect(authSave(p, "work")).toEqual({ ok: false, reason: "unsafe_path" });
     const leaked = fs.readdirSync(outsideDir).some((f) => {
       try {
@@ -207,7 +224,7 @@ describe("rig auth LEAK-HUNT — fd-first check-then-use / crash-safety (OPR.0.4
     fs.rmSync(root, { recursive: true, force: true });
   });
 
-  it("refuses a SYMLINK source via O_NOFOLLOW at the fd (not just the path pre-check); no read through the swap target", () => {
+  it.skipIf(!canCreateFileSymlinks)("refuses a SYMLINK source via O_NOFOLLOW at the fd (not just the path pre-check); no read through the swap target", () => {
     const secret = path.join(root, "secret.json");
     fs.writeFileSync(secret, JSON.stringify({ k: SENTINEL }), { mode: 0o600 });
     const srcLink = path.join(root, "source-link.json"); // a symlink swapped in where a regular file was expected
@@ -250,7 +267,9 @@ describe("rig auth LEAK-HUNT — fd-first check-then-use / crash-safety (OPR.0.4
     fs.writeFileSync(src, body, { mode: 0o600 });
     const dest = path.join(root, "dest.json");
     expect(copyOntoFresh(src, dest, { dev: fs.lstatSync(src).dev, ino: fs.lstatSync(src).ino })).toBe(true);
-    expect(fs.lstatSync(dest).mode & 0o777).toBe(0o600); // 0600, set at open — no create-then-chmod window
+    if (process.platform !== "win32") { // POSIX mode bits; Windows uses ACLs
+      expect(fs.lstatSync(dest).mode & 0o777).toBe(0o600); // 0600, set at open — no create-then-chmod window
+    }
     expect(fs.readFileSync(dest, "utf8")).toBe(body); // fd read+write reproduces the bytes exactly
     expect(orphans(root, "dest.json")).toEqual([]);
   });
@@ -308,7 +327,9 @@ describe("rig auth LEAK-HUNT — fd-first check-then-use / crash-safety (OPR.0.4
     const dest = path.join(root, "dest.json");
     expect(copyOntoFresh(a, dest)).toBe(true);
     expect(copyOntoFresh(b, dest)).toBe(true); // second atomic publish over the first
-    expect(fs.lstatSync(dest).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") { // POSIX mode bits; Windows uses ACLs
+      expect(fs.lstatSync(dest).mode & 0o777).toBe(0o600);
+    }
     expect(fs.readFileSync(dest, "utf8")).toBe(JSON.stringify({ v: "BBB" })); // full, not a partial
     expect(orphans(root, "dest.json")).toEqual([]);
   });
@@ -319,15 +340,18 @@ describe("rig auth LEAK-HUNT — fd-first check-then-use / crash-safety (OPR.0.4
     fs.chmodSync(p.activeAuth, 0o600);
     fs.mkdirSync(p.profileDir, { recursive: true });
     fs.chmodSync(p.profileDir, 0o700);
-    expect(authSave(p, "work")).toMatchObject({ ok: true, mode: "600" });
-    expect(authSwitch(p, "work")).toMatchObject({ ok: true, mode: "600" });
+    const mode = process.platform === "win32" ? "unknown" : "600"; // POSIX mode bits; Windows uses ACLs
+    expect(authSave(p, "work")).toMatchObject({ ok: true, mode });
+    expect(authSwitch(p, "work")).toMatchObject({ ok: true, mode });
     // Scan both the codex home and the profile dir for any lingering *.tmp-* temp files.
     const scan = (dir: string) =>
       fs.readdirSync(dir).filter((n) => n.includes(".tmp-"));
     expect(scan(root)).toEqual([]);
     expect(scan(p.profileDir)).toEqual([]);
     // The published files are 0600 and carry the secret only inside the boundary.
-    expect(fs.lstatSync(p.activeAuth).mode & 0o777).toBe(0o600);
-    expect(fs.lstatSync(path.join(p.profileDir, "work.json")).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") { // POSIX mode bits; Windows uses ACLs
+      expect(fs.lstatSync(p.activeAuth).mode & 0o777).toBe(0o600);
+      expect(fs.lstatSync(path.join(p.profileDir, "work.json")).mode & 0o777).toBe(0o600);
+    }
   });
 });

@@ -4,7 +4,7 @@ import { spawnGatewayProcess } from "../src/domain/gateway/spawn-gateway.js";
 import { encodeGatewayMessage, type CapabilityDescriptor } from "../src/domain/gateway/protocol.js";
 import { mkdtempSync, rmSync, existsSync, unlinkSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { tmpdir } from "node:os";
 import type { ChildProcess } from "node:child_process";
 
@@ -73,7 +73,8 @@ describe("A4a gateway spawn wrapper e2e (real spawned process)", () => {
 
   it("spawns, connects, SURVIVES a connector outage, then RE-DIALS + shuts down on SIGTERM", async () => {
     home = mkdtempSync(join(tmpdir(), "a4a-spawn-"));
-    const sockPath = join(home, "g.sock");
+    // Node IPC on Windows listens on a named pipe, not a filesystem path.
+    const sockPath = process.platform === "win32" ? `\\\\.\\pipe\\${basename(home)}` : join(home, "g.sock");
     expect(sockPath.length).toBeLessThan(104); // sun_path guard
 
     // 1. connector up; spawn the real gateway process pointed at it (fast reconnect for the test).

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { deriveWorkCandidates, frontmatterIntent, type WorkCandidateLookups } from "../src/domain/current-work.js";
 import { createDb } from "../src/db/connection.js";
@@ -10,6 +10,7 @@ import { migrate } from "../src/db/migrate.js";
 import { queueTransitionsSchema } from "../src/db/migrations/025_queue_transitions.js";
 import { queueTransitionsQitemIdOrderSchema } from "../src/db/migrations/098_queue_transitions_qitem_id_order.js";
 import { QueueTransitionLog } from "../src/domain/queue-transition-log.js";
+import { fakePythonEnv, hasPython3, writeFakeRig } from "./helpers/refocus-hook-fakes.js";
 
 // OPR.0.7.0.12 — refocus knows the seat's work. The candidates sit beside the strict
 // derivation (current-work.test.ts keeps its own contract); the trace renders them only in
@@ -45,26 +46,29 @@ function world() {
   writeFileSync(join(topology, "rigs/demo/LEARNED.md"), "# Demo rig\nrig practice\n", "utf8");
   writeFileSync(join(seat, "LEARNED.md"),
     "# Builder\nintro\n\n## MY JOB HERE\nLead T2 and own its packets.\n\n## STANDING DUTIES\n- keep rows honest\n\n## Other\nnot duties\n", "utf8");
-  const rig = join(bin, "rig");
   const calls = join(root, "rig-calls.log");
-  writeFileSync(rig, `#!/bin/sh
-printf '%s\\n' "$*" >> "$RIG_CALL_LOG"
-if [ "$1 $2" = "queue whoami" ]; then
-  case " $* " in *" --work-candidates "*) if [ -n "$RIG_REJECT_CANDIDATES" ]; then echo "error: unknown option '--work-candidates'" >&2; exit 1; fi;; esac
-  printf '%s' "$RIG_QUEUE_WHOAMI_STDOUT"; exit 0
-fi
-if [ "$1 $2" = "whoami --json" ]; then printf '{"identity":{"rigName":"demo","sessionName":"builder@demo"}}\\n'; exit 0; fi
-if [ "$1 $2" = "config --json" ]; then printf '{}'; exit 0; fi
-if [ "$1 $2" = "scope resolve-notes" ]; then
-  if [ -r "$3/NOTES.md" ]; then printf '{"ok":true,"resolution":{"path":"%s","name":"NOTES.md"}}\\n' "$3/NOTES.md"; exit 0; fi
-  printf '{"ok":true,"resolution":null}\\n'; exit 0
-fi
-exit 1
-`, "utf8");
-  chmodSync(rig, 0o755);
+  const rig = writeFakeRig(bin, `const fs = require("node:fs");
+const args = process.argv.slice(2);
+fs.appendFileSync(process.env.RIG_CALL_LOG, \`\${args.join(" ")}\\n\`);
+const verb = \`\${args[0]} \${args[1]}\`;
+if (verb === "queue whoami") {
+  if (args.includes("--work-candidates") && process.env.RIG_REJECT_CANDIDATES) {
+    process.stderr.write("error: unknown option '--work-candidates'\\n");
+    process.exitCode = 1;
+  } else process.stdout.write(process.env.RIG_QUEUE_WHOAMI_STDOUT ?? "");
+} else if (verb === "whoami --json") process.stdout.write('{"identity":{"rigName":"demo","sessionName":"builder@demo"}}\\n');
+else if (verb === "config --json") process.stdout.write("{}");
+else if (verb === "scope resolve-notes") {
+  const notes = \`\${args[2]}/NOTES.md\`;
+  let readable = true;
+  try { fs.accessSync(notes, fs.constants.R_OK); } catch { readable = false; }
+  process.stdout.write(readable ? \`\${JSON.stringify({ ok: true, resolution: { path: notes, name: "NOTES.md" } })}\\n\` : '{"ok":true,"resolution":null}\\n');
+} else process.exitCode = 1;
+`);
   const env: NodeJS.ProcessEnv = {
     ...process.env,
-    PATH: `${bin}:${process.env.PATH || ""}`,
+    PATH: `${bin}${delimiter}${process.env.PATH || ""}`,
+    OPENRIG_CLI_ENTRY: rig,
     OPENRIG_TOPOLOGY_ROOT: topology,
     OPENRIG_WORKSPACE_ROOT: workspace,
     OPENRIG_REFOCUS_WORK_NODE: undefined,
@@ -237,7 +241,8 @@ describe("frontmatterIntent — folded and literal intents", () => {
   });
 });
 
-describe("trace-to-root --packet — the work packet as text", () => {
+// Every case here runs the shipped trace-to-root.py, which needs a real python3.
+describe.skipIf(!hasPython3)("trace-to-root --packet — the work packet as text", () => {
   it("shows one direct candidate as the work, labelled with its source, without a root fallback (W2)", () => {
     const w = world();
     const evidence = deriveWorkCandidates([{ qitemId: "q-1", state: "in-progress", tags: ["mission:release-a"] }], w.missions, nothingElse);
@@ -466,9 +471,13 @@ describe("refocus hook — OPENRIG_REFOCUS_WORK_PACKET switch", () => {
     mkdirSync(home, { recursive: true });
     const argvLog = join(w.root, "python-argv.log");
     const stdinLog = join(w.root, "python-stdin.log");
-    const python = join(w.bin, "python-shim");
-    writeFileSync(python, `#!/bin/sh\nprintf '%s\\n' "$*" >> "${argvLog}"\ncat > "${stdinLog}"\nprintf 'TRACE OK'\n`, "utf8");
-    chmodSync(python, 0o755);
+    const python = fakePythonEnv(w.root, `const fs = require("node:fs");
+fs.appendFileSync(${JSON.stringify(argvLog)}, \`\${process.argv.slice(1).join(" ")}\\n\`);
+let input = "";
+try { input = fs.readFileSync(0, "utf8"); } catch { /* no stdin */ }
+fs.writeFileSync(${JSON.stringify(stdinLog)}, input);
+fs.writeSync(1, "TRACE OK");
+process.exit(0);`);
     const whoami = {
       currentWork: { mission: "release-a", slice: "12-refocus", workNodePath: w.slice, basis: "one typed" },
       currentWorkBasis: "one typed",
@@ -480,7 +489,7 @@ describe("refocus hook — OPENRIG_REFOCUS_WORK_PACKET switch", () => {
       encoding: "utf8",
       env: { ...w.env, OPENRIG_HOME: home, OPENRIG_SESSION_NAME: "builder@demo", OPENRIG_REFOCUS_NOW: "1",
         OPENRIG_REFOCUS_TREES: "work", OPENRIG_REFOCUS_CONTENT_REF: "", OPENRIG_REFOCUS_CONTENT_FILE: "",
-        PYTHON: python, RIG_QUEUE_WHOAMI_STDOUT: JSON.stringify(whoami), ...extra },
+        ...python, RIG_QUEUE_WHOAMI_STDOUT: JSON.stringify(whoami), ...extra },
     });
     expect(result.status, result.stderr).toBe(0);
     return {

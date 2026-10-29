@@ -14,16 +14,22 @@ export interface PermissionDriftReader {
   diagnose(nodeId: string): PermissionDriftDiagnostic | null;
 }
 
-function commandAvailable(command: string): boolean {
-  const pathValue = process.env.PATH;
+export function commandAvailable(command: string, platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env): boolean {
+  const pathValue = env.PATH;
   if (!pathValue) return false;
+  // Windows finds `claude` as claude.exe and `codex` as codex.cmd; X_OK there only tests existence.
+  const suffixes = platform === "win32" ? [...(env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean).map(ext => ext.toLowerCase()), ""] : [""];
   for (const entry of pathValue.split(nodePath.delimiter)) {
     if (!entry) continue;
-    try {
-      fs.accessSync(nodePath.join(entry, command), fs.constants.X_OK);
-      return true;
-    } catch {
-      // Try the next PATH entry.
+    for (const suffix of suffixes) {
+      const file = nodePath.join(entry, command + suffix);
+      try {
+        fs.accessSync(file, fs.constants.X_OK);
+        if (platform === "win32" && !fs.statSync(file).isFile()) continue;
+        return true;
+      } catch {
+        // Try the next PATH entry.
+      }
     }
   }
   return false;
@@ -35,6 +41,7 @@ export async function loadClaudePermissionModes(): Promise<string[] | null> {
       encoding: "utf8",
       timeout: 1_000,
       maxBuffer: 1024 * 1024,
+      windowsHide: true,
     }, (error, stdout) => resolve(error ? null : parseClaudePermissionModes(stdout)));
   });
 }

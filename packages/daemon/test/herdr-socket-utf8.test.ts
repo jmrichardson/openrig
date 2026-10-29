@@ -5,7 +5,7 @@ import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { createHerdrSocketRpc } from "../src/domain/terminal/herdr-transport.js";
+import { createHerdrSocketRpc, herdrSocketEndpoint } from "../src/domain/terminal/herdr-transport.js";
 
 const TEXT = "café 漢 😀";
 const servers: net.Server[] = [];
@@ -20,6 +20,7 @@ afterEach(async () => {
 async function serve(reply: (req: { id: string }) => Buffer[]): Promise<string> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "herdr-"));
   dirs.push(dir);
+  // On Windows, as herdr does, the server listens on the named pipe the socket path names.
   const socketPath = path.join(dir, "h.sock");
   const server = net.createServer((conn) => {
     let buf = "";
@@ -34,7 +35,7 @@ async function serve(reply: (req: { id: string }) => Buffer[]): Promise<string> 
     });
   });
   servers.push(server);
-  await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+  await new Promise<void>((resolve) => server.listen(herdrSocketEndpoint(socketPath), resolve));
   return socketPath;
 }
 

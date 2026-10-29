@@ -4,7 +4,18 @@ import { readOpenRigEnv } from "../openrig-compat.js";
 import { getDaemonStatus, getDaemonUrl , daemonStatusGuard} from "../daemon-lifecycle.js";
 import { realDeps } from "./daemon.js";
 import type { StatusDeps } from "./status.js";
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
+import path from "node:path";
+import { renderWindowsLaunch } from "@openrig/daemon/windows-launch";
+
+/** psmux runs a pane command as a native command line, where `rig` is only an npm .cmd shim:
+ *  start the watcher through the current Node entry in Windows PowerShell instead. */
+export function windowsChatroomWatchCommand(rig: string): string {
+  const command = [process.execPath, path.resolve(import.meta.dirname, "../bin-wrapper.js"), "chatroom", "watch", rig]
+    .map(value => "'" + value.replaceAll("'", "'\"'\"'") + "'").join(" ");
+  const script = renderWindowsLaunch(command);
+  return `powershell.exe -NoLogo -NoProfile -EncodedCommand ${Buffer.from(script, "utf16le").toString("base64")}`;
+}
 
 interface RigSummary {
   id: string;
@@ -174,12 +185,16 @@ export function chatroomCommand(depsOverride?: StatusDeps): Command {
 
       if (opts.tmux) {
         const sessionName = `chatroom@${rig}`;
+        const win32 = process.platform === "win32";
         try {
-          execSync(`tmux new-session -d -s ${JSON.stringify(sessionName)} "rig chatroom watch ${JSON.stringify(rig)}"`, { stdio: "ignore" });
+          if (win32) execFileSync("tmux", ["new-session", "-d", "-s", sessionName, windowsChatroomWatchCommand(rig)], { stdio: "ignore" });
+          else execSync(`tmux new-session -d -s ${JSON.stringify(sessionName)} "rig chatroom watch ${JSON.stringify(rig)}"`, { stdio: "ignore" });
           console.log(`Started watch in tmux session: ${sessionName}`);
           console.log(`Attach with: tmux attach -t ${sessionName}`);
-        } catch {
-          console.error(`Failed to create tmux session '${sessionName}'. It may already exist.`);
+        } catch (error) {
+          console.error(win32
+            ? `Failed to create tmux session '${sessionName}': ${error instanceof Error ? error.message : String(error)}`
+            : `Failed to create tmux session '${sessionName}'. It may already exist.`);
           process.exitCode = 1;
         }
         return;

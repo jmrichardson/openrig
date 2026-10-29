@@ -13,7 +13,8 @@ import { realRuntimesRequested } from "../../../test/stub-runtimes.js";
 
 function resolveOnPath(binary: string, pathVar: string): string | undefined {
   for (const dir of pathVar.split(delimiter)) {
-    const candidate = join(dir, binary);
+    // Windows stubs are native executables, as the real runtimes there are.
+    const candidate = join(dir, process.platform === "win32" ? `${binary}.exe` : binary);
     if (existsSync(candidate)) return realpathSync(candidate);
   }
   return undefined;

@@ -2,6 +2,7 @@
 // validate/classify (builtin vs custom vs reserved vs invalid), the flag-surface launch-posture
 // resolution (README v4 d65afe67: YOLO/Operator = full_bypass, everything else = floor), and the
 // member > rig > floor precedence. Grounds the ref/none semantics from README v4 A1/A2/A3.
+import { resolve } from "node:path";
 import { describe, it, expect } from "vitest";
 import {
   validatePermissionPolicyRef,
@@ -101,7 +102,7 @@ describe("permission_policy — restart-stable attachment resolution (Guard ruli
     expect(a.origin).toBe("custom");
     expect(a.surface).toBe("flag");
     expect(a.launchPosture).toBe("full_bypass"); // NOT floor — the ruling's crux
-    expect(a.resolvedTarget).toBe("/rig/spec/policies/operator.md"); // restart-stable absolute target
+    expect(a.resolvedTarget).toBe(resolve("/rig/spec", "policies/operator.md")); // restart-stable absolute target
     expect(a.declaringDir).toBe("/rig/spec"); // restart-stable provenance
     expect(a.ref).toBe("policies/operator.md"); // raw ref preserved for export
   });
@@ -112,7 +113,7 @@ describe("permission_policy — restart-stable attachment resolution (Guard ruli
     expect(a.origin).toBe("custom");
     expect(a.surface).toBe("flag");
     expect(a.launchPosture).toBe("auto");
-    expect(a.resolvedTarget).toBe("/rig/spec/policies/auto.md");
+    expect(a.resolvedTarget).toBe(resolve("/rig/spec", "policies/auto.md"));
     expect(a.declaringDir).toBe("/rig/spec");
     expect(a.ref).toBe("policies/auto.md");
   });
@@ -128,7 +129,7 @@ describe("permission_policy — restart-stable attachment resolution (Guard ruli
     const a = resolvePermissionPolicyAttachment("policies/missing.md", "/rig", noFile);
     expect(a.launchPosture).toBe("floor");
     expect(a.ref).toBe("policies/missing.md");
-    expect(a.resolvedTarget).toBe("/rig/policies/missing.md");
+    expect(a.resolvedTarget).toBe(resolve("/rig", "policies/missing.md"));
     expect(a.origin).toBe("custom");
   });
 });

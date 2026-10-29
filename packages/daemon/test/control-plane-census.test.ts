@@ -236,6 +236,10 @@ describe("OPR.0.5.3.10 — one census per cycle", () => {
     // Every row carries a parseable start time, and commands survive the extra column.
     expect(withStart.length).toBe(rows.length);
     expect(rows.some((r) => r.command.length > 0)).toBe(true);
+    const self = rows.find(row => row.pid === process.pid);
+    expect(self).toBeDefined();
+    expect(lstartToMinTs(self!.startedAt)).toBeLessThanOrEqual(Date.now() / 1000);
+    expect(self!.ppid).toBe(process.ppid);
   });
 
   it("r2 round-3: a known identity NEVER joins an in-flight probe belonging to a DIFFERENT identity (pid reused mid-probe)", async () => {
@@ -574,7 +578,7 @@ describe("OPR.0.5.3.10 — one census per cycle", () => {
     const rows = await defaultListProcessesStrict();
     expect(rows.length).toBeGreaterThan(0);
     // And the census default is wired to the STRICT lister, not the lenient one.
-    const censusSrc = await import("node:fs").then((f) => f.readFileSync("src/domain/process-census.ts", "utf-8"));
+    const censusSrc = await import("node:fs").then((f) => f.readFileSync(new URL("../src/domain/process-census.ts", import.meta.url), "utf-8"));
     expect(censusSrc).toContain("defaultListProcessesStrict");
   });
 

@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { replaceFile } from "../src/adapters/replace-file.js";
+import { canCreateFileSymlinks } from "../../../test/symlink-capability.mjs";
 
 describe("replaceFile staging ownership", () => {
   let root: string;
@@ -18,7 +19,8 @@ describe("replaceFile staging ownership", () => {
     return { src, dest };
   }
 
-  it("does not follow or consume an existing predictable symlink", () => {
+  // Creating a file symlink needs SeCreateSymbolicLinkPrivilege on Windows.
+  it.skipIf(!canCreateFileSymlinks)("does not follow or consume an existing predictable symlink", () => {
     const { src, dest } = files();
     const victim = path.join(root, "unrelated");
     fs.writeFileSync(victim, "unrelated good bytes");
@@ -39,6 +41,47 @@ describe("replaceFile staging ownership", () => {
     expect(fs.readFileSync(stale, "utf8")).toBe("stale bytes");
     expect(fs.readFileSync(dest, "utf8")).toBe("new complete bytes");
     expect(fs.statSync(dest).mode & 0o222).toBe(0);
+  });
+
+  it("replaces a read-only copy from an earlier call", () => {
+    const { src, dest } = files();
+    replaceFile(src, dest);
+    fs.chmodSync(src, 0o644); fs.writeFileSync(src, "newer complete bytes"); fs.chmodSync(src, 0o444);
+    replaceFile(src, dest);
+    expect(fs.readFileSync(dest, "utf8")).toBe("newer complete bytes");
+    expect(fs.statSync(dest).mode & 0o222).toBe(0);
+    expect(fs.readdirSync(root).sort()).toEqual(["destination", "source"]);
+  });
+
+  // Windows only: the read-only attribute belongs to the file, shared by every hard link, and POSIX renames over it.
+  it.runIf(process.platform === "win32")("keeps the error rather than clearing read-only on a hard-linked copy", () => {
+    const { src, dest } = files();
+    replaceFile(src, dest);
+    const other = path.join(root, "other-link");
+    fs.linkSync(dest, other);
+    fs.chmodSync(src, 0o644); fs.writeFileSync(src, "newer complete bytes"); fs.chmodSync(src, 0o444);
+    expect(() => replaceFile(src, dest)).toThrow(/EPERM/);
+    expect(fs.statSync(other).mode & 0o222).toBe(0);
+    expect(fs.readFileSync(other, "utf8")).toBe("new complete bytes");
+    expect(fs.readFileSync(dest, "utf8")).toBe("new complete bytes");
+    expect(fs.readdirSync(root).sort()).toEqual(["destination", "other-link", "source"]);
+    fs.chmodSync(other, 0o644);
+  });
+
+  // Windows only: a copy another process holds open cannot be renamed over even once writable.
+  it.runIf(process.platform === "win32")("keeps a read-only copy read-only when the retried rename fails too", () => {
+    const { src, dest } = files();
+    replaceFile(src, dest);
+    fs.chmodSync(src, 0o644); fs.writeFileSync(src, "newer complete bytes"); fs.chmodSync(src, 0o444);
+    const held = fs.openSync(dest, "r");
+    try {
+      expect(() => replaceFile(src, dest)).toThrow(/EPERM/);
+    } finally {
+      fs.closeSync(held);
+    }
+    expect(fs.statSync(dest).mode & 0o222).toBe(0);
+    expect(fs.readFileSync(dest, "utf8")).toBe("new complete bytes");
+    expect(fs.readdirSync(root).sort()).toEqual(["destination", "source"]);
   });
 
   it("does not remove another actor's slot when staging creation fails", () => {
@@ -77,7 +120,8 @@ describe("replaceFile staging ownership", () => {
     expect(fs.readdirSync(root).sort()).toEqual(["destination", "source"]);
   });
 
-  it("refuses an unexpected symlink at the exclusive copy target", () => {
+  // Creating a file symlink needs SeCreateSymbolicLinkPrivilege on Windows.
+  it.skipIf(!canCreateFileSymlinks)("refuses an unexpected symlink at the exclusive copy target", () => {
     const { src, dest } = files();
     const victim = path.join(root, "unrelated");
     fs.writeFileSync(victim, "unrelated good bytes");

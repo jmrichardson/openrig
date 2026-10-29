@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { canCreateFileSymlinks } from "../../../test/symlink-capability.mjs";
 
 const roots: string[] = [];
 const REPO_ROOT = resolve(import.meta.dirname, "../../..");
@@ -187,7 +188,8 @@ describe("control-plane JSON generator", () => {
       .rejects.toThrow(/OPENRIG_LEAK_GUARD_RULES/);
   });
 
-  it("rejects edge file symlinks before digesting outside-root bytes", async () => {
+  // Needs file-symlink privilege (Windows: Developer Mode or elevation)
+  it.skipIf(!canCreateFileSymlinks)("rejects edge file symlinks before digesting outside-root bytes", async () => {
     const generator = await loadGenerator();
     const root = tempRoot();
     const input = seedGeneratorInput(root);
@@ -221,7 +223,7 @@ describe("control-plane JSON generator", () => {
       "skills/_canonical/core/alpha/references/linked-directory",
     );
     mkdirSync(dirname(link), { recursive: true });
-    symlinkSync(outside, link, "dir");
+    symlinkSync(outside, link, process.platform === "win32" ? "junction" : "dir");
 
     await expect(
       generator.generateControlPlaneJson(input),

@@ -6,6 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { vendorContextPackDir } from "../src/domain/bundle-carried-context-pack.js";
+import { canCreateFileSymlinks } from "../../../test/symlink-capability.mjs";
 
 const MANIFEST = `name: demo-world
 version: 0.1.0
@@ -64,7 +65,8 @@ describe("vendorContextPackDir", () => {
     expect(fs.readFileSync(path.join(staging, "context-packs/demo-world/manifest.yaml"), "utf-8")).toBe(MANIFEST);
   });
 
-  it("refuses a declared file that is a symlink out of the pack directory", () => {
+  // Creates a file symlink, which Windows allows only with SeCreateSymbolicLinkPrivilege.
+  it.skipIf(!canCreateFileSymlinks)("refuses a declared file that is a symlink out of the pack directory", () => {
     const outside = path.join(work, "outside.md");
     fs.writeFileSync(outside, "# outside\n");
     fs.rmSync(path.join(repo, "craft", "how.md"));

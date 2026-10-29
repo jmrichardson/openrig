@@ -13,7 +13,7 @@ import { projectsRoutes } from "../src/routes/projects.js";
 import { StreamClassificationWorker, type WorkerOptions, type ClassificationDecision } from "../src/domain/stream-classification-worker.js";
 import type { Observation } from "../src/domain/capture-observer.js";
 
-const config:ShadowConfig={destination:"/unused/private/shadow.jsonl",maxRecords:10,maxBytes:100_000,capacity:10,maxQueuedBytes:100_000,maxObservationBytes:10_000};
+const config:ShadowConfig={destination:path.resolve("/unused/private/shadow.jsonl"),maxRecords:10,maxBytes:100_000,capacity:10,maxQueuedBytes:100_000,maxObservationBytes:10_000};
 function terminal(capture?:ShadowCapture) {
   let pane="%7", occupant="old", probes=0, captures=0, pastes=0, enters=0, verify=0;
   let hook:()=>void=()=>{};
@@ -54,7 +54,9 @@ describe("disabled-by-default production observer ports",()=>{
     expect(configureShadowCapture(undefined)).toEqual({});
     expect(configureShadowCapture(JSON.stringify({...config,maxBytes:Infinity})).capture).toBeUndefined();
     expect(configureShadowCapture(JSON.stringify({...config,destination:"relative"})).capture).toBeUndefined();
-    const valid=configureShadowCapture(JSON.stringify(config));expect(valid.capture?.status().sink.reservedRecords).toBe(0);
+    const valid=configureShadowCapture(JSON.stringify(config),"linux");expect(valid.capture?.status().sink.reservedRecords).toBe(0);
+    // Windows cannot verify the sink parent's privacy, so it refuses the opt-in up front rather than at every drain.
+    expect(configureShadowCapture(JSON.stringify(config),"win32")).toEqual({error:expect.stringContaining("unavailable on Windows")});
     const f=terminal();expect((await f.transport.send("seat@rig","hello world",{verify:true})).outcome).toBe("delivered");
     expect(f.counts()).toMatchObject({captures:3,pastes:1});
     expect(inventoryCaptureOptions(f.db,undefined)).toEqual({});
@@ -122,7 +124,8 @@ describe("disabled-by-default production observer ports",()=>{
     expect((await disabled.request("/shadow")).status).toBe(200);
     expect(await(await disabled.request("/shadow")).json()).toEqual({enabled:false,error:null});
   });
-  it("private sink writes only synthetic observations and refuses existing or nonprivate destinations",async()=>{
+  // POSIX owner/mode privacy check on the sink parent; Windows uses ACLs.
+  it.skipIf(process.platform === "win32")("private sink writes only synthetic observations and refuses existing or nonprivate destinations",async()=>{
     const dir=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),"shadow-private-")));
     const destination=path.join(dir,"new.jsonl");
     const capture=new ShadowCapture({...config,destination,maxRecords:1});

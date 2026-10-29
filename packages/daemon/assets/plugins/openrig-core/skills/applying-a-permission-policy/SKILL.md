@@ -199,6 +199,8 @@ a replacement settings file:
 
 Current syntax uses ` *` for a command family; `Bash(rig:*)` is also supported.
 Narrower examples are `Bash(rig ps *)` and `Bash(rig queue list *)`.
+On native Windows, Claude's PowerShell tool has its own rules: add the matching
+`PowerShell(rig *)` entry too.
 Preserve `deny`/`ask` entries and `defaultMode`; do not add `Bash(*)` or switch
 to bypass to resolve a mismatch. Inspect native `/permissions` and verify the
 actual command spelling. A bare rule does not cover every absolute invocation:

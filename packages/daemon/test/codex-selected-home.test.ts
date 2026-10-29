@@ -13,6 +13,7 @@ import { CodexThreadIdResolver } from "../src/domain/codex-thread-id.js";
 import { ContextUsageStore } from "../src/domain/context-usage-store.js";
 import { codexDaemonSupportProbe } from "../src/domain/codex-daemon-support.js";
 import { shellQuote } from "../src/adapters/shell-quote.js";
+import { installWindowsNpmCodex } from "./helpers/windows-npm-codex.js";
 
 const exec = promisify(execFile), roots: string[] = [];
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); for (const r of roots.splice(0)) fs.rmSync(r, { recursive: true, force: true }); });
@@ -23,9 +24,11 @@ function fixture() {
   const firstConfig = path.join(home, ".codex/config.toml"); fs.writeFileSync(firstConfig, '# first-home sentinel\nmodel = "fixture"\n');
   fs.writeFileSync(path.join(home, '.codex/history.jsonl'), '{"fixture":"first-home"}\n');
   fs.writeFileSync(path.join(root, 'project-one/AGENTS.md'), 'first-project sentinel\n');
-  fs.writeFileSync(path.join(bin, "codex"), `#!${process.execPath}\nconst fs=require('node:fs');const r={home:process.env.CODEX_HOME,cwd:process.cwd(),argv:process.argv.slice(2)};if(process.env.PROBE_RECORD)fs.appendFileSync(process.env.PROBE_RECORD,JSON.stringify(r)+'\\n');if(process.argv.includes('--help'))console.log('Usage: codex [OPTIONS]\\n  --no-daemon');else if(process.argv.includes('--version'))console.log('codex-cli 0.155.1');else console.log(JSON.stringify(r));\n`, { mode: 0o700 });
+  const codexScript = `#!${process.execPath}\nconst fs=require('node:fs');const r={home:process.env.CODEX_HOME,cwd:process.cwd(),argv:process.argv.slice(2)};if(process.env.PROBE_RECORD)fs.appendFileSync(process.env.PROBE_RECORD,JSON.stringify(r)+'\\n');if(process.argv.includes('--help'))console.log('Usage: codex [OPTIONS]\\n  --no-daemon');else if(process.argv.includes('--version'))console.log('codex-cli 0.155.1');else console.log(JSON.stringify(r));\n`;
+  fs.writeFileSync(path.join(bin, "codex"), codexScript, { mode: 0o700 });
+  if (process.platform === "win32") installWindowsNpmCodex(bin, codexScript);
   const cli = path.join(bin, "rig"); fs.writeFileSync(cli, '#!/bin/sh\nexit 0\n', { mode: 0o700 });
-  const env = { PATH: `${bin}:${path.dirname(process.execPath)}:/usr/bin:/bin`, HOME: home, CODEX_HOME: selected, OPENRIG_HOME: path.join(root, "instance") };
+  const env = { PATH: process.platform === "win32" ? [bin, path.dirname(process.execPath)].join(path.delimiter) : `${bin}:${path.dirname(process.execPath)}:/usr/bin:/bin`, HOME: home, CODEX_HOME: selected, OPENRIG_HOME: path.join(root, "instance") };
   const ids: Record<string, string> = { OPENRIG_NODE_ID: "node", OPENRIG_SESSION_NAME: "seat@rig", OPENRIG_RUNTIME: "codex", OPENRIG_OCCUPANT_GENERATION: "generation" };
   const tmux = { getPaneCommand: vi.fn(async () => "bash"), getSessionEnv: vi.fn(async (_s: string, k: string) => ids[k]), sendShellCommand: vi.fn(async (_s: string, _cmd: string) => ({ ok: true })) };
   const fsOps = { homedir: home, readFile: (p: string) => fs.readFileSync(p, "utf8"), writeFile: (p: string, c: string) => fs.writeFileSync(p, c), exists: fs.existsSync, mkdirp: (p: string) => { fs.mkdirSync(p, { recursive: true }); } };
@@ -35,7 +38,9 @@ function fixture() {
   return { root, home, selected, cwd, bin, env, tmux, fsOps, launch, run, firstConfig };
 }
 
-it.each(["fresh", "resume", "fork", "legacy"])("explicit home wins over pane rc for %s; executable PATH is retained", async kind => {
+// These compose the POSIX pane command (/usr/bin/env, a file-symlinked rig) and run it in bash with a POSIX rc.
+it.skipIf(process.platform === "win32")
+  .each(["fresh", "resume", "fork", "legacy"])("explicit home wins over pane rc for %s; executable PATH is retained", async kind => {
   const f = fixture(), launch = f.launch(true);
   if (kind === "legacy") {
     const adapter = new CodexResumeAdapter(f.tmux as any, { seatLaunchEnvironment: launch, launchPath: f.env.PATH });
@@ -52,12 +57,12 @@ it.each(["fresh", "resume", "fork", "legacy"])("explicit home wins over pane rc 
   }
   expect(JSON.parse((await f.run(f.tmux.sendShellCommand.mock.calls.at(-1)![1])).stdout).home).toBe(f.selected);
 });
-it("unset selection keeps the pane home, including when startup supplies its default session home", async () => {
+it.skipIf(process.platform === "win32")("unset selection keeps the pane home, including when startup supplies its default session home", async () => {
   const f = fixture();
   const cmd = await f.launch(false).command('seat@rig', 'codex --versionless', { codexCwd: f.cwd });
   expect(JSON.parse((await f.run(cmd)).stdout).home).toBe(path.join(f.home, '.codex'));
 });
-it("explicit home survives the existing metadata-unavailable fallback", async () => {
+it.skipIf(process.platform === "win32")("explicit home survives the existing metadata-unavailable fallback", async () => {
   const f = fixture(); f.tmux.getSessionEnv.mockRejectedValue(Error('unavailable'));
   const cmd = await f.launch(true).command('seat@rig', 'codex --versionless', { codexCwd: f.cwd });
   expect(JSON.parse((await f.run(cmd)).stdout).home).toBe(f.selected);
@@ -78,7 +83,8 @@ it.each(['managed', 'legacy', 'capability'])("%s probe uses the explicit home an
   }
   const rows = fs.readFileSync(record, 'utf8').trim().split('\n').map(l => JSON.parse(l));
   expect(rows.length).toBeGreaterThan(0); for (const r of rows) { expect(r.home).toBe(f.selected); expect(r.cwd).toBe(f.cwd); }
-  if (kind !== 'capability') expect(JSON.parse((await f.run(f.tmux.sendShellCommand.mock.calls.at(-1)![1])).stdout).home).toBe(f.selected);
+  // Without a seat launch environment the fallback command is POSIX `env` syntax, run here in bash.
+  if (kind !== 'capability' && process.platform !== 'win32') expect(JSON.parse((await f.run(f.tmux.sendShellCommand.mock.calls.at(-1)![1])).stdout).home).toBe(f.selected);
 });
 function seed(root: string, id: string) {
   const logs = new Database(path.join(root, 'logs_2.sqlite')); logs.exec('CREATE TABLE logs (process_uuid TEXT,thread_id TEXT,ts INTEGER)');
@@ -126,7 +132,7 @@ it("seatless startup, disable and projection preserve the other home's bytes; st
     const fragment = path.join(f.cwd, 'fragment.toml'); fs.writeFileSync(fragment, '[sandbox_workspace_write]\nnetwork_access = false\n');
     const result = await a.project({ entries: [{ category: 'runtime_resource', effectiveId: 'fixture', classification: 'safe_projection', resourceType: 'codex_config_fragment', absolutePath: fragment }] } as any, { cwd: f.cwd } as any);
     expect(result.failed).toEqual([]); expect(fs.readFileSync(config, 'utf8')).toContain('network_access = false');
-    expect(fs.readFileSync(config, 'utf8')).toContain(f.cwd);
+    expect(fs.readFileSync(config, 'utf8')).toContain(JSON.stringify(f.cwd));
     expect((first.deps.pluginDiscoveryService as any).opts.codexCacheDir).toBe(path.join(f.selected, 'plugins/cache'));
     seed(f.selected, 'second');
     expect((first.deps.contextUsageStore as any).resolveCodexStateDbPaths()).toEqual([path.join(f.selected, 'state_5.sqlite')]);

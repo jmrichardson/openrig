@@ -6,6 +6,8 @@ import { PodBundleAssembler, type PodAssemblerFsOps } from "../src/domain/pod-bu
 import { validatePodBundleManifest, parsePodBundleManifest, serializePodBundleManifest, type PodBundleManifest } from "../src/domain/bundle-types.js";
 import { RigSpecCodec } from "../src/domain/rigspec-codec.js";
 import type { RigSpec } from "../src/domain/types.js";
+import { fixtureKey } from "./helpers/fixture-path.js";
+import { canCreateFileSymlinks } from "../../../test/symlink-capability.mjs";
 
 // -- Mock filesystem --
 
@@ -14,7 +16,8 @@ function mockFs(files: Record<string, string | Uint8Array>, modes: Record<string
   const writtenModes: Record<string, number> = {};
   const dirs = new Set<string>();
   const read = (p: string): string | Uint8Array => {
-    if (p in files) return files[p]!;
+    const key = fixtureKey(files, p);
+    if (key !== undefined) return files[key]!;
     if (p in written) return written[p]!;
     throw new Error(`File not found: ${p}`);
   };
@@ -28,9 +31,9 @@ function mockFs(files: Record<string, string | Uint8Array>, modes: Record<string
       const v = read(p);
       return typeof v === "string" ? Buffer.from(v, "utf8") : v;
     },
-    fileMode: (p: string) => modes[p] ?? 0o644,
+    fileMode: (p: string) => modes[fixtureKey(modes, p) ?? p] ?? 0o644,
     realpath: (p: string) => nodePath.resolve(p),
-    exists: (p: string) => p in files || p in written,
+    exists: (p: string) => fixtureKey(files, p) !== undefined || p in written,
     mkdirp: (p: string) => { dirs.add(p); },
     writeFile: (p: string, content: string | Uint8Array, mode?: number) => {
       written[p] = content;
@@ -219,7 +222,7 @@ describe("PodBundleAssembler", () => {
 
     expect(result.manifest.agents).toHaveLength(0);
     const written = (fs as unknown as { _written: Record<string, string> })._written;
-    const rewrittenRig = written["/tmp/staging/rig.yaml"]!;
+    const rewrittenRig = written[nodePath.join("/tmp/staging/rig.yaml")]!;
     expect(rewrittenRig).toContain("agent_ref: builtin:terminal");
     expect(rewrittenRig).not.toContain("local:agents/");
   });
@@ -375,7 +378,8 @@ describe("PodBundleAssembler", () => {
   });
 
   it.each([
-    "outside.md",
+    // The file-symlink case needs a privilege Windows grants only with Developer Mode or elevation.
+    ...(canCreateFileSymlinks ? ["outside.md"] : []),
     "outside-dir/context.md",
   ])("rejects a rig file resolving into a sibling-prefix directory: %s", (path) => {
     const root = nodeFs.mkdtempSync(nodePath.join(tmpdir(), "pod-containment-"));
@@ -385,8 +389,8 @@ describe("PodBundleAssembler", () => {
       nodeFs.mkdirSync(rigRoot);
       nodeFs.mkdirSync(sibling);
       nodeFs.writeFileSync(nodePath.join(sibling, "context.md"), "# Sibling context");
-      nodeFs.symlinkSync(nodePath.join(sibling, "context.md"), nodePath.join(rigRoot, "outside.md"));
-      nodeFs.symlinkSync(sibling, nodePath.join(rigRoot, "outside-dir"));
+      if (canCreateFileSymlinks) nodeFs.symlinkSync(nodePath.join(sibling, "context.md"), nodePath.join(rigRoot, "outside.md"));
+      nodeFs.symlinkSync(sibling, nodePath.join(rigRoot, "outside-dir"), process.platform === "win32" ? "junction" : "dir");
       const spec = makeRigSpec({ cultureFile: path });
       const fs = mockFs({
         [`${rigRoot}/rig.yaml`]: rigSpecYaml(spec),
@@ -408,7 +412,8 @@ describe("PodBundleAssembler", () => {
     }
   });
 
-  it.each([false, true])("keeps in-root symlinks with a symlinked rig root: %s", (aliasRoot) => {
+  // The in-root link is a file symlink, which needs Developer Mode or elevation on Windows.
+  it.skipIf(!canCreateFileSymlinks).each([false, true])("keeps in-root symlinks with a symlinked rig root: %s", (aliasRoot) => {
     const root = nodeFs.realpathSync(nodeFs.mkdtempSync(nodePath.join(tmpdir(), "pod-containment-")));
     try {
       const actualRoot = nodePath.join(root, "rig");
@@ -434,7 +439,7 @@ describe("PodBundleAssembler", () => {
       });
       expect(result.collectedFiles).toContain("inside.md");
       const written = (fs as typeof fs & { _written: Record<string, Uint8Array> })._written;
-      expect(Buffer.from(written[`${root}/staging/inside.md`]!).toString()).toBe("# Local context");
+      expect(Buffer.from(written[nodePath.join(root, "staging/inside.md")]!).toString()).toBe("# Local context");
       expect(read).toHaveBeenCalledWith(nodePath.join(actualRoot, "context.md"));
       expect(mode).toHaveBeenCalledWith(nodePath.join(actualRoot, "context.md"));
     } finally {
@@ -468,7 +473,7 @@ describe("PodBundleAssembler", () => {
 
     // Verify rewritten rig.yaml has local: ref, not path:
     const written = (fs as unknown as { _written: Record<string, string> })._written;
-    const rewrittenRig = written["/tmp/staging/rig.yaml"]!;
+    const rewrittenRig = written[nodePath.join("/tmp/staging/rig.yaml")]!;
     expect(rewrittenRig).toContain("local:agents/impl");
     expect(rewrittenRig).not.toContain("path:/external/agents/impl");
   });
@@ -587,7 +592,7 @@ describe("PodBundleAssembler", () => {
 
     // Serialize and re-validate
     const written = (fs as unknown as { _written: Record<string, string> })._written;
-    const manifestYaml = written["/tmp/staging/bundle.yaml"];
+    const manifestYaml = written[nodePath.join("/tmp/staging/bundle.yaml")];
     expect(manifestYaml).toBeDefined();
     const parsed = parsePodBundleManifest(manifestYaml!);
     const validation = validatePodBundleManifest(parsed);
@@ -617,9 +622,9 @@ describe("PodBundleAssembler", () => {
     });
 
     const written = (fs as unknown as { _written: Record<string, string | Uint8Array> })._written;
-    expect(Buffer.from(written["/tmp/staging/agents/impl/assets/logo.png"]!).equals(Buffer.from(binary))).toBe(true);
-    expect(Buffer.from(written["/tmp/staging/culture.md"]!).equals(Buffer.from(culture))).toBe(true);
-    expect(Buffer.from(written["/tmp/staging/startup/blob.bin"]!).equals(Buffer.from(startup))).toBe(true);
+    expect(Buffer.from(written[nodePath.join("/tmp/staging/agents/impl/assets/logo.png")]!).equals(Buffer.from(binary))).toBe(true);
+    expect(Buffer.from(written[nodePath.join("/tmp/staging/culture.md")]!).equals(Buffer.from(culture))).toBe(true);
+    expect(Buffer.from(written[nodePath.join("/tmp/staging/startup/blob.bin")]!).equals(Buffer.from(startup))).toBe(true);
   });
 
   it("integration: assembled bundle has correct manifest and files", () => {
@@ -650,9 +655,9 @@ describe("PodBundleAssembler", () => {
 
     // Verify written files exist
     const written = (fs as unknown as { _written: Record<string, string> })._written;
-    expect(written["/tmp/staging/rig.yaml"]).toBeDefined();
-    expect(Buffer.from(written["/tmp/staging/culture.md"]!).toString("utf8")).toBe("# Culture doc");
-    expect(written["/tmp/staging/bundle.yaml"]).toBeDefined();
+    expect(written[nodePath.join("/tmp/staging/rig.yaml")]).toBeDefined();
+    expect(Buffer.from(written[nodePath.join("/tmp/staging/culture.md")]!).toString("utf8")).toBe("# Culture doc");
+    expect(written[nodePath.join("/tmp/staging/bundle.yaml")]).toBeDefined();
   });
 
   // T12: PodBundleManifest shape validates
@@ -693,7 +698,7 @@ describe("PodBundleAssembler", () => {
     });
 
     const written = (fs as unknown as { _written: Record<string, string> })._written;
-    const vendoredAgentYaml = written["/tmp/staging/agents/impl/agent.yaml"]!;
+    const vendoredAgentYaml = written[nodePath.join("/tmp/staging/agents/impl/agent.yaml")]!;
     expect(vendoredAgentYaml).toBeDefined();
     expect(vendoredAgentYaml).toContain("local:../lib");
     expect(vendoredAgentYaml).not.toContain("local:../lib-a"); // no stray rewrites
@@ -1549,7 +1554,7 @@ describe("PodBundleSourceResolver", () => {
     expect(result.collectedFiles).toContain("SETUP.md");
     // The bundled rig.yaml should still reference the doc
     const written = (fs as unknown as { _written: Record<string, string> })._written;
-    const bundledRigYaml = written["/out/rig.yaml"];
+    const bundledRigYaml = written[nodePath.join("/out/rig.yaml")];
     expect(bundledRigYaml).toContain("SETUP.md");
   });
 

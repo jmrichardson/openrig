@@ -4,6 +4,7 @@
 // replies, the real runner core, authenticated routes, a migrated SQLite store and the cost view. No network,
 // no key, no account.
 import { describe, it, expect, afterEach } from "vitest";
+import path from "node:path";
 import { Hono } from "hono";
 import type Database from "better-sqlite3";
 import { createDb } from "../src/db/connection.js";
@@ -43,6 +44,8 @@ const generation = (id: string, total: number, extra: Record<string, unknown> = 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 const settleAll = async () => { for (let i = 0; i < 12; i += 1) await settle(); };
 const MANAGED: PiCredentialSource = { kind: "managed-env", provider: "openrouter", envVar: "OPENROUTER_API_KEY" };
+// The readers join paths with node:path; the virtual files below are keyed by their POSIX form.
+const posixKey = (f: string) => f.split(path.sep).join("/");
 
 const dbs: Database.Database[] = [];
 afterEach(() => { for (const d of dbs.splice(0)) d.close(); });
@@ -310,8 +313,8 @@ describe("K4: the request's OpenRouter charge beside its Pi estimate", () => {
   it("R4-F1: a credential-free models.json OpenRouter entry (models only) keeps the forwarded key, and charges continue", () => {
     const files: Record<string, string> = {};
     const base = { agentDir: "/agent", cwd: "/work", env: { OPENROUTER_API_KEY: "k" }, now: () => 5,
-      statId: (f: string) => (f in files ? `id:${files[f]!.length}` : "absent"), listDir: () => [],
-      readFile: (f: string) => { if (!(f in files)) throw Object.assign(new Error("missing"), { code: "ENOENT" }); return files[f]!; } };
+      statId: (f: string) => (posixKey(f) in files ? `id:${files[posixKey(f)]!.length}` : "absent"), listDir: () => [],
+      readFile: (f: string) => { if (!(posixKey(f) in files)) throw Object.assign(new Error("missing"), { code: "ENOENT" }); return files[posixKey(f)]!; } };
     for (const entry of [{}, { models: [{ id: "x/y", name: "Y" }] }, { modelOverrides: { "x/y": { contextWindow: 9 } } }]) {
       files["/agent/models.json"] = JSON.stringify({ providers: { openrouter: entry } });
       expect(piCredentialEvidence(base)).toMatchObject({ source: MANAGED, modelsOpenRouterEntry: "none" });
@@ -566,9 +569,9 @@ describe("contract pieces", () => {
     const files: Record<string, string> = {};
     const dirs: Record<string, string[]> = {};
     const base = { agentDir: "/agent", cwd: "/work", env: { OPENROUTER_API_KEY: "k" }, now: () => 5,
-      statId: (f: string) => (f in files ? `id:${files[f]!.length}` : "absent"),
-      listDir: (d: string) => dirs[d] ?? [],
-      readFile: (f: string) => { if (!(f in files)) throw Object.assign(new Error("missing"), { code: "ENOENT" }); return files[f]!; } };
+      statId: (f: string) => (posixKey(f) in files ? `id:${files[posixKey(f)]!.length}` : "absent"),
+      listDir: (d: string) => dirs[posixKey(d)] ?? [],
+      readFile: (f: string) => { if (!(posixKey(f) in files)) throw Object.assign(new Error("missing"), { code: "ENOENT" }); return files[posixKey(f)]!; } };
     const clean = piCredentialEvidence(base);
     expect(clean).toMatchObject({ at: 5, source: MANAGED, extensions: "none" });
     dirs["/agent/extensions"] = ["proxy.ts"];

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { createProgram } from "../src/index.js";
 import { Command } from "commander";
@@ -204,6 +204,16 @@ describe("rig setup", () => {
     }
     expect(dry.steps.find((s) => s.id === "brew")?.message).toBe("Skipped: Homebrew setup path is only used on macOS.");
     expect(dry.steps.find((s) => s.id === "tmux_install")?.message).toBe("Dry run: tmux_install would be attempted.");
+  });
+
+  it.each(["linux", "darwin"] as const)("on %s writes and names ~/.tmux.conf from HOME", async (platform) => {
+    const writeSpy = vi.fn();
+    const result = await runSetup(makeDeps({ platform, writeFile: writeSpy }), {});
+    expect(writeSpy).toHaveBeenCalledWith(`${process.env["HOME"] ?? "~"}/.tmux.conf`, expect.stringContaining("# OpenRig managed block"));
+    expect(result.steps.find((s) => s.id === "tmux_config")?.message).toBe("Created .tmux.conf with OpenRig managed block (history-limit 10000).");
+    if (platform === "linux") {
+      expect(result.steps.find((s) => s.id === "ghostty_install")?.message).toBe("The Ghostty offer is for macOS; existing Linux terminals remain available.");
+    }
   });
 
   it("--dry-run on darwin still reports brew and herdr_install as would be attempted", async () => {
@@ -894,7 +904,7 @@ describe("rig setup permission-policy menu copy (frozen)", () => {
 
 // Issue #194 — a Codex provider that does not use an OpenAI login.
 describe("codex_auth — provider-aware Codex readiness (#194)", () => {
-  const CODEX_HOME = "/synthetic/codex-cli-home";
+  const CODEX_HOME = resolve("synthetic", "codex-cli-home");
   const BEDROCK_CONFIG = [
     'model_provider = "bedrock-runtime-us"',
     "",
@@ -920,7 +930,7 @@ describe("codex_auth — provider-aware Codex readiness (#194)", () => {
       env: opts.env ?? { HOME: "/synthetic/home", CODEX_HOME },
       readFile: (p: string) => {
         reads.push(p);
-        return p === `${CODEX_HOME}/config.toml` ? (opts.config ?? null) : null;
+        return p === join(CODEX_HOME, "config.toml") ? (opts.config ?? null) : null;
       },
       exec: (cmd: string) => {
         commands.push(cmd);
@@ -948,8 +958,8 @@ describe("codex_auth — provider-aware Codex readiness (#194)", () => {
     expect(step?.message).toContain("not that the provider accepts it");
     expect(JSON.stringify(result)).not.toContain(TOKEN);
     expect(commands).not.toContain("codex login status");
-    expect(reads).toContain(`${CODEX_HOME}/config.toml`);
-    expect(reads).not.toContain("/synthetic/home/.codex/config.toml");
+    expect(reads).toContain(join(CODEX_HOME, "config.toml"));
+    expect(reads).not.toContain(join("/synthetic/home", ".codex", "config.toml"));
   });
 
   it("fails with the provider's variable named, never its value, when the token is missing or blank", async () => {

@@ -90,6 +90,16 @@ describe("live seat runtime switch", () => {
     ...overrides,
   });
 
+  it("refuses a psmux runtime exchange before creating a successor or switch record", async () => {
+    Object.defineProperty(fakeTmux, "terminalKind", { value: "psmux" });
+    expect(await service().setRuntime({ seatRef: SEAT, runtime: "claude-code", reason: "usage limit" }))
+      .toMatchObject({ ok: false, code: "runtime_switch_unsupported" });
+    expect(fakeTmux.createSession).not.toHaveBeenCalled();
+    expect(fakeTmux.swapRuntimeSwitchPanes).not.toHaveBeenCalled();
+    expect(openSwitch()).toBeUndefined();
+    expect(nodeRow().runtime).toBe("codex");
+  });
+
   const openSwitch = () => db.prepare("SELECT * FROM seat_runtime_switches ORDER BY created_at DESC LIMIT 1").get() as
     { id: string; phase: string; successor_generation: string; committed_at: string | null; outcome: string | null; attention: string | null } | undefined;
   const nodeRow = () => db.prepare("SELECT runtime, model, effort, effort_choice, codex_config_profile, advisor FROM nodes WHERE id = ?").get(nodeId) as Record<string, string | null>;

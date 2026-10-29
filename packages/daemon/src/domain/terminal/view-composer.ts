@@ -75,6 +75,7 @@ export interface ComposeContext {
    * default. Absent or empty → no flags, unchanged. Never put into an ssh remote command.
    */
   localTmuxServer?: readonly string[];
+  platform?: NodeJS.Platform;
 }
 
 /** POSIX single-quote a string so session names / targets are shell-inert in the composed command. */
@@ -196,7 +197,7 @@ export function composeView(
       });
       continue;
     }
-    const attachArgv = tileAttachArgv(ctx.localTmux ?? "tmux", ctx.localTmuxServer ?? [], m.tmuxSession, m.readOnly);
+    const attachArgv = tileAttachArgv(ctx.localTmux ?? "tmux", ctx.localTmuxServer ?? [], m.tmuxSession, m.readOnly, 30, ctx.platform);
     opened.push({
       seat: m.seat,
       ...(m.runtime ? { runtime: m.runtime } : {}),
@@ -204,6 +205,7 @@ export function composeView(
       paneCommand: attachArgv.map(shellQuote).join(" "),
       recoveryCommand: `${localTmux} attach ${attachFlag}-t ${shellQuote(m.tmuxSession)}`,
       attachArgv,
+      attachTarget: { tmux: ctx.localTmux ?? "tmux", server: ctx.localTmuxServer ?? [], session: m.tmuxSession, platform: ctx.platform },
       readOnly: m.readOnly,
     });
   }

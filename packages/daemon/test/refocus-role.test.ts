@@ -1,30 +1,29 @@
 import { afterEach, beforeEach, expect, it } from "vitest";
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { delimiter, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
+import { fakePythonEnv, writeFakeRig } from "./helpers/refocus-hook-fakes.js";
 const hook = resolve(import.meta.dirname, "../assets/plugins/openrig-core/hooks/scripts/refocus.cjs");
 let root: string;
 let env: NodeJS.ProcessEnv;
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "role-refocus-"));
   mkdirSync(join(root, "bin"));
-  const rig = join(root, "bin/rig");
-  writeFileSync(rig, `#!/bin/sh
-printf '%s\\n' "$*" >> "$CALLS"
-if [ "$1 $2" = "queue whoami" ]; then printf '%s' "$ANSWER"; exit "\${ROLE_STATUS:-0}"; fi
-if [ "$1 $2" = "context get" ]; then printf 'CUSTOM REF CONTENT'; exit 0; fi
-exit 1
+  const rig = writeFakeRig(join(root, "bin"), `const args = process.argv.slice(2);
+require("node:fs").appendFileSync(process.env.CALLS, \`\${args.join(" ")}\\n\`);
+const verb = \`\${args[0]} \${args[1]}\`;
+if (verb === "queue whoami") { process.stdout.write(process.env.ANSWER ?? ""); process.exitCode = Number(process.env.ROLE_STATUS || 0); }
+else if (verb === "context get") process.stdout.write("CUSTOM REF CONTENT");
+else process.exitCode = 1;
 `);
-  chmodSync(rig, 0o755);
-  const python = join(root, "bin/python");
-  writeFileSync(python, '#!/bin/sh\nprintf "TRACE OK"\nexit "${PYTHON_STATUS:-0}"\n'); chmodSync(python, 0o755);
+  const python = fakePythonEnv(root, 'require("node:fs").writeSync(1, "TRACE OK");\nprocess.exit(Number(process.env.PYTHON_STATUS || 0));');
   const role = { state: "present", recordedAt: "2026-01-01", note: "Binding record write, not verified startup or current bytes.", files: [
     { state: "present", path: "role.md", ownerRoot: "/seat/a", absolutePath: "/seat/a/role.md", resolvedPath: "/seat/a/role.md", resolvedOwnerRoot: "/seat/a" },
   ] };
-  env = { PATH: join(root, "bin") + ":" + process.env.PATH, HOME: root, OPENRIG_HOME: join(root, "rig"), CODEX_HOME: join(root, "codex"),
+  env = { PATH: join(root, "bin") + delimiter + process.env.PATH, OPENRIG_CLI_ENTRY: rig, HOME: root, OPENRIG_HOME: join(root, "rig"), CODEX_HOME: join(root, "codex"),
     CLAUDE_CONFIG_DIR: join(root, "claude"), TMPDIR: root, OPENRIG_SESSION_NAME: "a@test", OPENRIG_REFOCUS_TREES: "both",
-    OPENRIG_TOPOLOGY_ROOT: root, OPENRIG_WORKSPACE_ROOT: root, PYTHON: python, CALLS: join(root, "calls"),
+    OPENRIG_TOPOLOGY_ROOT: root, OPENRIG_WORKSPACE_ROOT: root, ...python, CALLS: join(root, "calls"),
     ANSWER: JSON.stringify({ currentWork: { workNodePath: "/work/a" }, role }) };
 });
 afterEach(() => rmSync(root, { recursive: true, force: true }));

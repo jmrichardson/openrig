@@ -4,7 +4,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type Database from "better-sqlite3";
 import { mkdtempSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { createDb } from "../src/db/connection.js";
 import { migrate } from "../src/db/migrate.js";
@@ -30,10 +30,10 @@ function agentYaml(name: string): string {
 
 const fsOps = {
   readFile: (p: string) => {
-    if (p.includes("agents/builder")) return agentYaml("builder");
+    if (p.includes(join("agents", "builder"))) return agentYaml("builder");
     throw new Error(`Not found: ${p}`);
   },
-  exists: (p: string) => p.includes("agents/builder"),
+  exists: (p: string) => p.includes(join("agents", "builder")),
 };
 
 function spec(name: string, builderPolicy?: string): Record<string, unknown> {
@@ -252,12 +252,12 @@ describe("rig policy apply --seat, then a launch from a spec that declares a pol
   // `rig launch --retry-startup-from <file>` compares the file's policy with the seat's stored ref,
   // so after --seat the file has to carry the new policy.
   async function failedFirstStart() {
-    const root = "/fixture/spark";
+    const root = resolve("/fixture/spark");
     const files: Record<string, string> = {
       [root]: "",
-      [`${root}/agent/agent.yaml`]: `name: builder\nversion: "1.0.0"\nresources:\n  skills:\n    - id: build\n      path: skills/build\nprofiles:\n  default:\n    uses:\n      skills: [build]\n`,
-      [`${root}/agent/skills/build`]: "",
-      [`${root}/agent/skills/build/SKILL.md`]: "# build",
+      [join(root, "agent", "agent.yaml")]: `name: builder\nversion: "1.0.0"\nresources:\n  skills:\n    - id: build\n      path: skills/build\nprofiles:\n  default:\n    uses:\n      skills: [build]\n`,
+      [join(root, "agent", "skills", "build")]: "",
+      [join(root, "agent", "skills", "build", "SKILL.md")]: "# build",
     };
     let projectionBlocked = true;
     const adapter = readyAdapter("omp");

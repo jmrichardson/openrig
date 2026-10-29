@@ -82,7 +82,8 @@ function seedAssets(root: string) {
 }
 
 describe("PluginVendorService preserves executable mode during vendor staging (QA NOT-CLEAR, 2nd hop)", () => {
-  it("ensureVendored stages the exec helper as 0755, non-exec neighbor as 0644", async () => {
+  // POSIX mode bits; Windows uses ACLs
+  it.skipIf(process.platform === "win32")("ensureVendored stages the exec helper as 0755, non-exec neighbor as 0644", async () => {
     const base = fs.mkdtempSync(nodePath.join(os.tmpdir(), "vendor-execmode-"));
     const assets = nodePath.join(base, "assets", "plugins");
     const rel = seedAssets(assets);
@@ -98,7 +99,8 @@ describe("PluginVendorService preserves executable mode during vendor staging (Q
     expect(perm(outSkill)).toBe(0o644);
   });
 
-  it("re-vendor repairs a previously-staged 0644 exec helper even when content is byte-identical (hash-skip path)", async () => {
+  // POSIX mode bits; Windows uses ACLs
+  it.skipIf(process.platform === "win32")("re-vendor repairs a previously-staged 0644 exec helper even when content is byte-identical (hash-skip path)", async () => {
     const base = fs.mkdtempSync(nodePath.join(os.tmpdir(), "vendor-execmode-idem-"));
     const assets = nodePath.join(base, "assets", "plugins");
     const rel = seedAssets(assets);
@@ -140,7 +142,7 @@ describe("PluginVendorService preserves executable mode during vendor staging (Q
     fs.mkdirSync(canonDir, { recursive: true });
     fs.mkdirSync(globalRoot, { recursive: true });
     fs.writeFileSync(canonSkill, "# newer shared canon\n");
-    fs.symlinkSync(canonDir, nodePath.join(globalRoot, "compaction-restore"));
+    fs.symlinkSync(canonDir, nodePath.join(globalRoot, "compaction-restore"), process.platform === "win32" ? "junction" : "dir");
 
     svc.ensureSkillGlobally("openrig-core", "compaction-restore", [globalRoot]);
 

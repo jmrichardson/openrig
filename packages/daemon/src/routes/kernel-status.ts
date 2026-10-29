@@ -17,10 +17,11 @@
 
 import { Hono } from "hono";
 import type { KernelBootTracker } from "../domain/kernel-boot-tracker.js";
+import type { TmuxAdapter } from "../adapters/tmux.js";
 
 export const kernelStatusRoutes = new Hono();
 
-kernelStatusRoutes.get("/status", (c) => {
+kernelStatusRoutes.get("/status", async (c) => {
   const tracker = c.get("kernelBootTracker" as never) as KernelBootTracker | undefined;
   if (!tracker) {
     return c.json(
@@ -33,6 +34,24 @@ kernelStatusRoutes.get("/status", (c) => {
     );
   }
   const status = tracker.getStatus();
+  const tmux = c.get("tmuxAdapter" as never) as TmuxAdapter | undefined;
+  if (tmux && ["ready", "partial_ready"].includes(status.kernelState)) {
+    const missing: string[] = [], unknown: string[] = [];
+    await Promise.all(status.agents.map(async agent => {
+      if (agent.down) { missing.push(agent.sessionName); return; }
+      try {
+        const probe = await tmux.probeSession(agent.sessionName);
+        if (probe.state === "absent") { agent.down = true; missing.push(agent.sessionName); }
+        else if (probe.state !== "present") unknown.push(agent.sessionName);
+      } catch { unknown.push(agent.sessionName); }
+    }));
+    if (missing.length || unknown.length) {
+      status.kernelState = "degraded";
+      status.detail = missing.length
+        ? `Kernel terminal sessions missing: ${missing.sort().join(", ")}. Run rig start --last to recover agents not stopped on purpose.`
+        : `Kernel terminal liveness could not be verified: ${unknown.sort().join(", ")}.`;
+    }
+  }
   return c.json({
     kernel_state: status.kernelState,
     agents: status.agents.map((a) => ({

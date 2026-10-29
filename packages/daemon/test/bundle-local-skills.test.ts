@@ -24,6 +24,7 @@ import { PiRuntimeAdapter } from "../src/adapters/pi-runtime-adapter.js";
 import { piSeatPaths } from "../src/adapters/pi-runner-protocol.js";
 import type { TmuxAdapter } from "../src/adapters/tmux.js";
 import type { NodeBinding, RuntimeAdapter } from "../src/domain/runtime-adapter.js";
+import { canCreateFileSymlinks } from "../../../test/symlink-capability.mjs";
 
 const skill = (id: string) => `---\nname: ${id}\ndescription: A portable test skill\n---\n\nRead references/example.md and run scripts/helper.sh.\n`;
 const rigYaml = `version: "0.2"
@@ -136,7 +137,8 @@ describe("bundle-local skills", () => {
         expect(fs.readFileSync(path.join(extracted.tempDir, "skills/portable", rel)))
           .toEqual(fs.readFileSync(path.join(root, "source/skills/portable", rel)));
       }
-      expect(fs.statSync(path.join(extracted.tempDir, "skills/portable/scripts/helper.sh")).mode & 0o777).toBe(0o755);
+      // POSIX mode bits; Windows uses ACLs
+      if (process.platform !== "win32") expect(fs.statSync(path.join(extracted.tempDir, "skills/portable/scripts/helper.sh")).mode & 0o777).toBe(0o755);
       expect(fs.existsSync(path.join(extracted.tempDir, "skills/undeclared"))).toBe(false);
       expect(fs.readFileSync(path.join(extracted.tempDir, "packages/legacy.txt"), "utf8")).toBe("Legacy single-file payload\n");
     } finally { resolver.cleanup(extracted.tempDir); }
@@ -190,7 +192,8 @@ describe("bundle-local skills", () => {
         for (const rel of ["SKILL.md", "references/example.md", "scripts/helper.sh"]) {
           expect(fs.readFileSync(path.join(target, rel))).toEqual(fs.readFileSync(path.join(installed, "skills/portable", rel)));
         }
-        expect(fs.statSync(path.join(target, "scripts/helper.sh")).mode & 0o777).toBe(0o755);
+        // POSIX mode bits; Windows uses ACLs
+        if (process.platform !== "win32") expect(fs.statSync(path.join(target, "scripts/helper.sh")).mode & 0o777).toBe(0o755);
         expect(fs.existsSync(path.join(target, "../unselected"))).toBe(false);
       }
     }
@@ -199,8 +202,10 @@ describe("bundle-local skills", () => {
     expect(execFileSync("git", ["-C", catalog, "status", "--porcelain"], { encoding: "utf8" })).toBe("");
   });
 
-  it.each(["different-bytes", "different-mode", "same-bytes", "no-catalog"] as const)(
-    "keeps selected bundle bytes through managed reconciliation and all adapters: %s", async (kind) => {
+  it.for(["different-bytes", "different-mode", "same-bytes", "no-catalog"] as const)(
+    "keeps selected bundle bytes through managed reconciliation and all adapters: %s", async (kind, { skip }) => {
+      // POSIX mode bits; Windows uses ACLs, so a mode-only catalog difference cannot exist there
+      skip(kind === "different-mode" && process.platform === "win32");
       seed();
       write("source/agents/worker/agent.yaml", `name: worker\nversion: "1.0"\nresources:\n  skills:\n    - id: portable\n      path: skills/portable\nprofiles:\n  default:\n    uses:\n      skills: [portable]\n`);
       fs.cpSync(path.join(root, "source/skills/portable"), path.join(root, "source/agents/worker/skills/portable"), { recursive: true });
@@ -465,7 +470,8 @@ describe("bundle-local skills", () => {
     expect(result.errors.join("; ")).toMatch(/portable.*not found/);
   });
 
-  it("still rejects a missing declared entry and a helper symlink that escapes the source root", async () => {
+  // Creates a file symlink, which Windows allows only with SeCreateSymbolicLinkPrivilege.
+  it.skipIf(!canCreateFileSymlinks)("still rejects a missing declared entry and a helper symlink that escapes the source root", async () => {
     seed();
     fs.unlinkSync(path.join(root, "source/skills/portable/SKILL.md"));
     expect((await create()).response.status).toBe(500);

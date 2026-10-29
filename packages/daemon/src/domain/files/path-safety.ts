@@ -28,6 +28,8 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { isRootedPath } from "../path-safety.js";
+import { isPathInsideRoot } from "../cwd-resolution.js";
 
 export interface AllowlistRoot {
   /** Operator-supplied display name (e.g., "workspace"). */
@@ -138,7 +140,7 @@ export function resolveAllowedPath(
       }
     }
   }
-  if (path.isAbsolute(relativePath)) {
+  if (isRootedPath(relativePath)) {
     throw new FilePathSafetyError(
       "path_invalid",
       `relative path '${relativePath}' must not be absolute (reject).`,
@@ -160,7 +162,11 @@ export function resolveAllowedPath(
   const rootWithSep = root.canonicalPath.endsWith(path.sep)
     ? root.canonicalPath
     : `${root.canonicalPath}${path.sep}`;
-  if (realpath !== root.canonicalPath && !realpath.startsWith(rootWithSep)) {
+  // Windows realpathSync keeps each caller's casing (c:\ vs C:\), so compare segments there.
+  const escapes = process.platform === "win32"
+    ? !isPathInsideRoot(realpath, root.canonicalPath)
+    : realpath !== root.canonicalPath && !realpath.startsWith(rootWithSep);
+  if (escapes) {
     throw new FilePathSafetyError(
       "path_escape",
       `resolved path '${realpath}' falls outside allowlist root '${rootName}' (${root.canonicalPath}).`,

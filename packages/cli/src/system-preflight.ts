@@ -1,11 +1,12 @@
 import net from "node:net";
-import { execSync } from "node:child_process";
-import { accessSync, mkdirSync, constants } from "node:fs";
-import { dirname } from "node:path";
+import { execSync, execFileSync } from "node:child_process";
+import { accessSync, existsSync, mkdirSync, constants } from "node:fs";
+import path, { dirname } from "node:path";
 import type { ConfigStore, RiggedConfig } from "./config-store.js";
 import type { DaemonStatus } from "./daemon-lifecycle.js";
 import { buildTmuxControlFailure, probeTmuxControlAsync } from "./tmux-health.js";
 import { classifyNodeVersion } from "./node-support.js";
+import { windowsPsmuxDirectory } from "./setup-platform.js";
 
 export interface PreflightCheck {
   name: string;
@@ -27,6 +28,12 @@ export interface PreflightResult {
  *  directory)" for the ordinary no-server case. The text still reaches the probe in the thrown error, so a real tmux
  *  failure is still classified and reported. */
 export async function quietPreflightExec(cmd: string): Promise<string> {
+  if (process.platform === "win32" && /^tmux(?: |$)/.test(cmd)) {
+    const binary = path.win32.join(windowsPsmuxDirectory(), "tmux.exe");
+    if (existsSync(binary)) {
+      return execFileSync(binary, cmd.split(" ").slice(1), { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+    }
+  }
   return execSync(cmd, { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
 }
 
@@ -36,6 +43,10 @@ interface PreflightDeps {
   getDaemonStatus: () => Promise<DaemonStatus>;
   openrigHome?: string;
   riggedHome?: string;
+  platform?: NodeJS.Platform;
+  /** Windows only: the environment `exec` runs with, and a file probe for rig setup's psmux. */
+  env?: NodeJS.ProcessEnv;
+  exists?: (path: string) => boolean;
 }
 
 interface RunOverrides {
@@ -126,6 +137,7 @@ export class SystemPreflight {
     const effectivePort = overrides?.port ?? config.daemon.port;
     const effectiveHost = overrides?.host ?? config.daemon.host;
     const openrigHome = this.deps.openrigHome ?? this.deps.riggedHome ?? "";
+    const platform = this.deps.platform ?? process.platform;
 
     // 1. Node version
     const nodeSupport = classifyNodeVersion(process.version);
@@ -144,14 +156,24 @@ export class SystemPreflight {
     }
 
     // 2. tmux availability
-    const tmuxProbe = await probeTmuxControlAsync(this.deps.exec);
+    let tmuxProbe = await probeTmuxControlAsync(this.deps.exec, platform);
+    if (tmuxProbe.code === "not_installed" && platform === "win32") {
+      // rig setup adds its portable psmux to the user PATH, which a shell opened before setup (an
+      // installing agent's) does not inherit. Use that install here and in the daemon this starts.
+      const env = this.deps.env ?? process.env;
+      const managed = windowsPsmuxDirectory(env);
+      if ((this.deps.exists ?? existsSync)(path.win32.join(managed, "tmux.exe"))) {
+        env["PATH"] = [env["PATH"], managed].filter(Boolean).join(";");
+        tmuxProbe = await probeTmuxControlAsync(this.deps.exec, platform);
+      }
+    }
     if (tmuxProbe.code === "not_installed") {
       checks.push({
         name: "tmux",
         ok: false,
-        error: "tmux was not found in PATH.",
-        reason: "OpenRig uses tmux to create and control agent sessions.",
-        fix: "Install tmux (brew install tmux on macOS, apt install tmux on Debian/Ubuntu).",
+        error: platform === "win32" ? `psmux probe failed: ${tmuxProbe.detail ?? "no execution details available"}` : "tmux was not found in PATH.",
+        reason: platform === "win32" ? "OpenRig uses native psmux to create and control Windows agent sessions, without WSL." : "OpenRig uses tmux to create and control agent sessions.",
+        fix: platform === "win32" ? "Run rig setup to install portable psmux, then reopen your terminal." : "Install tmux (brew install tmux on macOS, apt install tmux on Debian/Ubuntu).",
       });
     } else if (tmuxProbe.available) {
       checks.push({ name: "tmux", ok: true });
@@ -189,7 +211,7 @@ export class SystemPreflight {
           ok: false,
           error: `Port ${effectivePort} is already in use on ${effectiveHost}.`,
           reason: "The daemon cannot bind to a port that is already occupied.",
-          fix: `Run rig config set daemon.port ${effectivePort + 1} and retry, or find the existing process with lsof -nP -iTCP:${effectivePort} -sTCP:LISTEN.`,
+          fix: `Run rig config set daemon.port ${effectivePort + 1} and retry, or find the existing process with ${platform === "win32" ? `Get-NetTCPConnection -LocalPort ${effectivePort}` : `lsof -nP -iTCP:${effectivePort} -sTCP:LISTEN`}.`,
         });
       }
     }

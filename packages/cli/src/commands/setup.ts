@@ -10,8 +10,15 @@ import { runDoctorChecks, type DoctorDeps } from "./doctor.js";
 import { resolveDaemonPath } from "../daemon-lifecycle.js";
 import { ConfigStore } from "../config-store.js";
 import { buildTmuxCaptureFailure, buildTmuxControlFailure, probeTmuxCapture, probeTmuxControl } from "../tmux-health.js";
-import { checkClaudeAuth, checkCodexAuth } from "../provider-auth.js";
+import { checkClaudeAuth, checkCodexAuth, checkWindowsClaudeInstall } from "../provider-auth.js";
 import { describeSkillRouterFootprint } from "@openrig/daemon/router-line";
+import { classifyNodeVersion } from "../node-support.js";
+import {
+  WINDOWS_POWERSHELL_PROBE, powershellCommand, psmuxInstallCommand, psmuxUserPathCommand, refreshWindowsPath,
+  windowsExecutionPolicyCheck, windowsPsmuxDirectory, wingetInstallCommand, windowsAutostartCommand,
+} from "../setup-platform.js";
+import { windowsHerdrCandidates } from "../herdr-launch-config.js";
+import { powershellQuote } from "@openrig/daemon/windows-launch";
 
 export interface SetupStep {
   id: string;
@@ -74,6 +81,7 @@ export interface SetupDeps {
   platform?: NodeJS.Platform;
   /** Environment for CODEX_HOME and provider credential checks (default process.env). */
   env?: NodeJS.ProcessEnv;
+  refreshPath?: () => void;
   /** Source of terminal.history_limit for the managed tmux block (default: the OpenRig config). */
   configStore?: Pick<ConfigStore, "resolve">;
   /** Where the router-line answer is read and saved (default: the OpenRig config). */
@@ -142,6 +150,9 @@ export { selectCodexProviderAuth, type CodexProviderAuth } from "../provider-aut
 const DEFAULT_COMMAND_TIMEOUT_MS = 30_000;
 const INSTALL_COMMAND_TIMEOUT_MS = 5 * 60_000;
 const HERDR_INSTALL_COMMAND = "curl -fsSL https://herdr.dev/install.sh | sh";
+/** herdr's documented native Windows install (https://herdr.dev/docs/windows-beta/); setup only points to it. */
+const WINDOWS_HERDR_INSTALL_COMMAND = 'powershell -ExecutionPolicy Bypass -c "irm https://herdr.dev/install.ps1 | iex"';
+const WINDOWS_HERDR_DRY_RUN = "Check for native herdr (herdr --version) on PATH or in herdr's install folder; setup does not install herdr on Windows.";
 
 const CORE_STEP_IDS = [
   "brew",
@@ -160,6 +171,18 @@ const BREW_PLATFORM_SKIP = "Skipped: Homebrew setup path is only used on macOS."
 /** Homebrew is only used by the macOS setup path. Herdr also installs on Linux. */
 const NON_DARWIN_DRY_RUN_SKIPS: Record<string, string> = {
   brew: BREW_PLATFORM_SKIP,
+};
+const WINDOWS_DRY_RUN_PLAN: Record<string, string> = {
+  node_version: "Check Node.js 22 or 24; unsupported Node versions must be replaced with an official native Windows installer.",
+  powershell: "Check native Windows PowerShell. No WSL is required.",
+  git_install: "Check Git for Windows; install missing Git with winget Git.Git.",
+  npm: "Check native npm (including npm.cmd).",
+  powershell_execution_policy: "Check that Windows PowerShell's execution policy lets PowerShell seats run the rig.ps1 command; it is never changed.",
+  tmux_install: "Check psmux's tmux.exe alias; install the SHA256-verified portable psmux 3.4.0 release if missing (or reuse an earlier setup's), without stopping sessions; add its directory to user PATH.",
+  claude_install: "Check for native Claude Code's claude.exe on PATH; npm's claude.cmd launcher is not installed or accepted.",
+  tmux_config: "Update only the OpenRig managed block in the first existing psmux config under USERPROFILE, or create .psmux.conf.",
+  jq_install: "Check jq; install missing jq with winget jqlang.jq.",
+  gh_install: "Check GitHub CLI; install missing gh with winget GitHub.cli.",
 };
 const BASE_RUNTIME_CONFIG_DISCLOSURE: RuntimeConfigDisclosure[] = [
   // OPR.0.4.8.2 agnostic rip-out: OpenRig no longer writes ~/.claude/settings.json — the global
@@ -233,11 +256,14 @@ export function defaultDeps(): SetupDeps {
     writeFile: (p: string, c: string) => writeFileSync(p, c, "utf-8"),
     exists: (p: string) => existsSync(p),
     mkdirp: (p: string) => mkdirSync(p, { recursive: true }),
+    refreshPath: process.platform === "win32" ? refreshWindowsPath : undefined,
   };
 }
 
 function installCommand(deps: SetupDeps, cmd: string): string {
-  return deps.exec(cmd, { timeoutMs: INSTALL_COMMAND_TIMEOUT_MS });
+  const output = deps.exec(cmd, { timeoutMs: INSTALL_COMMAND_TIMEOUT_MS });
+  if ((deps.platform ?? process.platform) === "win32") deps.refreshPath?.();
+  return output;
 }
 
 /** Probe without starting a server or taking over the installing terminal. */
@@ -253,7 +279,24 @@ function findHerdrCommand(deps: SetupDeps): string | null {
   return null;
 }
 
+/** Native Windows: report an installed herdr and its version; never install or update it. */
+function detectWindowsHerdr(deps: SetupDeps): SetupStep {
+  for (const candidate of windowsHerdrCandidates(deps.env ?? process.env).filter((file) => deps.exists(file))) {
+    try {
+      // Run by path through PowerShell: cmd.exe would interpret characters in a profile path.
+      const version = /\d+\.\d+\.\d+(?:[-.][0-9A-Za-z]+)*/.exec(deps.exec(powershellCommand(`& ${powershellQuote(candidate)} --version`)))?.[0];
+      if (version) return { id: "herdr_install", status: "pass", message: `Found herdr ${version} (${candidate}). Setup does not install or update herdr on Windows. No terminal or view was opened.` };
+    } catch { /* An older or broken copy; try the next. */ }
+  }
+  return {
+    id: "herdr_install", status: "skipped",
+    message: "herdr not found. Setup does not install herdr on Windows; the OpenRig view opens in Windows Terminal with psmux.",
+    fixHint: `To use herdr for the view, install it with \`${WINDOWS_HERDR_INSTALL_COMMAND}\` (https://herdr.dev/docs/windows-beta/), then reopen your terminal.`,
+  };
+}
+
 function installHerdr(deps: SetupDeps, platform: NodeJS.Platform): SetupStep {
+  if (platform === "win32") return detectWindowsHerdr(deps);
   if (platform !== "darwin" && platform !== "linux") {
     return { id: "herdr_install", status: "skipped", message: "Automatic herdr installation is supported on macOS and Linux." };
   }
@@ -284,7 +327,7 @@ function installHerdr(deps: SetupDeps, platform: NodeJS.Platform): SetupStep {
 /** The installing agent asks once; only an explicit Yes installs the optional Mac terminal. */
 function installGhostty(deps: SetupDeps, platform: NodeJS.Platform, choice?: boolean): SetupStep {
   const id = "ghostty_install";
-  if (platform !== "darwin") return { id, status: "skipped", message: "The Ghostty offer is for macOS; existing Linux terminals remain available." };
+  if (platform !== "darwin") return { id, status: "skipped", message: `The Ghostty offer is for macOS; existing ${platform === "win32" ? "Windows" : "Linux"} terminals remain available.` };
   if (choice === false) return { id, status: "skipped", message: "Ghostty declined (--no-ghostty). Terminal.app remains available." };
   const home = (deps.env ?? process.env)["HOME"] ?? homedir();
   const locations = ["/Applications/Ghostty.app", path.join(home, "Applications/Ghostty.app")];
@@ -458,6 +501,7 @@ export async function runSetup(deps: SetupDeps, opts: { dryRun?: boolean; full?:
   const platform = deps.platform ?? process.platform;
   const runtimeConfig = [...BASE_RUNTIME_CONFIG_DISCLOSURE];
   const stepIds = opts.full ? [...CORE_STEP_IDS, ...FULL_EXTRA_STEP_IDS] : [...CORE_STEP_IDS];
+  if (platform === "win32") stepIds.unshift("node_version", "powershell", "git_install", "npm", "powershell_execution_policy");
   const steps: SetupStep[] = [];
   // No --providers: both are checked, as before. With it, only the chosen ones.
   const selected = (provider: SetupProvider) => !opts.providers || opts.providers.includes(provider);
@@ -470,13 +514,14 @@ export async function runSetup(deps: SetupDeps, opts: { dryRun?: boolean; full?:
         continue;
       }
       const platformSkip = id === "herdr_install" && opts.herdr === false ? "Skipped: herdr installation declined (--no-herdr)."
+        : id === "herdr_install" && platform === "win32" ? `Dry run: ${WINDOWS_HERDR_DRY_RUN}`
         : id === "herdr_install" && !["darwin", "linux"].includes(platform) ? "Automatic herdr installation is supported on macOS and Linux."
         : id === "ghostty_install" ? (platform !== "darwin" ? "The Ghostty offer is for macOS."
           : opts.ghostty === false ? "Ghostty declined (--no-ghostty)."
           : opts.ghostty === true ? "Dry run: Ghostty installation would be attempted."
           : "Dry run: the installing agent offers Ghostty once; only Yes installs it.")
         : platform !== "darwin" ? NON_DARWIN_DRY_RUN_SKIPS[id] : undefined;
-      steps.push({ id, status: "skipped", message: platformSkip ?? `Dry run: ${id} would be attempted.` });
+      steps.push({ id, status: "skipped", message: platformSkip ?? (platform === "win32" && WINDOWS_DRY_RUN_PLAN[id] ? `Dry run: ${WINDOWS_DRY_RUN_PLAN[id]}` : `Dry run: ${id} would be attempted.`) });
     }
     if (opts.policy !== undefined) {
       steps.push({ id: "policy_record", status: "skipped", message: `Dry run: would record permission_policy for '${opts.policy}'.` });
@@ -487,6 +532,34 @@ export async function runSetup(deps: SetupDeps, opts: { dryRun?: boolean; full?:
       steps.push({ id: "providers_record", status: "skipped", message: `Dry run: would record provider.selected=${providersValue(opts.providers)}.` });
     }
     return { profile, platform, ready: false, steps, runtimeConfig, routerLine: routerLine.preview };
+  }
+
+  if (platform === "win32") {
+    const support = classifyNodeVersion(process.version);
+    steps.push({ id: "node_version", status: support.kind === "supported" ? "pass" : support.kind === "untested" ? "warn" : "fail",
+      message: support.message ?? `Node ${process.version}`, ...(support.fix ? { fixHint: support.fix } : {}) });
+    for (const tool of [
+      { id: "powershell", command: WINDOWS_POWERSHELL_PROBE, label: "Windows PowerShell" },
+      { id: "npm", command: "npm --version", label: "npm (native Windows .cmd shim)" },
+      { id: "git_install", command: "git --version", label: "Git for Windows", winget: "Git.Git" },
+    ]) {
+      try {
+        deps.exec(tool.command);
+        steps.push({ id: tool.id, status: "pass", message: `${tool.label} available.` });
+      } catch {
+        try {
+          if (!tool.winget) throw new Error(`${tool.label} is required; install it and rerun setup.`);
+          installCommand(deps, wingetInstallCommand(tool.winget));
+          deps.exec(tool.command);
+          steps.push({ id: tool.id, status: "applied", message: `Installed ${tool.label}.` });
+        } catch (err) {
+          steps.push({ id: tool.id, status: "fail", message: String(err),
+            fixHint: tool.winget ? "Install Git for Windows from https://git-scm.com/download/win or winget install --id Git.Git --exact, then reopen your terminal." : "Use native Windows PowerShell and Node.js 22 or 24 with npm. No WSL is required." });
+        }
+      }
+    }
+    const { fix: policyFix, ...policy } = windowsExecutionPolicyCheck(deps.exec);
+    steps.push({ id: "powershell_execution_policy", ...policy, ...(policyFix ? { fixHint: policyFix } : {}) });
   }
 
   // Core steps
@@ -515,9 +588,25 @@ export async function runSetup(deps: SetupDeps, opts: { dryRun?: boolean; full?:
   }
 
   // 2. tmux
-  const tmuxProbe = probeTmuxControl((cmd) => deps.exec(cmd));
+  const tmuxProbe = probeTmuxControl((cmd) => deps.exec(cmd), platform);
   if (tmuxProbe.code === "not_installed") {
-    if (!brewOk) {
+    if (platform === "win32") {
+      // An earlier run's install is not on the PATH of a shell opened before it (an installing
+      // agent's): reuse it rather than refusing to overwrite it.
+      const managed = windowsPsmuxDirectory(deps.env);
+      const reuse = deps.exists(path.win32.join(managed, "tmux.exe"));
+      try {
+        installCommand(deps, reuse ? psmuxUserPathCommand(deps.env) : psmuxInstallCommand(deps.env));
+        const installed = probeTmuxControl((cmd) => deps.exec(cmd), platform);
+        if (!installed.available) throw new Error(installed.detail ?? "psmux tmux.exe alias unavailable after installation.");
+        steps.push({ id: "tmux_install", status: "applied", message: reuse
+          ? `Using the portable psmux already installed at ${managed}; it is on the user PATH and tmux.exe control was verified.`
+          : "Installed portable psmux; tmux.exe control verified. Existing sessions were not stopped." });
+      } catch (err) {
+        steps.push({ id: "tmux_install", status: "fail", message: `Failed to install psmux: ${String(err)}`,
+          fixHint: "Install the portable Windows release from https://github.com/psmux/psmux/releases and add the directory containing tmux.exe to PATH, then reopen your terminal." });
+      }
+    } else if (!brewOk) {
       steps.push({ id: "tmux_install", status: "skipped", message: "Skipped: Homebrew not available.", reason: "tmux install requires Homebrew." });
     } else {
       try {
@@ -538,7 +627,7 @@ export async function runSetup(deps: SetupDeps, opts: { dryRun?: boolean; full?:
     });
   } else {
     // #980: a tmux whose server exits on `capture-pane -p` fails every seat at launch.
-    const capture = probeTmuxCapture((cmd, opts) => deps.exec(cmd, opts));
+    const capture = probeTmuxCapture((cmd, opts) => deps.exec(cmd, opts), undefined, platform);
     if (capture.status === "fail") {
       const failure = buildTmuxCaptureFailure(tmuxProbe.version, capture.detail);
       steps.push({ id: "tmux_install", status: "fail", message: failure.message, reason: failure.reason, fixHint: failure.fix });
@@ -557,6 +646,12 @@ export async function runSetup(deps: SetupDeps, opts: { dryRun?: boolean; full?:
   if (!selected("claude")) steps.push(...notSelectedSteps("claude", opts.providers!));
   else {
     let claudeInstalled = false;
+    if (platform === "win32") {
+      // npm's package leaves only a claude.cmd launcher on PATH, so it is not installed here.
+      const { name, fix, ...install } = checkWindowsClaudeInstall(deps, deps.exists);
+      claudeInstalled = install.status === "pass";
+      steps.push({ id: name, ...install, ...(fix ? { fixHint: fix } : {}) });
+    } else {
     try {
       deps.exec("claude --version");
       claudeInstalled = true;
@@ -576,6 +671,7 @@ export async function runSetup(deps: SetupDeps, opts: { dryRun?: boolean; full?:
           fixHint: "Install Claude Code with `npm install -g @anthropic-ai/claude-code`.",
         });
       }
+    }
     }
 
     const { name: claudeName, fix: claudeFix, ...claudeAuth } = checkClaudeAuth(deps, claudeInstalled);
@@ -612,7 +708,13 @@ export async function runSetup(deps: SetupDeps, opts: { dryRun?: boolean; full?:
   }
 
   // 6. tmux config
-  const TMUX_CONF = `${process.env["HOME"] ?? "~"}/.tmux.conf`;
+  let TMUX_CONF = `${process.env["HOME"] ?? "~"}/.tmux.conf`;
+  if (platform === "win32") {
+    // psmux reads the first of these that exists under the user profile.
+    const home = (deps.env ?? process.env)["USERPROFILE"] ?? homedir();
+    const configPaths = [".psmux.conf", ".psmuxrc", ".tmux.conf", ".config/psmux/psmux.conf"].map((file) => path.win32.join(home, file));
+    TMUX_CONF = configPaths.find((file) => deps.exists(file) || deps.readFile(file) !== null) ?? configPaths[0]!;
+  }
   const MANAGED_MARKER = "# OpenRig managed block";
 
   try {
@@ -637,7 +739,7 @@ export async function runSetup(deps: SetupDeps, opts: { dryRun?: boolean; full?:
       steps.push({ id: "tmux_config", status: "applied", message: `Appended OpenRig managed tmux config block (history-limit ${historyLimit}).` });
     } else {
       deps.writeFile(TMUX_CONF, MANAGED_BLOCK + "\n");
-      steps.push({ id: "tmux_config", status: "applied", message: `Created .tmux.conf with OpenRig managed block (history-limit ${historyLimit}).` });
+      steps.push({ id: "tmux_config", status: "applied", message: `Created ${platform === "win32" ? TMUX_CONF : ".tmux.conf"} with OpenRig managed block (history-limit ${historyLimit}).` });
     }
   } catch (err) {
     steps.push({ id: "tmux_config", status: "warn", message: `Could not update tmux config: ${(err as Error).message}` });
@@ -668,12 +770,20 @@ export async function runSetup(deps: SetupDeps, opts: { dryRun?: boolean; full?:
 
   // Full profile extras
   if (opts.full) {
-    for (const tool of [{ id: "jq_install", cmd: "jq", brew: "jq" }, { id: "gh_install", cmd: "gh", brew: "gh" }]) {
+    for (const tool of [{ id: "jq_install", cmd: "jq", brew: "jq", winget: "jqlang.jq" }, { id: "gh_install", cmd: "gh", brew: "gh", winget: "GitHub.cli" }]) {
       try {
         deps.exec(`${tool.cmd} --version`);
         steps.push({ id: tool.id, status: "pass", message: `${tool.cmd} available.` });
       } catch {
-        if (!brewOk) {
+        if (platform === "win32") {
+          try {
+            installCommand(deps, wingetInstallCommand(tool.winget));
+            deps.exec(`${tool.cmd} --version`);
+            steps.push({ id: tool.id, status: "applied", message: `Installed ${tool.cmd} with winget.` });
+          } catch (err) {
+            steps.push({ id: tool.id, status: "warn", message: `Failed to install ${tool.cmd}: ${String(err)}`, fixHint: `Install ${tool.cmd} manually or run winget install --id ${tool.winget} --exact.` });
+          }
+        } else if (!brewOk) {
           steps.push({ id: tool.id, status: "skipped", message: `Skipped: Homebrew not available.` });
         } else {
           try {
@@ -746,6 +856,7 @@ function buildDefaultDoctorDeps(setupDeps: SetupDeps): DoctorDeps {
     },
     configStore: new ConfigStore(),
     platform: platform as NodeJS.Platform,
+    env: setupDeps.env,
     mkdirp: (p: string) => mkdirSync(p, { recursive: true }),
     checkWritable: (p: string) => accessSync(p, constants.W_OK),
     fetch: globalThis.fetch,
@@ -758,7 +869,7 @@ function buildDefaultDoctorDeps(setupDeps: SetupDeps): DoctorDeps {
  * next-steps; `rig status`/`rig doctor` only HINT back to it; the durable
  * reference is docs/reference/getting-started.md. Returns the lines to print.
  */
-export function goldenPathNextSteps(): string[] {
+export function goldenPathNextSteps(platform: NodeJS.Platform = process.platform): string[] {
   return [
     "Finish installing (full reference: rig context get reference/getting-started.md). Once setup has applied, steps 2 to 5 are",
     "  part of the install, not extras: do them without stopping to ask whether to go on",
@@ -770,16 +881,27 @@ export function goldenPathNextSteps(): string[] {
     "     Started is not ready. The view may open while agents finish starting; report their actual state",
     "     For an existing kernel or blocked startup: rig context get reference/getting-started.md#incomplete-setup-and-restart",
     "  4. Show the person OpenRig: open the OpenRig TUI and operator for them now. Say so first; it's the next step, not a question",
-    "     It opens a NEW terminal tab/window, or a space in their current Herdr, and preserves this terminal",
-    "     rig terminal open saved:kernel --window --json (TUI and operator, advisor on its own tab; herdr, otherwise plain tmux)",
+    platform === "win32"
+      ? "     It opens a NEW Windows Terminal window, or a space in their current Herdr, and preserves this terminal"
+      : "     It opens a NEW terminal tab/window, or a space in their current Herdr, and preserves this terminal",
+    platform === "win32"
+      ? "     rig terminal open saved:kernel --window --json (TUI and operator; herdr when installed, otherwise psmux panes)"
+      : "     rig terminal open saved:kernel --window --json (TUI and operator, advisor on its own tab; herdr, otherwise plain tmux)",
     "     rig context get reference/getting-started.md#open-the-kernel-conversations",
     "     If they said not now: give the command to open it later. Over headless SSH: ask the person to open a new terminal/tab and give the exact connection/attach command",
-    "     Herdr needs a terminal the person can see; switching the shared TUI to :terminals does not open one",
+    platform === "win32"
+      ? "     The native terminal needs a desktop the person can see; switching the shared TUI to :terminals does not open one"
+      : "     Herdr needs a terminal the person can see; switching the shared TUI to :terminals does not open one",
     "     No, SSH and headless use are fine background outcomes; do not report an unseen window as opened",
     "     On a desktop, no copying or typing for the person; check the result notes, not just CLI success",
-    "     On a Mac, offer Ghostty once: on Yes run rig setup --ghostty; preserve earlier choices such as --no-herdr and --providers",
-    "     On No use --no-ghostty; Terminal.app remains available",
-    "     Setup installs herdr by default; use --no-herdr if the person declines. Plain tmux remains available",
+    ...(platform === "win32" ? [
+      "     Windows uses PowerShell and psmux's tmux.exe; WSL and cmux are not required. Setup reports herdr but never installs it",
+      "     Reopen the terminal after installing tools so it inherits the updated user PATH",
+    ] : [
+      "     On a Mac, offer Ghostty once: on Yes run rig setup --ghostty; preserve earlier choices such as --no-herdr and --providers",
+      "     On No use --no-ghostty; Terminal.app remains available",
+      "     Setup installs herdr by default; use --no-herdr if the person declines. Plain tmux remains available",
+    ]),
     "     Only if the window cannot open: rig tui --shared is the dashboard-only fallback, not the operator's conversation",
     "     If opening fails, inspect any new surface before retrying; report the error and finish the local action",
     "     Do not replace a failed desktop action with commands for the person to copy or type",
@@ -870,6 +992,7 @@ export function setupCommand(depsOverride?: SetupDeps): Command {
     .option("--dry-run", "Show the plan without making changes")
     .option("--json", "Machine-readable JSON output")
     .option("--full", "Install broader operator workstation tools")
+    .option("--autostart", "Windows: start OpenRig and restore previously running rigs at user sign-in")
     .option("--no-herdr", "Skip the default herdr installation; the OpenRig view can use plain tmux")
     .option("--ghostty", "Install Ghostty on macOS after the person accepts the offer")
     .option("--no-ghostty", "Decline Ghostty; Terminal.app remains available on macOS")
@@ -883,7 +1006,7 @@ tmux scrollback:
   To keep more:  rig config set terminal.history_limit 50000   then rerun  rig setup
   A running tmux server keeps its old limit until it restarts or you run
   tmux source-file ~/.tmux.conf; before tmux 3.7 that changes new panes only.`)
-    .action(async (opts: { dryRun?: boolean; json?: boolean; full?: boolean; herdr?: boolean; ghostty?: boolean; providers?: string; policy?: string; spec?: string; routerLine?: string }) => {
+    .action(async (opts: { dryRun?: boolean; json?: boolean; full?: boolean; autostart?: boolean; herdr?: boolean; ghostty?: boolean; providers?: string; policy?: string; spec?: string; routerLine?: string }) => {
       const providers = opts.providers === undefined ? undefined : parseSetupProviders(opts.providers);
       if (providers && "error" in providers) {
         console.error(providers.error);
@@ -899,9 +1022,25 @@ tmux scrollback:
       const deps = depsOverride ?? defaultDeps();
       const doctorDeps = opts.dryRun ? undefined : buildDefaultDoctorDeps(deps);
       const result = await runSetup(deps, { dryRun: opts.dryRun, full: opts.full, policy: opts.policy, specPath: opts.spec, herdr: opts.herdr, ghostty: opts.ghostty, providers, doctorDeps, routerLine });
+      if (opts.autostart) {
+        if (result.platform !== "win32") {
+          result.steps.push({ id: "autostart", status: "fail", message: "--autostart currently supports native Windows only." });
+          result.ready = false;
+        } else if (opts.dryRun) {
+          result.steps.push({ id: "autostart", status: "skipped", message: "Dry run: would register a per-user Windows logon task using absolute Node and OpenRig paths." });
+        } else if (result.ready) {
+          try {
+            deps.exec(windowsAutostartCommand());
+            result.steps.push({ id: "autostart", status: "applied", message: "OpenRig starts at Windows sign-in; deliberately stopped rigs stay stopped." });
+          } catch (error) {
+            result.steps.push({ id: "autostart", status: "fail", message: `Could not register Windows startup: ${String(error)}` });
+            result.ready = false;
+          }
+        } else result.steps.push({ id: "autostart", status: "skipped", message: "Finish setup before enabling automatic startup." });
+      }
 
       if (opts.json) {
-        console.log(JSON.stringify({ ...result, nextSteps: goldenPathNextSteps() }, null, 2));
+        console.log(JSON.stringify({ ...result, nextSteps: goldenPathNextSteps(deps.platform ?? process.platform) }, null, 2));
         if (!opts.dryRun && !result.ready) process.exitCode = 1;
         return;
       }
@@ -943,7 +1082,7 @@ tmux scrollback:
       // Keep the conversation route available even after a dry run or incomplete setup,
       // before the optional menu so a short output read still includes the handoff.
       console.log("");
-      for (const line of goldenPathNextSteps()) console.log(line);
+      for (const line of goldenPathNextSteps(deps.platform ?? process.platform)) console.log(line);
 
       // The router-line question the person answers; then the permission menu, which records no choice.
       for (const line of routerLineLines(result.routerLine)) console.log(line);

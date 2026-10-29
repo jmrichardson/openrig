@@ -7,6 +7,12 @@ import { decodeAllowlist, resolveAllowedDirectory, resolveAllowedPath, readAllow
 
 export interface LocalRequest { op: "roots" | "list" | "read"; root?: string; path?: string }
 
+/** Windows paths compare without case, and realpathSync keeps whatever spelling the configuration used. */
+function within(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
 export function localRead(request: LocalRequest) {
   const config = new ConfigStore().resolve();
   const roots = decodeAllowlist(config.files.allowlist);
@@ -22,7 +28,8 @@ export function localRead(request: LocalRequest) {
         let canonical = source!;
         try { canonical = fs.realpathSync(source!); } catch { /* the selected read reports the actual error */ }
         const root = [...roots].sort((a, b) => b.canonicalPath.length - a.canonicalPath.length)
-          .find((r) => canonical === r.canonicalPath || canonical.startsWith(r.canonicalPath + path.sep));
+          .find((r) => process.platform === "win32" ? within(r.canonicalPath, canonical)
+            : canonical === r.canonicalPath || canonical.startsWith(r.canonicalPath + path.sep));
         return { label, kind, source, root: root?.name ?? "", path: root ? path.relative(root.canonicalPath, canonical) : "",
           ...(!source ? { error: "Source is not configured" } : !root ? { error: "Source is outside files.allowlist; no local read permitted" } : {}) };
       }),

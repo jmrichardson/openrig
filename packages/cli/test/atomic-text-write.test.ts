@@ -10,6 +10,7 @@ import { exportCommand } from "../src/commands/export.js";
 import { STATE_FILE } from "../src/daemon-lifecycle.js";
 import { allowFetchTarget, resetFetchAllowlist } from "./fetch-guard.js";
 import { assertFixtureScopedHome } from "./live-daemon-guard.js";
+import { canCreateFileSymlinks } from "../../../test/symlink-capability.mjs";
 
 const failure = vi.hoisted(() => ({ active: false }));
 vi.mock("node:fs", async (original) => {
@@ -35,7 +36,7 @@ it("preserves an existing export and removes staging after a partial failed writ
   expect(fs.readFileSync(target, "utf8")).toBe("name: original\n");
   expect(fs.readdirSync(dir)).toEqual(["rig.yaml"]);
 });
-it("retains export symlinks and target permissions on successful replacement", () => {
+it.skipIf(!canCreateFileSymlinks)("retains export symlinks and target permissions on successful replacement", () => {
   dir = fs.mkdtempSync(join(tmpdir(), "export-atomic-"));
   const target = join(dir, "saved.yaml"), link = join(dir, "rig.yaml");
   fs.writeFileSync(target, "name: original\n"); fs.chmodSync(target, 0o640); fs.symlinkSync(target, link);

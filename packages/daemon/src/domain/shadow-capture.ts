@@ -86,8 +86,10 @@ export class ShadowCapture {
 }
 
 /** Source-only opt-in. Missing/invalid configuration never creates a sink or collects bytes. */
-export function configureShadowCapture(raw: string | undefined): {capture?: ShadowCapture; error?: string} {
+export function configureShadowCapture(raw: string | undefined, platform: NodeJS.Platform = process.platform): {capture?: ShadowCapture; error?: string} {
   if (!raw) return {};
+  // The sink's privacy check reads POSIX owner and mode bits, which Windows does not report.
+  if (platform === "win32") return {error: "shadow capture is unavailable on Windows: it cannot verify an owner-only sink parent there"};
   try {
     const c = JSON.parse(raw) as ShadowConfig;
     if (typeof c.destination !== "string" || !path.isAbsolute(c.destination) || path.normalize(c.destination) !== c.destination) throw Error("explicit absolute private destination required");

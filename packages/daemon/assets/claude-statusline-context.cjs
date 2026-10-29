@@ -120,15 +120,17 @@ function writeJsonAtomic(outputPath, value) {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
-  try {
-    fs.writeFileSync(tmpPath, JSON.stringify(value), "utf-8");
-    fs.renameSync(tmpPath, outputPath);
-  } catch (error) {
+  fs.writeFileSync(tmpPath, JSON.stringify(value), "utf-8");
+  // Windows refuses to replace a file another process holds open, as the daemon does while it reads
+  // this one; retry briefly so that reader can close it. Other platforms replace at once.
+  for (let attempt = 1; ; attempt++) {
     try {
-      fs.unlinkSync(tmpPath);
-    } catch {
-      // Keep the original write or rename error.
+      fs.renameSync(tmpPath, outputPath);
+      return;
+    } catch (error) {
+      const code = error && error.code;
+      if (process.platform !== "win32" || attempt === 100 || !(code === "EPERM" || code === "EACCES" || code === "EBUSY")) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
     }
-    throw error;
   }
 }

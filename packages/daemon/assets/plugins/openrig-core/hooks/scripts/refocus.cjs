@@ -8,10 +8,11 @@
 // boundary where the harness can actually deliver additionalContext.
 
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { spawnSync } = require("node:child_process");
-const { recordRefocusResult } = require("./refocus-health.cjs");
+const { recordRefocusResult, spawnRig } = require("./refocus-health.cjs");
 
 // Keep the operator's command lookup order; env-node CLI scripts can also use this hook's Node.
 const childEnv = { ...process.env, PATH: [process.env.PATH, path.dirname(process.execPath)].filter(Boolean).join(path.delimiter) };
@@ -72,9 +73,7 @@ const readStdin = () => new Promise((resolve) => {
 function readConfiguredContent(home) {
   const contentRef = process.env.OPENRIG_REFOCUS_CONTENT_REF || "";
   if (contentRef) {
-    const timeout = lookupTimeout();
-    if (timeout <= MIN_LOOKUP_MS) return { content: null, contentRef, failure: "no time left in the refocus budget" };
-    const result = spawnSync("rig", ["context", "get", contentRef], {
+    const result = spawnRig(["context", "get", contentRef], {
       encoding: "utf8",
       env: childEnv,
       timeout,
@@ -143,8 +142,8 @@ function workPacketEnabled() {
 function readQueueWhoami(timeout = lookupTimeout()) {
   if (timeout <= MIN_LOOKUP_MS) return { unknown: "no time left in the refocus budget" };
   const args = ["queue", "whoami", "--json", ...(workPacketEnabled() ? ["--work-candidates"] : [])];
-  let result = spawnSync("rig", args, {
-    encoding: "utf8", env: childEnv, timeout, maxBuffer: 16 * 1024 * 1024,
+  let result = spawnRig(args, {
+    encoding: "utf8", env: process.env, timeout, maxBuffer: 16 * 1024 * 1024,
   });
   // A rig CLI older than this hook rejects the flag. Ask again without it, inside what is left of
   // the budget, so the role and the strict answer still arrive (just without candidates).
@@ -152,8 +151,8 @@ function readQueueWhoami(timeout = lookupTimeout()) {
     && /unknown option/i.test(`${result.stderr || ""}${result.stdout || ""}`)) {
     const remaining = remainingLookupBudget();
     if (remaining > 250) {
-      result = spawnSync("rig", ["queue", "whoami", "--json"], {
-        encoding: "utf8", env: childEnv, timeout: remaining, maxBuffer: 16 * 1024 * 1024,
+      result = spawnRig(["queue", "whoami", "--json"], {
+        encoding: "utf8", env: process.env, timeout: remaining, maxBuffer: 16 * 1024 * 1024,
       });
     }
   }
@@ -211,7 +210,9 @@ function renderRole(result) {
 // start, after reserving python's cap and, when a content ref is configured, the content lookup
 // that runs after python; with 250 ms or less left it is skipped.
 function traceEnv(trees) {
-  const env = { ...childEnv };
+  const env = { ...process.env };
+  // The trace script runs the seat's OPENRIG_CLI_ENTRY with this Node on Windows (see spawnRig).
+  if (process.platform === "win32") env.OPENRIG_CLI_NODE = process.execPath;
   const missing = [
     ["OPENRIG_TOPOLOGY_ROOT", "topology", "topology"],
     ["OPENRIG_WORKSPACE_ROOT", "workspace", "work"],
@@ -219,7 +220,7 @@ function traceEnv(trees) {
   if (missing.length === 0) return env;
   const timeout = remainingLookupBudget();
   if (timeout <= 250) return env;
-  const result = spawnSync("rig", ["config", "--json"], {
+  const result = spawnRig(["config", "--json"], {
     encoding: "utf8",
     env: childEnv,
     timeout,
@@ -233,6 +234,21 @@ function traceEnv(trees) {
     if (typeof value === "string" && value) env[name] = value;
   }
   return env;
+}
+
+// python.org's Windows installers provide py.exe and python.exe, not python3. The python3 (and
+// python) under %LOCALAPPDATA%\Microsoft\WindowsApps may be the Store's App Execution Alias stub,
+// which only exits 9009, so that folder is the last resort: `python` resolved by the spawn itself.
+function windowsPython() {
+  const aliases = path.join(process.env.LOCALAPPDATA || "", "Microsoft", "WindowsApps").toLowerCase();
+  for (const [name, prefix] of [["py.exe", ["-3"]], ["python.exe", []]]) {
+    for (const dir of (process.env.PATH || "").split(path.delimiter)) {
+      if (!dir || path.resolve(dir).toLowerCase() === aliases) continue;
+      const candidate = path.join(dir, name);
+      try { if (fs.statSync(candidate).isFile()) return [candidate, prefix]; } catch {}
+    }
+  }
+  return ["python", []];
 }
 
 function renderTrace() {
@@ -280,19 +296,16 @@ function renderTrace() {
   else if (work.unknown) args.push("--work-unknown", work.unknown);
   // With an explicit start, the evidence supplies only held and next work.
   if (explicitStart && evidence) args.push("--work-candidates", "-");
-  const env = traceEnv(trees);
-  const timeout = lookupTimeout(contentReserveMs());
-  const result = timeout <= MIN_LOOKUP_MS
-    ? { error: new Error("no time left in the refocus budget"), status: null, stdout: "", stderr: "" }
-    : spawnSync(process.env.PYTHON || "python3", args, {
-      encoding: "utf8",
-      ...(evidence ? { input: evidence } : {}),
-      env,
-      timeout,
-      maxBuffer: 16 * 1024 * 1024,
-    });
-  const reason = String(result.error?.message || result.stderr?.trim() || `trace exited ${result.status ?? "without a status"}`)
-    .replace(/\s+/g, " ").trim();
+  const [python, pythonArgs] = process.env.PYTHON ? [process.env.PYTHON, []]
+    : process.platform === "win32" ? windowsPython() : ["python3", []];
+  const result = spawnSync(python, [...pythonArgs, ...args], {
+    encoding: "utf8",
+    ...(evidence ? { input: evidence } : {}),
+    env: traceEnv(trees),
+    timeout: 2_000,
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  const reason = result.error?.message || result.stderr?.trim() || `trace exited ${result.status ?? "without a status"}`;
   const failed = Boolean(result.error) || result.status !== 0 || !result.stdout?.trim();
   const trace = [
     ...(failed ? [`TRACE GAP — ${reason}`] : []),
@@ -357,7 +370,9 @@ function runsForThisSeatsProject(env = process.env) {
   if (event === "SessionStart") process.exit(0);
 
   const seat = process.env.OPENRIG_SESSION_NAME || "unknown-seat";
-  const home = process.env.OPENRIG_HOME || path.join(process.env.HOME || "/tmp", ".openrig");
+  // A Windows shell seldom defines HOME, and Windows has no /tmp: use the profile folder there.
+  const home = process.env.OPENRIG_HOME
+    || path.join(process.env.HOME || (process.platform === "win32" ? os.homedir() : "/tmp"), ".openrig");
   const transcriptPath = input.transcript_path || input.transcriptPath || "";
   let size = 0;
   try { size = fs.statSync(transcriptPath).size; } catch {}

@@ -64,6 +64,58 @@ describe("setup Herdr default", () => {
   });
 });
 
+describe("setup Herdr on native Windows", () => {
+  const profile = "C:\\Users\\A [test] O'Brien";
+  const current = `${profile}\\.herdr\\packages\\standalone\\current\\herdr.exe`;
+  function windows(installed: string[] = [], version = "herdr 0.9.3\r\n") {
+    const decode = (cmd: string) => cmd.includes("-EncodedCommand ") ? Buffer.from(cmd.split("-EncodedCommand ")[1]!, "base64").toString("utf16le") : "";
+    const exec = vi.fn((cmd: string, _opts?: { timeoutMs?: number }) => {
+      if (cmd === "tmux -V") return "tmux 3.4.0\npsmux 3.4.0";
+      if (decode(cmd).includes("--version") && installed.some(file => decode(cmd).includes(`& '${file.replaceAll("'", "''")}' --version`))) return version;
+      return "available";
+    });
+    const deps: SetupDeps = {
+      platform: "win32", env: { USERPROFILE: profile, LOCALAPPDATA: `${profile}\\AppData\\Local`, Path: "C:\\Windows;C:\\tools" },
+      exec, exists: file => installed.includes(file), readFile: () => null, writeFile: vi.fn(), mkdirp: vi.fn(), refreshPath: vi.fn(),
+    };
+    return { deps, exec, decode };
+  }
+  const step = (result: Awaited<ReturnType<typeof runSetup>>) => result.steps.find(s => s.id === "herdr_install");
+
+  it.each([["on PATH", "C:\\tools\\herdr.exe"], ["in herdr's current release", current]])("reports herdr %s with its version, without installing it", async (_where, file) => {
+    const f = windows([file]);
+    const result = await runSetup(f.deps, { providers: ["codex"] });
+    expect(step(result)).toEqual({ id: "herdr_install", status: "pass", message: `Found herdr 0.9.3 (${file}). Setup does not install or update herdr on Windows. No terminal or view was opened.` });
+    const herdrCommands = f.exec.mock.calls.map(([cmd]) => cmd).filter(cmd => f.decode(cmd).includes("herdr"));
+    // Run by path through an encoded PowerShell command: cmd.exe never sees the profile path.
+    expect(herdrCommands.every(cmd => cmd.startsWith("powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand "))).toBe(true);
+    expect(f.exec.mock.calls.some(([cmd]) => /herdr\.dev\/install|^curl|^herdr\b|irm /.test(cmd))).toBe(false);
+  });
+  it("prints herdr's official Windows install command when it is absent, and stays ready", async () => {
+    const f = windows();
+    const result = await runSetup(f.deps, { providers: ["codex"] });
+    expect(step(result)).toEqual({
+      id: "herdr_install", status: "skipped",
+      message: "herdr not found. Setup does not install herdr on Windows; the OpenRig view opens in Windows Terminal with psmux.",
+      fixHint: "To use herdr for the view, install it with `powershell -ExecutionPolicy Bypass -c \"irm https://herdr.dev/install.ps1 | iex\"` (https://herdr.dev/docs/windows-beta/), then reopen your terminal.",
+    });
+    expect(result.ready).toBe(true);
+    expect(f.exec.mock.calls.some(([cmd]) => f.decode(cmd).includes("herdr"))).toBe(false);
+  });
+  it("skips a copy whose --version prints no version and keeps looking", async () => {
+    const f = windows(["C:\\tools\\herdr.exe", current]);
+    f.deps.exec = vi.fn((cmd: string) => f.decode(cmd).includes("C:\\tools\\herdr.exe") ? "not herdr" : f.exec(cmd));
+    expect(step(await runSetup(f.deps, { providers: ["codex"] }))).toMatchObject({ status: "pass", message: expect.stringContaining(current) });
+  });
+  it("honors --no-herdr without probing for herdr", async () => {
+    for (const dryRun of [false, true]) {
+      const f = windows([current]);
+      expect(step(await runSetup(f.deps, { herdr: false, dryRun, providers: ["codex"] }))).toMatchObject({ status: "skipped", message: expect.stringContaining("declined") });
+      expect(f.exec.mock.calls.some(([cmd]) => f.decode(cmd).includes("herdr"))).toBe(false);
+    }
+  });
+});
+
 
 describe("setup Ghostty offer", () => {
   it("offers once without installing, and installs only after the accepted choice", async () => {

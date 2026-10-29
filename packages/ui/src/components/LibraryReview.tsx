@@ -47,6 +47,7 @@ import { AgentSpecDisplay } from "./AgentSpecDisplay.js";
 import { RigSpecDisplay } from "./RigSpecDisplay.js";
 import { buildSetupPrompt } from "../lib/build-setup-prompt.js";
 import { copyText } from "../lib/copy-text.js";
+import { isPathPrefix, isWindowsPath } from "../lib/native-path.js";
 
 interface LibraryReviewProps {
   entryId: string;
@@ -106,19 +107,26 @@ function LibraryRigReviewContent({ review }: { review: LibraryRigReview }) {
   const resolveMemberAgent = (agentRef: string) => {
     if (!agentRef.startsWith("local:")) return null;
     const refPath = agentRef.slice("local:".length);
+    // A Windows daemon reports drive or UNC paths; resolve those with "/" separators too.
+    const windows = isWindowsPath(review.sourcePath);
+    const slashed = (p: string) => (windows ? p.replace(/\\/g, "/") : p);
 
     // Resolve the ref path against the rig's source directory
-    const rigDir = review.sourcePath.replace(/\/[^/]+$/, "");
-    const segments = `${rigDir}/${refPath}`.split("/");
+    const rigDir = slashed(review.sourcePath).replace(/\/[^/]+$/, "");
+    const segments = `${rigDir}/${slashed(refPath)}`.split("/");
     const resolved: string[] = [];
     for (const seg of segments) {
       if (seg === "..") { resolved.pop(); }
       else if (seg !== "." && seg !== "") { resolved.push(seg); }
     }
-    const resolvedDir = "/" + resolved.join("/");
+    const resolvedDir = windows
+      ? (review.sourcePath.startsWith("\\\\") ? "\\\\" : "") + resolved.join("/")
+      : "/" + resolved.join("/");
 
     // Match against library entries by sourcePath prefix (agent dir contains agent.yaml)
-    return agentEntries.find((entry) => entry.sourcePath.startsWith(resolvedDir + "/")) ?? null;
+    return agentEntries.find((entry) => windows
+      ? isPathPrefix(resolvedDir, entry.sourcePath)
+      : entry.sourcePath.startsWith(resolvedDir + "/")) ?? null;
   };
 
   return (

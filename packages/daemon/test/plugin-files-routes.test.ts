@@ -189,7 +189,7 @@ describe("GET /api/plugins/:id/files/list (slice 28)", () => {
     const escapeTarget = join(env.root, "outside-target");
     mkdirSync(escapeTarget, { recursive: true });
     writeFileSync(join(escapeTarget, "secret.txt"), "out-of-bounds");
-    symlinkSync(escapeTarget, join(pluginDir, "escape-link"));
+    symlinkSync(escapeTarget, join(pluginDir, "escape-link"), process.platform === "win32" ? "junction" : "dir");
     const res = await createApp(env.service).request("/api/plugins/openrig-core/files/list?path=escape-link");
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: string };

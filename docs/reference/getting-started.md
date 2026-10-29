@@ -71,7 +71,7 @@ together in that home; it needs its own working sign-in and doesn't relocate `~/
 >
 > [Everything OpenRig writes, and why →](https://github.com/mvschwarz/openrig#what-openrig-changes-on-your-machine)
 
-You need Node.js 22 or 24 and tmux, on macOS or Linux, and one working Claude
+You need Node.js 22 or 24, tmux on macOS/Linux or psmux on Windows, and one working Claude
 Code or Codex account: one is enough, since the kernel operator adapts the
 shipped `starter` team to whichever you have. On Linux, the distribution's own
 Node.js can be older (Ubuntu 24.04's is 18); install a supported version with
@@ -88,12 +88,10 @@ exists), then nvm's install command, for nvm v0.40.8
 newest), open a new terminal, and run `nvm install 22`. nvm itself needs no
 administrator password, and `npm install -g` then installs into your nvm folder.
 If nvm's installer says you need Apple's command line tools, run
-`xcode-select --install`, then its install command again. Native Windows isn't
-supported. On Windows, use WSL2: it's the Windows route
-OpenRig supports, though OpenRig's automated tests don't run on it yet. One
-user's [working setup](#wsl2-a-reported-working-setup) is below. Node 20 and
-odd-numbered releases (23, 25 and so on) are not supported; Node 26 and later
-even-numbered releases are untested.
+`xcode-select --install`, then its install command again. This fork also runs natively on Windows with Windows PowerShell and psmux 3.4.0 or newer.
+Use the [native Windows guide](windows-support-experiment.md) to build this branch; the upstream npm package
+has a different Windows support status. WSL2 remains an optional [reported working setup](#wsl2-a-reported-working-setup).
+Node 20 and odd-numbered releases are unsupported; Node 26 and later even-numbered releases are untested.
 
 On Linux, if Codex cannot run commands and reports `bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted`,
 ask the machine owner to follow [OpenAI's sandbox prerequisites](https://developers.openai.com/codex/concepts/sandboxing#prerequisites),

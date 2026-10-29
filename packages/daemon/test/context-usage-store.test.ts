@@ -201,7 +201,7 @@ describe("ContextUsageStore", () => {
   // $OPENRIG_HOME/context available for the addressable context library.
   it("getSidecarPath returns path under state/context-usage/", () => {
     const path = store.getSidecarPath("dev-impl@test-rig");
-    expect(path).toBe("/tmp/openrig-test/state/context-usage/dev-impl@test-rig.json");
+    expect(path).toBe(join("/tmp/openrig-test", "state", "context-usage", "dev-impl@test-rig.json"));
   });
 
   // T9: Freshness threshold is centralized

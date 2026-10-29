@@ -1309,7 +1309,8 @@ function buildAuditCommand(): Command {
 
 function extractFrontmatterRaw(content: string): string | null {
   if (!content.startsWith("---")) return null;
-  const match = /^---\s*\n([\s\S]*?)\n---/.exec(content);
+  // Windows editors and checkouts may write CRLF; other platforms keep the LF-only match.
+  const match = (process.platform === "win32" ? /^---\s*\n([\s\S]*?)\r?\n---/ : /^---\s*\n([\s\S]*?)\n---/).exec(content);
   return match ? match[1]! : null;
 }
 

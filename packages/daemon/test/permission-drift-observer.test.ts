@@ -1,10 +1,13 @@
+import { delimiter, join } from "node:path";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { describe, expect, it, vi } from "vitest";
 import { createFullTestDb } from "./helpers/test-app.js";
 import { RigRepository } from "../src/domain/rig-repository.js";
 import { SessionRegistry } from "../src/domain/session-registry.js";
 import { AppliedLaunchObservationStore } from "../src/domain/applied-launch-observation-store.js";
 import { observeClaudePermission, observeCodexSandbox } from "../src/domain/permission-drift.js";
-import { ClaudePermissionModeCache, PermissionDriftObserver } from "../src/domain/permission-drift-observer.js";
+import { ClaudePermissionModeCache, PermissionDriftObserver, commandAvailable } from "../src/domain/permission-drift-observer.js";
 
 describe("PermissionDriftObserver", () => {
   it("reads current-generation arguments without claiming native enforcement", () => {
@@ -38,10 +41,10 @@ describe("PermissionDriftObserver", () => {
           comparison: "aligned",
           expected: "acceptEdits",
           observed: { defaultMode: "manual" },
-          sourcePath: "/work/project/.claude/settings.local.json",
+          sourcePath: join("/work/project", ".claude", "settings.local.json"),
         },
       });
-      expect(readFile).toHaveBeenCalledWith("/work/project/.claude/settings.local.json");
+      expect(readFile).toHaveBeenCalledWith(join("/work/project", ".claude", "settings.local.json"));
     } finally {
       db.close();
     }
@@ -121,6 +124,39 @@ describe("PermissionDriftObserver", () => {
       });
     } finally {
       db.close();
+    }
+  });
+});
+
+describe("commandAvailable", () => {
+  function pathWith(files: Record<string, string>) {
+    const dir = mkdtempSync(join(tmpdir(), "drift-path-"));
+    for (const [name, kind] of Object.entries(files)) {
+      if (kind === "dir") mkdirSync(join(dir, name));
+      else writeFileSync(join(dir, name), "", { mode: 0o755 });
+    }
+    return { dir, env: { PATH: ["", dir].join(delimiter), PATHEXT: ".COM;.EXE;.BAT;.CMD" }, done: () => rmSync(dir, { recursive: true, force: true }) };
+  }
+
+  it("on Windows finds a runtime by its PATHEXT name: native claude.exe and omp.exe, npm's codex.cmd", () => {
+    const p = pathWith({ "claude.exe": "file", "omp.exe": "file", "codex.cmd": "file", "pi.exe": "dir" });
+    try {
+      for (const command of ["claude", "omp", "codex"]) expect(commandAvailable(command, "win32", p.env), command).toBe(true);
+      expect(commandAvailable("pi", "win32", p.env)).toBe(false);
+      expect(commandAvailable("claude", "win32", { PATH: p.dir })).toBe(true);
+    } finally {
+      p.done();
+    }
+  });
+
+  it("elsewhere checks the bare name only", () => {
+    const p = pathWith({ "claude.exe": "file", codex: "file" });
+    try {
+      expect(commandAvailable("claude", "linux", p.env)).toBe(false);
+      expect(commandAvailable("codex", "linux", p.env)).toBe(true);
+      expect(commandAvailable("codex", "linux", {})).toBe(false);
+    } finally {
+      p.done();
     }
   });
 });

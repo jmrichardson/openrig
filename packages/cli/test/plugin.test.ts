@@ -660,6 +660,52 @@ describe("rig plugin CLI (slice 3.4)", () => {
       expect(parsed.errors).toEqual([]);
     });
 
+    // A Windows editor or a core.autocrlf checkout writes CRLF; on Windows the daemon's skill discovery
+    // reads it, and so does validate. Linux and macOS keep the LF-only match.
+    async function validateCrlfSkills() {
+      writeManifest(".claude-plugin/plugin.json", {
+        name: "test-plugin", version: "1.0.0",
+      });
+      const crlf = (skillId: string, frontmatter: string) => {
+        const skillPath = join(tmpRoot, "skills", skillId, "SKILL.md");
+        mkdirSync(dirname(skillPath), { recursive: true });
+        writeFileSync(skillPath, `---\n${frontmatter}\n---\n\n# body\n`.replace(/\n/g, "\r\n"));
+      };
+      crlf("foo", "name: foo\ndescription: A foo skill");
+      crlf("bad-skill", "description: a description but no name");
+
+      const program = new Command();
+      program.exitOverride();
+      program.addCommand(pluginCommand());
+
+      const { exitCode, logs } = await captureLogs(async () => {
+        await program.parseAsync(["node", "rig", "plugin", "validate", tmpRoot, "--json"]);
+      });
+      const parsed = JSON.parse(logs.join("\n")) as { valid: boolean; errors: string[] };
+      return { exitCode, valid: parsed.valid, errors: [...parsed.errors].sort() };
+    }
+    const CRLF_READ_ERRORS = ['skill "bad-skill": frontmatter missing required field: name (must be non-empty string)'];
+    const CRLF_UNREAD_ERRORS = [
+      'skill "bad-skill": SKILL.md missing frontmatter (must open with --- ... ---)',
+      'skill "foo": SKILL.md missing frontmatter (must open with --- ... ---)',
+    ];
+
+    it.for([
+      { platform: "win32", crlf: true, outcome: "parsed" },
+      { platform: "linux", crlf: false, outcome: "missing frontmatter" },
+      { platform: "darwin", crlf: false, outcome: "missing frontmatter" },
+    ] as const)("on $platform CRLF SKILL.md frontmatter is $outcome", async ({ platform, crlf }) => {
+      const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+      Object.defineProperty(process, "platform", { ...descriptor, value: platform });
+      let result: Awaited<ReturnType<typeof validateCrlfSkills>>;
+      try {
+        result = await validateCrlfSkills();
+      } finally {
+        Object.defineProperty(process, "platform", descriptor);
+      }
+      expect(result).toEqual({ exitCode: 1, valid: false, errors: crlf ? CRLF_READ_ERRORS : CRLF_UNREAD_ERRORS });
+    });
+
     it("non-existent path FAILS with clear error", async () => {
       const program = new Command();
       program.exitOverride();

@@ -45,13 +45,16 @@ async function prepare(script: string, mode = "auto", target: { cwd?: string } =
 }
 
 describe("ClaudeManagedLaunch capability query timeout (#260)", () => {
-  it("accepts a valid help that takes longer than one second", async () => {
+  // The fake harness is a shebang script; Windows cannot execute one, and managed Claude there requires claude.exe.
+  const itShebang = it.skipIf(process.platform === "win32");
+
+  itShebang("accepts a valid help that takes longer than one second", async () => {
     const result = await prepare(`sleep 1.5; printf '%s\\n' '${CHOICES}'`);
     expect(result).toMatchObject({ ok: true, helpCalls: 1 });
     expect(result.ms).toBeGreaterThanOrEqual(1400);
   }, 15_000);
 
-  it("still ends a hung help at the bounded timeout with the same refusal", async () => {
+  itShebang("still ends a hung help at the bounded timeout with the same refusal", async () => {
     const result = await prepare("exec sleep 30");
     expect(result).toMatchObject({ ok: false, message: QUERY_FAILED, helpCalls: 1 });
     // Waited for the 5 s bound, and ended long before the fake's 30 s sleep. The ceiling is
@@ -60,17 +63,17 @@ describe("ClaudeManagedLaunch capability query timeout (#260)", () => {
     expect(result.ms).toBeLessThan(25_000);
   }, 40_000);
 
-  it("refuses an immediate non-zero exit without waiting", async () => {
+  itShebang("refuses an immediate non-zero exit without waiting", async () => {
     const result = await prepare("exit 1");
     expect(result).toMatchObject({ ok: false, message: QUERY_FAILED });
     expect(result.ms).toBeLessThan(1000);
   });
 
-  it("refuses an empty successful help as unavailable options", async () => {
+  itShebang("refuses an empty successful help as unavailable options", async () => {
     expect(await prepare("exit 0")).toMatchObject({ ok: false, message: "Claude permission options are unavailable; selection was not changed." });
   });
 
-  it("refuses a requested mode the installed help does not advertise", async () => {
+  itShebang("refuses a requested mode the installed help does not advertise", async () => {
     expect(await prepare(`printf '%s\\n' '${WITHOUT_AUTO}'`)).toMatchObject({
       ok: false, message: "Claude permission mode 'auto' is not supported by the installed harness." });
   });

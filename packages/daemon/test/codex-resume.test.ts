@@ -1,5 +1,9 @@
 import { mockShellCommand } from "./helpers/shell-command-mock.js";
-import { describe, it, expect, vi } from "vitest";
+import { CODEX_LAUNCH_DEFAULTS } from "./helpers/codex-state.js";
+import fs from "node:fs";
+import os from "node:os";
+import nodePath from "node:path";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import { CodexResumeAdapter } from "../src/adapters/codex-resume.js";
 import type { TmuxAdapter, TmuxResult } from "../src/adapters/tmux.js";
 
@@ -67,7 +71,7 @@ describe("CodexResumeAdapter", () => {
 
       expect(sendText).toHaveBeenCalledOnce();
       expect(sendText.mock.calls[0]![0]).toBe("r99-demo1-impl");
-      expect(sendText.mock.calls[0]![1]).toBe("codex -s workspace-write '-c' 'check_for_update_on_startup=false' resume 'uuid-123'");
+      expect(sendText.mock.calls[0]![1]).toBe(`codex -s workspace-write ${CODEX_LAUNCH_DEFAULTS} resume 'uuid-123'`);
       expect(sendKeys).toHaveBeenCalledOnce();
       expect(sendKeys.mock.calls[0]![1]).toEqual(["Enter"]);
       expect(sendText.mock.invocationCallOrder[0]).toBeLessThan(sendKeys.mock.invocationCallOrder[0]!);
@@ -81,7 +85,7 @@ describe("CodexResumeAdapter", () => {
 
       await adapter.resume("r99-demo1-impl", "codex_id", "uuid-123", "/repo", null, undefined, "gpt-5.4-cheap");
 
-      expect(sendText.mock.calls[0]![1]).toBe("codex -s workspace-write '-c' 'check_for_update_on_startup=false' -m 'gpt-5.4-cheap' resume 'uuid-123'");
+      expect(sendText.mock.calls[0]![1]).toBe(`codex -s workspace-write ${CODEX_LAUNCH_DEFAULTS} -m 'gpt-5.4-cheap' resume 'uuid-123'`);
     });
 
     it("#75: reasoning effort threads -c model_reasoning_effort onto the legacy codex resume command", async () => {
@@ -92,7 +96,7 @@ describe("CodexResumeAdapter", () => {
 
       await adapter.resume("r99-demo1-impl", "codex_id", "uuid-123", "/repo", null, undefined, "gpt-5.4-cheap", "high");
 
-      expect(sendText.mock.calls[0]![1]).toBe("codex -s workspace-write '-c' 'check_for_update_on_startup=false' -m 'gpt-5.4-cheap' -c 'model_reasoning_effort=\"high\"' resume 'uuid-123'");
+      expect(sendText.mock.calls[0]![1]).toBe(`codex -s workspace-write ${CODEX_LAUNCH_DEFAULTS} -m 'gpt-5.4-cheap' -c 'model_reasoning_effort="high"' resume 'uuid-123'`);
     });
 
     it("codex_last: sendText posture-preserving codex -s workspace-write resume --last", async () => {
@@ -104,7 +108,7 @@ describe("CodexResumeAdapter", () => {
       await adapter.resume("r99-demo1-impl", "codex_last", null, "/repo");
 
       expect(sendText).toHaveBeenCalledOnce();
-      expect(sendText.mock.calls[0]![1]).toBe("codex -s workspace-write '-c' 'check_for_update_on_startup=false' resume --last");
+      expect(sendText.mock.calls[0]![1]).toBe(`codex -s workspace-write ${CODEX_LAUNCH_DEFAULTS} resume --last`);
       expect(sendKeys).toHaveBeenCalledOnce();
     });
 
@@ -143,7 +147,7 @@ describe("CodexResumeAdapter", () => {
 
       await adapter.resume("r99-demo1-impl", "codex_id", "uuid; rm -rf /", "/repo");
 
-      expect(sendText.mock.calls[0]![1]).toBe("codex -s workspace-write '-c' 'check_for_update_on_startup=false' resume 'uuid; rm -rf /'");
+      expect(sendText.mock.calls[0]![1]).toBe(`codex -s workspace-write ${CODEX_LAUNCH_DEFAULTS} resume 'uuid; rm -rf /'`);
     });
 
     it("profile-bearing resume uses -p flag after preflight passes", async () => {
@@ -155,7 +159,7 @@ describe("CodexResumeAdapter", () => {
       await adapter.resume("r99-demo1-impl", "codex_id", "uuid-123", "/repo", "my-profile");
 
       expect(exec).toHaveBeenCalled();
-      expect(sendText.mock.calls[0]![1]).toBe("codex -p 'my-profile' '-c' 'check_for_update_on_startup=false' resume 'uuid-123'");
+      expect(sendText.mock.calls[0]![1]).toBe(`codex -p 'my-profile' ${CODEX_LAUNCH_DEFAULTS} resume 'uuid-123'`);
     });
 
     // A restored seat keeps its own topology folder (its LEARNED.md and recap) writable on the plain floor. A named
@@ -166,7 +170,7 @@ describe("CodexResumeAdapter", () => {
       await new CodexResumeAdapter(mockTmux({ sendText }), { prepareSeatFolder })
         .resume("r99-demo1-impl", "codex_id", "uuid-123", "/repo");
       expect(prepareSeatFolder).toHaveBeenCalledWith("r99-demo1-impl");
-      expect(sendText.mock.calls[0]![1]).toBe("codex -s workspace-write '-c' 'check_for_update_on_startup=false' resume 'uuid-123' --add-dir '/topology/rigs/demo/seats/r99-demo1-impl'");
+      expect(sendText.mock.calls[0]![1]).toBe(`codex -s workspace-write ${CODEX_LAUNCH_DEFAULTS} resume 'uuid-123' --add-dir '/topology/rigs/demo/seats/r99-demo1-impl'`);
 
       const profileText = vi.fn(async () => ({ ok: true as const }));
       const profileFolder = vi.fn(() => "/topology/rigs/demo/seats/r99-demo1-impl");
@@ -185,7 +189,7 @@ describe("CodexResumeAdapter", () => {
       await new CodexResumeAdapter(mockTmux({ sendText }), { resolveGitAddDirs, prepareSeatFolder })
         .resume("r99-demo1-impl", "codex_id", "uuid-123", "/repo");
       expect(resolveGitAddDirs).toHaveBeenCalledWith("/repo");
-      expect(sendText.mock.calls[0]![1]).toBe("codex -s workspace-write '-c' 'check_for_update_on_startup=false' resume 'uuid-123' --add-dir '/repo/.git' --add-dir '/topology/rigs/demo/seats/r99-demo1-impl'");
+      expect(sendText.mock.calls[0]![1]).toBe(`codex -s workspace-write ${CODEX_LAUNCH_DEFAULTS} resume 'uuid-123' --add-dir '/repo/.git' --add-dir '/topology/rigs/demo/seats/r99-demo1-impl'`);
 
       const profileText = vi.fn(async () => ({ ok: true as const }));
       const profileDirs = vi.fn(async () => ["/repo/.git"]);
@@ -456,6 +460,6 @@ describe("a seat's own permission envelope on the legacy resume (argv only)", ()
   it("keeps the call unchanged without an envelope", async () => {
     const sendText = vi.fn(async () => ({ ok: true as const }));
     await new CodexResumeAdapter(mockTmux({ sendText })).resume("r99-demo1-impl", "codex_id", "uuid-123", "/repo");
-    expect((sendText.mock.calls[0] as unknown as [string, string])[1]).toBe("codex -s workspace-write '-c' 'check_for_update_on_startup=false' resume 'uuid-123'");
+    expect((sendText.mock.calls[0] as unknown as [string, string])[1]).toBe(`codex -s workspace-write ${CODEX_LAUNCH_DEFAULTS} resume 'uuid-123'`);
   });
 });

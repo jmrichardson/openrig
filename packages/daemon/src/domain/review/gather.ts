@@ -961,7 +961,7 @@ export class ReviewGatherer {
     if (!gitRepoPath) return null;
     try {
       return runSyncSite("review.gather.git", () =>
-        execFileSync("git", args, { cwd: gitRepoPath, timeout: 4000, encoding: "utf8" })
+        execFileSync("git", args, { cwd: gitRepoPath, timeout: 4000, encoding: "utf8", windowsHide: true })
       ).trim();
     } catch {
       return null;

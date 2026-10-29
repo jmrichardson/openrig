@@ -99,6 +99,15 @@ one resolver/mutation path, and verbs stay OBSERVE/NAVIGATE/DRIVE-STRUCTURE
 only. Unix-socket paths must stay under ~104 bytes (sun_path) — keep the
 default runtime dir.
 
+On native Windows the control endpoint is a named pipe, not a file: the socket
+path maps to `\\.\pipe\openrig-tui-<sha256 of its lower-cased resolved path>`,
+and `--socket \\.\pipe\<name>` is used as given. The status line shows the bound
+endpoint (`socket: [copy] …`). From PowerShell:
+
+    $pipe = [IO.Pipes.NamedPipeClientStream]::new('.', 'openrig-tui-<hash>', 'InOut'); $pipe.Connect(2000)
+    $writer = [IO.StreamWriter]::new($pipe); $writer.AutoFlush = $true; $writer.WriteLine('agent dev.impl')
+    [IO.StreamReader]::new($pipe).ReadLine(); $pipe.Dispose()
+
 ## Tests
 
     npm test          # vitest: grammar, state, parity (mouse/kbd/command), hydration

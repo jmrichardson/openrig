@@ -85,6 +85,8 @@ function makeDeps(overrides: Partial<TerminalServiceDeps> = {}): {
     listRigNames: () => ["acme-build"],
     resolveHost: () => null,
     hasSession: () => true,
+    // The direct attach commands are POSIX text unless a case asks for the Windows daemon's.
+    platform: "linux",
     ...overrides,
   };
   return { deps, herdr, cmux };
@@ -442,7 +444,7 @@ describe("default saved kernel conversations", () => {
     const result = await service.openView({ view: "saved:kernel", expectedPlan: preview.planId });
     expect(result.ok).toBe(true);
     expect(herdr.lastView).toEqual({ ...preview.composed, planId: preview.planId });
-    expect(planHerdrLayout(herdr.lastView!, "fixed").pages.map(page => page.root)).toEqual(preview.grids.map(grid => grid.root));
+    expect(planHerdrLayout(herdr.lastView!, "fixed", undefined, "linux").pages.map(page => page.root)).toEqual(preview.grids.map(grid => grid.root));
   });
 
   it.each([
@@ -466,7 +468,7 @@ describe("default saved kernel conversations", () => {
       ? ["dashboard · operator", "advisor"] : ["operator", "dashboard", "advisor"]);
     expect(preview.grids.every(grid => grid.blanks === 0)).toBe(true);
     expect((await service.openView({ view: "saved:kernel", viewportColumns, expectedPlan: preview.planId })).ok).toBe(true);
-    expect(planHerdrLayout(herdr.lastView!, "fixed").pages.map(page => page.root)).toEqual(preview.grids.map(grid => grid.root));
+    expect(planHerdrLayout(herdr.lastView!, "fixed", undefined, "linux").pages.map(page => page.root)).toEqual(preview.grids.map(grid => grid.root));
   });
 
   it.each(["operator.agent", "operator.human"])("keeps the advisor separate at 160 columns when %s is absent", async missing => {
@@ -506,7 +508,7 @@ describe("default saved kernel conversations", () => {
     expect(preview.composed.columns).toBeUndefined();
     expect(preview.grids[0]).toMatchObject({ columns: 2, rows: 2, blanks: 1 });
     expect((await service.openView({ view, viewportColumns: 174, expectedPlan: preview.planId })).ok).toBe(true);
-    expect(planHerdrLayout(herdr.lastView!, "fixed").pages.map(page => page.root)).toEqual(preview.grids.map(grid => grid.root));
+    expect(planHerdrLayout(herdr.lastView!, "fixed", undefined, "linux").pages.map(page => page.root)).toEqual(preview.grids.map(grid => grid.root));
   });
 
   it("kernel geometry caps partial views to available panes while retaining named absences", async () => {
@@ -524,7 +526,7 @@ describe("default saved kernel conversations", () => {
     const result = await service.openView({ view: "saved:kernel", expectedPlan: preview.planId });
     expect(result.opened).toEqual(["tui-bound", "advisor-bound"]);
     expect(result.absent.map(member => member.seat)).toEqual(["operator.agent"]);
-    expect(planHerdrLayout(herdr.lastView!, "fixed").pages.map(page => page.root)).toEqual(preview.grids.map(grid => grid.root));
+    expect(planHerdrLayout(herdr.lastView!, "fixed", undefined, "linux").pages.map(page => page.root)).toEqual(preview.grids.map(grid => grid.root));
   });
 
   it("kernel geometry keeps auto-grid on each page without treating map indexes as columns", async () => {
@@ -543,7 +545,7 @@ describe("default saved kernel conversations", () => {
       provider: "herdr", composed: preview.composed, grids: preview.grids,
     })).digest("hex"));
     expect((await service.openView({ view: "saved:custom", expectedPlan: preview.planId })).ok).toBe(true);
-    expect(planHerdrLayout(provider.lastView!, "fixed").pages.map(page => page.root)).toEqual(preview.grids.map(grid => grid.root));
+    expect(planHerdrLayout(provider.lastView!, "fixed", undefined, "linux").pages.map(page => page.root)).toEqual(preview.grids.map(grid => grid.root));
   });
 
   it.each([["claude-code", "codex"], ["claude-code", "claude-code"], ["codex", "codex"]])("resolves the %s/%s layout from installed bindings without saving it", async (advisorRuntime, operatorRuntime) => {
@@ -683,6 +685,22 @@ describe("TerminalService — an omitted provider falls back from herdr to cmux 
     expect(r.notes?.join("\n")).toContain("attach directly using one of these commands");
     expect(r.notes?.join("\n")).toContain("env -u TMUX");
     expect(cmux.lastView).toBeNull();
+  });
+
+  it("on a Windows daemon writes the direct attach commands for PowerShell, which has no env command", async () => {
+    const remote = { id: "lab", transport: "ssh" as const, target: "lab.example", user: "ops" };
+    const { deps, herdr } = makeDeps({
+      platform: "win32", resolveLocalTmux: () => "/opt/tools/tmux", resolveHost: (id) => (id === "lab" ? remote as never : null),
+      viewsStore: { get: () => ({ id: "mixed", name: "Mixed", members: [{ seat: "dev-driver@acme-build", tmuxSession: "dev-driver@acme-build" }, { seat: "far@lab-rig", tmuxSession: "far@lab-rig", host: "lab", readOnly: true }] }), list: () => [] },
+    });
+    herdr.openView = async (view) => ({ provider: "herdr", ok: false, opened: [], absent: view.absent, degraded: view.degraded, pages: 0, error: "not running", code: "herdr_unavailable" });
+    const r = await new TerminalService(deps).openView({ view: "mixed" });
+    const notes = r.notes!.join("\n");
+    expect(notes).toContain("In a new PowerShell window on the daemon's host");
+    expect(r.notes).toContain("dev-driver@acme-build: Remove-Item Env:TMUX -ErrorAction SilentlyContinue; & /opt/tools/tmux attach -f ignore-size -t 'dev-driver@acme-build'");
+    expect(r.notes).toContain("far@lab-rig: Remove-Item Env:TMUX -ErrorAction SilentlyContinue; & ssh 'ops@lab.example' 'tmux attach -r -t ''far@lab-rig'''");
+    expect(notes).toContain("including Remove-Item Env:TMUX");
+    expect(notes).not.toContain("env -u TMUX");
   });
 
   it("keeps an explicitly named provider exactly as named, with no fallback", async () => {

@@ -29,7 +29,8 @@ function fixture() {
   return { write, run };
 }
 
-describe("trunk-diff filename selection", () => {
+// Each case runs the shipped POSIX trunk-diff.sh with bash, which native Windows does not provide.
+describe.skipIf(process.platform === "win32")("trunk-diff filename selection", () => {
   it.each(["SPEC.md", "SOP.md", "CULTURE.md", "LEARNED.md", "PLAYBOOK.md", "INTENT.md"])(
     "default selection detects a change to %s", (name) => {
       const f = fixture();

@@ -36,6 +36,7 @@ export interface ComposedPane {
   recoveryCommand?: string;
   /** The same local attach as an argv, for a provider that reruns it without a shell (a Herdr restart). Absent for an ssh tile. */
   attachArgv?: string[];
+  attachTarget?: { tmux: string; server: readonly string[]; session: string; platform?: NodeJS.Platform };
   /** True when the attach is view-only (`tmux attach -r`) — cross-rig / saved read-only. */
   readOnly: boolean;
 }

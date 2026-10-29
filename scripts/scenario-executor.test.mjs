@@ -4,6 +4,10 @@ import { dockerPlatform, runWithDeadline } from './scenario-executor.mjs';
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { packageBuildShell } from './package-build-shell.mjs';
+
+// The scenario runner is a bash script; Windows runs it under Git Bash, found as the package build finds it.
+const bash = process.platform === 'win32' ? packageBuildShell('win32', process.env) : '/bin/bash';
 
 test('target follows the Docker server, not this client platform', () => {
   assert.equal(dockerPlatform({ Os: 'linux', Arch: 'amd64' }), 'linux/amd64');
@@ -27,7 +31,7 @@ test('a missing executable and an invalid deadline cannot report success', async
   await assert.rejects(runWithDeadline([process.execPath], { timeoutMs: 0 }), /positive/);
 });
 
-test('the platform CLI queries a fake remote server and writes its actual receipt', () => {
+test('the platform CLI queries a fake remote server and writes its actual receipt', { skip: process.platform === 'win32' && 'the fake docker is a POSIX shell script; Windows spawns only docker.exe' }, () => {
   const root = mkdtempSync(join(process.cwd(), '.scenario-platform-'));
   try {
     const server = { Os: 'linux', Arch: 'amd64', Version: 'test-only' };
@@ -53,7 +57,7 @@ test('ordinary invocation and ambiguous remote selection refuse before any build
     [['--remote', '--mode', 'typo'], {}, /Expected --mode/],
   ]) {
     const env = { ...process.env, GITHUB_ACTIONS: '', DOCKER_HOST: '', DOCKER_CONTEXT: '', ...extra };
-    const run = spawnSync('/bin/bash', [script, ...args], { env, encoding: 'utf8', timeout: 3000 });
+    const run = spawnSync(bash, [script, ...args], { env, encoding: 'utf8', timeout: process.platform === "win32" ? 10000 : 3000 });
     assert.equal(run.status, 2, run.stderr);
     assert.match(run.stderr, message);
   }

@@ -92,7 +92,7 @@ export class TmuxOptionDefaultsApplier {
       warnings.push(`tmux "detach-on-destroy" option not set for ${sessionName}: ${detach.message}`);
     }
 
-    await this.ensureServerDefaults(warnings);
+    await this.ensureServerDefaults(warnings, sessionName);
     return warnings;
   }
 
@@ -109,7 +109,13 @@ export class TmuxOptionDefaultsApplier {
    * set of the same values); the memo is an optimization, not a correctness
    * gate.
    */
-  private async ensureServerDefaults(warnings: string[]): Promise<void> {
+  private async ensureServerDefaults(warnings: string[], sessionName: string): Promise<void> {
+    if (this.platform === "win32") {
+      // Every psmux session owns a distinct server; configure only the new one.
+      const clip = await this.tmuxAdapter.setServerOption("set-clipboard", "on", sessionName);
+      if (!clip.ok) warnings.push(`Native clipboard option not set for ${sessionName}: ${clip.message}`);
+      return;
+    }
     if (this.serverDefaultsAsserted) return;
     // Set first so concurrent applies don't double-assert; either way the
     // sets are idempotent.

@@ -15,9 +15,17 @@ import { codexEnvelopeArgs } from "../domain/codex-rebuild-permissions.js";
 import { codexMemberEnvelope, observeCodexEnvelope, type CodexMemberPermissions } from "../domain/codex-member-permissions.js";
 import { unknownDaemonSupportMessage, type CodexDaemonSupportDetector } from "../domain/codex-daemon-support.js";
 import { codexNetworkDefaultArg, type CodexNetworkDefaultReader } from "../domain/codex-network-default.js";
+import {
+  CODEX_WINDOWS_EXECUTION_POLICY_OVERRIDE, CODEX_WINDOWS_SANDBOX_OVERRIDE, codexWindowsExecutionPolicyChosen,
+  codexWindowsSandboxChosen, codexWindowsSandboxConfigFiles, codexWindowsSandboxElevated,
+} from "../domain/codex-windows-sandbox.js";
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { isRuntimeShell } from "../domain/shell-classifier.js";
+import { execWindowsCodexCommand } from "./windows-codex-command.js";
 
 const CODEX_TYPES = new Set(["codex_id", "codex_last"]);
-const SHELL_COMMANDS = new Set(["bash", "fish", "nu", "sh", "tmux", "zsh"]);
 
 export { type ResumeResult };
 
@@ -93,7 +101,7 @@ export class CodexResumeAdapter {
 
     if (codexConfigProfile?.trim()) {
       const { verifyCodexProfileLoads } = await import("../domain/codex-profile-preflight.js");
-      const execFn = this.options.exec ?? ((cmd: string) => execRuntimeProbe("codex.resume.profile_preflight", cmd,
+      const execFn = this.options.exec ?? ((cmd: string) => process.platform === "win32" ? execWindowsCodexCommand(cmd, { cwd, env: { ...process.env, ...(codexHome ? { CODEX_HOME: codexHome } : {}), ...(this.options.launchPath ? { PATH: this.options.launchPath } : {}) } }) : execRuntimeProbe("codex.resume.profile_preflight", cmd,
         codexHome ? { cwd, env: { ...process.env, CODEX_HOME: codexHome, ...(this.options.launchPath ? { PATH: this.options.launchPath } : {}) } } : {}));
       const probeResult = await verifyCodexProfileLoads(codexConfigProfile, execFn, undefined, codexHome);
       if (!probeResult.ok) {
@@ -116,8 +124,20 @@ export class CodexResumeAdapter {
     const envelope = codexPermissions ? codexMemberEnvelope(codexPermissions) : undefined;
     const posture = envelope ? profileArg + codexEnvelopeArgs(envelope) : codexPostureArg(profileArg, process.env, resolvedPosture);
     const appliedLaunch = envelope ? observeCodexEnvelope(envelope) : observeCodexSandbox(posture);
+    let windowsArgs = "";
+    let elevatedSandbox = false;
+    if (process.platform === "win32") {
+      // An empty CODEX_HOME is unset, for Codex and for the runtime adapter's launch.
+      const codexHome = this.options.codexHome || process.env["CODEX_HOME"] || join(homedir(), ".codex");
+      const layers = codexWindowsSandboxConfigFiles(codexHome, codexConfigProfile?.trim() || undefined).map((file) => {
+        try { return readFileSync(file, "utf8"); } catch { return null; /* no readable config chooses nothing */ }
+      });
+      if (!codexWindowsSandboxChosen(layers)) windowsArgs = ` -c ${shellQuote(CODEX_WINDOWS_SANDBOX_OVERRIDE)}`;
+      if (!codexWindowsExecutionPolicyChosen(layers)) windowsArgs += ` -c ${shellQuote(CODEX_WINDOWS_EXECUTION_POLICY_OVERRIDE)}`;
+      elevatedSandbox = codexWindowsSandboxElevated(layers);
+    }
     const postureArg = posture + operationalLaunchArg("codex", envelope ? { nonInterruptive }
-      : { kernelAuthority, teamPermissionDefault, nonInterruptive, launchPosture: resolvedPosture });
+      : { kernelAuthority, teamPermissionDefault, nonInterruptive, launchPosture: resolvedPosture }) + windowsArgs;
     const readNetworkDefault = this.options.readNetworkDefault;
     const networkArg = envelope ? "" : await codexNetworkDefaultArg(seatCodexHome && readNetworkDefault ? ((dir: string) => readNetworkDefault(dir, seatCodexHome)) : readNetworkDefault,
       appliedLaunch, cwd, tmuxSessionName);
@@ -145,7 +165,7 @@ export class CodexResumeAdapter {
 
     const launchEnv = [this.options.launchPath ? `PATH=${shellQuote(this.options.launchPath)}` : "", codexHome ? `CODEX_HOME=${shellQuote(codexHome)}` : ""].filter(Boolean);
     const staged = this.options.seatLaunchEnvironment
-      ? await this.options.seatLaunchEnvironment.command(tmuxSessionName, cmd, { codexCwd: cwd, runtime: "codex", ...(seatCodexHome ? { codexHome: seatCodexHome } : {}) })
+      ? await this.options.seatLaunchEnvironment.command(tmuxSessionName, cmd, { codexCwd: cwd, runtime: "codex", ...(seatCodexHome ? { codexHome: seatCodexHome } : {}), ...(elevatedSandbox ? { codexElevatedSandbox: true } : {}) })
       : launchEnv.length ? `env ${launchEnv.join(" ")} ${cmd}` : cmd;
     if (beforeNativeDispatch && !beforeNativeDispatch()) return { ok: false, code: "attention_required", message: "Selected history changed during Codex resume preparation; no native command was sent." };
     const textResult = beforeNativeDispatch
@@ -156,8 +176,16 @@ export class CodexResumeAdapter {
     }
 
     const result = await this.verifyResume(tmuxSessionName);
+    if (!result.ok) return result;
+    // As a runtime-adapter resume does: clear a late native terminal reply from the composer. The conversation
+    // did resume, so an unverified removal keeps the seat for the operator instead of rolling it back.
+    const composer = await this.tmux.prepareWindowsCodexComposer?.(tmuxSessionName);
+    if (composer && !composer.ok) {
+      const paneContent = (await this.tmux.capturePaneContent(tmuxSessionName, 40)) ?? "";
+      return { ok: false, code: "attention_required", message: composer.message, evidence: paneContent.split("\n").slice(-12).join("\n") };
+    }
     const launchFacts = daemonSupport ? { ...appliedLaunch, daemonOptOut: daemonSupport.kind === "supported" } : appliedLaunch;
-    return result.ok ? { ...result, appliedLaunch: launchFacts } : result;
+    return { ...result, appliedLaunch: launchFacts };
   }
 
   // Mirrors ClaudeResumeAdapter.verifyResume: poll the pane, run the native
@@ -181,7 +209,7 @@ export class CodexResumeAdapter {
       });
 
       if (probe.code === "returned_to_shell" || probe.code === "awaiting_runtime") {
-        const returnedToShell = probe.code === "returned_to_shell" && paneCommand && SHELL_COMMANDS.has(paneCommand);
+        const returnedToShell = probe.code === "returned_to_shell" && paneCommand && isRuntimeShell(paneCommand);
         const idleShell = returnedToShell && await verifyPaneIdleShell({ target: tmuxSessionName, tmux: this.tmux,
           ...(this.options.listProcesses ? { listProcesses: this.options.listProcesses } : {}) });
         // A failed proof records that the foreground changed or was occupied by a wrapper; a later stable shell
@@ -234,7 +262,7 @@ export class CodexResumeAdapter {
       paneCommand: finalCommand,
       paneContent: finalContent,
     });
-    const finalIdleObservation = finalCommand && SHELL_COMMANDS.has(finalCommand)
+    const finalIdleObservation = finalCommand && isRuntimeShell(finalCommand)
       ? await verifyPaneIdleShell({ target: tmuxSessionName, tmux: this.tmux,
         ...(this.options.listProcesses ? { listProcesses: this.options.listProcesses } : {}) })
       : false;
@@ -274,7 +302,7 @@ export class CodexResumeAdapter {
       return { ok: true };
     }
 
-    if (finalCommand && SHELL_COMMANDS.has(finalCommand)) {
+    if (finalCommand && isRuntimeShell(finalCommand)) {
       // A shell label alone isn't a return to the shell: a launch script still starting Codex holds the pane the
       // same way. Only a proven, stable idle shell ends the resume; anything else keeps the launch for attention.
       if (finalIdleShell) {

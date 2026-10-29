@@ -89,6 +89,8 @@ const fixtureHome =
         if (process.env["OPENRIG_TEST_KEEP_TMPDIR"] !== "1") {
           createdTmp = fs.mkdtempSync(path.join(os.tmpdir(), "o-"));
           process.env["TMPDIR"] = createdTmp;
+          // os.tmpdir() reads TEMP/TMP rather than TMPDIR on Windows.
+          if (process.platform === "win32") process.env["TEMP"] = process.env["TMP"] = createdTmp;
         }
         return h;
       })();
@@ -133,7 +135,13 @@ if (!realCodexTest) {
   const userHome = `${fixtureHome}-user-home`;
   fs.mkdirSync(userHome, { recursive: true });
   Object.assign(process.env, fixtureUserHomeEnv(userHome));
+  if (process.platform === "win32") {
+    process.env["APPDATA"] = path.join(userHome, "AppData", "Roaming");
+    process.env["LOCALAPPDATA"] = path.join(userHome, "AppData", "Local");
+  }
   delete process.env["CODEX_HOME"];
+  process.env["PI_CODING_AGENT_DIR"] = path.join(userHome, ".pi", "agent");
+  for (const key of ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN", "OPENAI_API_KEY", "OPENAI_BASE_URL", "CODEX_API_KEY"]) delete process.env[key];
   for (const [key, suffix] of Object.entries({
     XDG_CONFIG_HOME: ".config", XDG_STATE_HOME: ".local/state",
     XDG_DATA_HOME: ".local/share", XDG_CACHE_HOME: ".cache",

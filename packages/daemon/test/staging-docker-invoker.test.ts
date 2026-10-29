@@ -19,6 +19,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, it, expect } from "vitest";
 import { makeRealStagingDocker } from "./helpers/staging-docker-invoker.js";
+import { posixShell } from "./helpers/posix-shell.js";
 
 /** True once no process with this pid exists (an unreaped zombie still counts as alive, so poll
  *  briefly: the orphan is reparented and reaped by init or a subreaper). */
@@ -67,9 +68,12 @@ async function reapSurvivors(pidFiles: string[]): Promise<number[]> {
   return survivors;
 }
 
+/** Windows has no `sh` on PATH; Git Bash runs the same scripts there. */
+const SH = process.platform === "win32" ? posixShell : "sh";
+
 /** sh stands in for docker AND tar: argv are `-c <script>` scripts. */
 function shInvoker(stepTimeoutMs?: number) {
-  return makeRealStagingDocker({ command: "sh", tarCommand: "sh", ...(stepTimeoutMs ? { stepTimeoutMs } : {}) });
+  return makeRealStagingDocker({ command: SH, tarCommand: SH, ...(stepTimeoutMs ? { stepTimeoutMs } : {}) });
 }
 
 describe("makeRealStagingDocker — the two-process tar-pipe contract, hermetically (sh stand-ins)", () => {

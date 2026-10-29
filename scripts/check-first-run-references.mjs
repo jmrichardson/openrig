@@ -240,7 +240,8 @@ export async function checkReferences(root, scope, authority) {
       checked.push({ ...ref, against: found });
     } else {
       let target = repositoryPath(ref.value);
-      if (ref.kind === "link") target = path.join(path.dirname(ref.file), ref.value);
+      // Repository paths keep "/" on Windows too, so a link resolves as the path forms above do.
+      if (ref.kind === "link") target = path.posix.join(path.posix.dirname(ref.file), ref.value);
       if (target.startsWith("skills/")) {
         const tail = target.slice("skills/".length);
         const candidates = [target, ...SKILL_ROOTS.map((dir) => `${dir}/${tail}`)];

@@ -9,6 +9,7 @@ import {
   TuiProvisioningError,
   type TuiProcessLike,
 } from "./helpers/scenario-tui.js";
+import { controlEndpoint } from "../../tui/src/socket-server.js";
 
 // 51-02 delta D7 (guard binding) — the TUI readiness BOUNDARY.
 //
@@ -45,7 +46,8 @@ function listenStateServer(path: string): Promise<net.Server> {
     });
   });
   servers.push(server);
-  return new Promise((resolve) => server.listen(path, () => resolve(server)));
+  // The shipped TUI listens on a named pipe derived from the path on Windows.
+  return new Promise((resolve) => server.listen(controlEndpoint(path), () => resolve(server)));
 }
 
 /** A fake TUI process whose lifetime the test controls. */
@@ -141,7 +143,7 @@ describe("D7 — probeTuiState answers the CONTRACT, not mere socket existence",
     const path = sockPath();
     const server = net.createServer((conn) => { conns.push(conn); conn.on("error", () => {}); conn.end("not json\n"); });
     servers.push(server);
-    await new Promise<void>((r) => server.listen(path, () => r()));
+    await new Promise<void>((r) => server.listen(controlEndpoint(path), () => r()));
     expect(await probeTuiState(path, 500)).toBe(false);
   });
 });

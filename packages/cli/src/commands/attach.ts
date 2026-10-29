@@ -1,24 +1,36 @@
-import { Command } from "commander";
-import { execSync } from "node:child_process";
+import { shellQuote } from "../cross-host-executor.js";
+import { Command, Option } from "commander";
+import { execFileSync, execSync } from "node:child_process";
+import { powershellQuote } from "@openrig/daemon/windows-launch";
 import { DaemonClient } from "../client.js";
 import { getDaemonStatus, getDaemonUrl , daemonStatusGuard} from "../daemon-lifecycle.js";
 import { realDeps } from "./daemon.js";
 import type { StatusDeps } from "./status.js";
 
 type TmuxExecFn = (cmd: string) => string;
+type TmuxExecFileFn = (file: string, args: string[]) => string;
 
-function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
+export function attachEnvironment(nodeId: string, sessionName: string, shell: "posix" | "powershell"): string[] {
+  return [["OPENRIG_NODE_ID", nodeId], ["OPENRIG_SESSION_NAME", sessionName]].map(([name, value]) =>
+    shell === "powershell"
+      ? `$env:${name}=${powershellQuote(value!)}`
+      : `export ${name}='${value!.replaceAll("'", "'\\''")}'`);
 }
 
 const defaultTmuxExec: TmuxExecFn = (cmd: string) => execSync(cmd, { encoding: "utf-8" }).trim();
+// cmd.exe would end the shell string at the format's first newline, so Windows hands psmux's tmux argv.
+const defaultTmuxExecFile: TmuxExecFileFn = (file, args) => execFileSync(file, args, { encoding: "utf-8" }).trim();
 
 // tmux writes a control character in its output as "_", so a newline between fields can't separate them, and a
 // session name may hold spaces or underscores. Ask for the two fixed-shape ids first; the rest of the line is the name.
 const TMUX_CONTEXT_FORMAT = "#{pane_id} #{window_id} #{session_name}";
 const TMUX_CONTEXT_LINE = /^(%\d+) (@\d+) (.+)$/;
 
-export function resolveAttachContext(tmuxExec: TmuxExecFn = defaultTmuxExec):
+export function resolveAttachContext(
+  tmuxExec: TmuxExecFn = defaultTmuxExec,
+  platform: NodeJS.Platform = process.platform,
+  tmuxExecFile: TmuxExecFileFn = defaultTmuxExecFile,
+):
   | { attachmentType: "external_cli" }
   | { attachmentType: "tmux"; tmuxSession: string; tmuxWindow?: string; tmuxPane: string } {
   const tmuxPane = process.env["TMUX_PANE"];
@@ -27,7 +39,7 @@ export function resolveAttachContext(tmuxExec: TmuxExecFn = defaultTmuxExec):
   }
 
   try {
-    const output = tmuxExec(`tmux display-message -p -t ${shellQuote(tmuxPane)} ${shellQuote(TMUX_CONTEXT_FORMAT)}`);
+    const output = platform === "win32" ? tmuxExecFile("tmux", ["display-message", "-p", "-t", tmuxPane, TMUX_CONTEXT_FORMAT]) : tmuxExec(`tmux display-message -p -t ${shellQuote(tmuxPane)} ${shellQuote(TMUX_CONTEXT_FORMAT)}`);
     const match = TMUX_CONTEXT_LINE.exec(output.trim());
     if (match) {
       const [, resolvedPane, tmuxWindow, tmuxSession] = match;
@@ -59,8 +71,13 @@ export function attachCommand(depsOverride?: StatusDeps): Command {
     .option("--runtime <runtime>", "Runtime for pod attach mode; optional guard for node mode")
     .option("--cwd <path>", "Working directory to record", process.cwd())
     .option("--display-name <name>", "Display label inside tmux; external session name outside tmux")
-    .option("--print-env", "Print shell exports for OPENRIG_NODE_ID and OPENRIG_SESSION_NAME")
-    .option("--json", "JSON output, including the activity env the attached app needs. Its token is a credential: don't print or paste it, and use rig whoami for identity")
+    .option("--print-env", "Print shell exports for OPENRIG_NODE_ID and OPENRIG_SESSION_NAME");
+  // Windows has two shells in common use: PowerShell assignments by default, POSIX exports for Git Bash.
+  if (process.platform === "win32") {
+    cmd.addOption(new Option("--shell <shell>", "Shell syntax for --print-env").choices(["posix", "powershell"]).default("powershell"));
+  }
+  cmd
+    .option("--json", "JSON output, including credentials: do not print or paste tokens")
     .action(async (opts: {
       self?: boolean;
       rig: string;
@@ -71,8 +88,10 @@ export function attachCommand(depsOverride?: StatusDeps): Command {
       cwd?: string;
       displayName?: string;
       printEnv?: boolean;
+      shell?: "posix" | "powershell";
       json?: boolean;
     }) => {
+      const shell = opts.shell ?? "posix";
       if (!opts.self) {
         console.error("Only --self is supported right now. Use: rig attach --self ...");
         process.exitCode = 1;
@@ -149,8 +168,7 @@ export function attachCommand(depsOverride?: StatusDeps): Command {
       const sessionName = typeof env["OPENRIG_SESSION_NAME"] === "string" ? env["OPENRIG_SESSION_NAME"] : "";
 
       if (opts.printEnv) {
-        console.log(`export OPENRIG_NODE_ID=${shellQuote(nodeId)}`);
-        console.log(`export OPENRIG_SESSION_NAME=${shellQuote(sessionName)}`);
+        for (const line of attachEnvironment(nodeId, sessionName, shell)) console.log(line);
         return;
       }
 
@@ -168,7 +186,7 @@ export function attachCommand(depsOverride?: StatusDeps): Command {
           ? "tmux"
           : "external_cli (outbound rig commands available; inbound tmux transport unavailable)"
       }`);
-      console.log("Identity:   rerun with --print-env and eval the output to persist OPENRIG_NODE_ID/OPENRIG_SESSION_NAME");
+      console.log(`Identity:   rerun with --print-env and ${shell === "powershell" ? "Invoke-Expression" : "eval"} the output to persist OPENRIG_NODE_ID/OPENRIG_SESSION_NAME`);
     });
 
   return cmd;

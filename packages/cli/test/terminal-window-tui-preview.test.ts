@@ -8,7 +8,7 @@ import { afterEach, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { devNull, tmpdir } from "node:os";
 import path from "node:path";
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
@@ -25,7 +25,7 @@ const sockets: string[] = [];
 const dirs: string[] = [];
 const servers: Array<{ close(): void }> = [];
 function tmux(socket: string, args: string[]): string {
-  return execFileSync("tmux", ["-L", socket, "-f", "/dev/null", ...args], { encoding: "utf8", env, timeout: 5000 });
+  return execFileSync("tmux", ["-L", socket, "-f", devNull, ...args], { encoding: "utf8", env, timeout: 5000 });
 }
 afterEach(() => {
   for (const server of servers.splice(0)) server.close();

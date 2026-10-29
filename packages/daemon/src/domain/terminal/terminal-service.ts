@@ -43,6 +43,7 @@ import { createHash } from "node:crypto";
 import { isAbsolute } from "node:path";
 import { buildGridRoot } from "./herdr-adapter.js";
 import { daemonTmuxServerArgs } from "../../adapters/tmux-server.js";
+import { parseLiteralLaunchWords, powershellQuote } from "../../adapters/windows-launch.js";
 // deriveViewMembers is a VALUE exported by the views store (not the composer).
 import { deriveViewMembers } from "./terminal-views-store.js";
 import type {
@@ -147,6 +148,14 @@ export interface TerminalServiceDeps {
    * absolute path is used; anything else, or no resolver, keeps the bare `tmux` token.
    */
   resolveLocalTmux?(): Promise<string | null> | string | null;
+  /** The daemon host's platform, which the direct attach commands are written for. Defaults to this process's. */
+  platform?: NodeJS.Platform;
+}
+
+/** A pane command as Windows PowerShell runs it: the same literal words, with TMUX cleared. */
+function powershellAttach(paneCommand: string): string {
+  const words = parseLiteralLaunchWords(paneCommand).map(word => /^[A-Za-z0-9_./\\:-]+$/.test(word) ? word : powershellQuote(word));
+  return `Remove-Item Env:TMUX -ErrorAction SilentlyContinue; & ${words.join(" ")}`;
 }
 
 /** Build the one shared result shape for a pre-provider failure (view/provider not found). */
@@ -297,7 +306,12 @@ export class TerminalService {
       };
     }
     const result = await provider.openView({ ...composed, planId });
-    if (result.opened.length === 0 && composed.opened.length > 0) {
+    if (result.opened.length === 0 && composed.opened.length > 0 && (this.deps.platform ?? process.platform) === "win32") {
+      // PowerShell has no `env` command.
+      notes.push("In a new PowerShell window on the daemon's host, attach directly using one of these commands:");
+      for (const pane of composed.opened) notes.push(`${pane.label}: ${powershellAttach(pane.recoveryCommand ?? pane.paneCommand)}`);
+      notes.push("Each labelled command above opens a different seat. When sharing how to join this team, include every command in full, unchanged, including Remove-Item Env:TMUX, paths and quoting.");
+    } else if (result.opened.length === 0 && composed.opened.length > 0) {
       notes.push("In a new terminal on the daemon's host, attach directly using one of these commands:");
       for (const pane of composed.opened) notes.push(`${pane.label}: env -u TMUX ${pane.recoveryCommand ?? pane.paneCommand}`);
       notes.push("Each labelled command above opens a different seat. When sharing how to join this team, include every command in full, unchanged, including env -u TMUX, paths and quoting.");
@@ -313,7 +327,7 @@ export class TerminalService {
     if (!view) return { code: "view_required", error: "a view argument is required" };
     const resolved = await this.resolveView(view);
     if ("code" in resolved) return resolved;
-    const composed = composeView(resolved.id, await this.refineLiveness(resolved.members), { resolveHost: (id) => this.deps.resolveHost(id), panesPerPage: resolved.panesPerPage ?? panesPerPage, localTmux: await this.resolveLocalTmux(), localTmuxServer: daemonTmuxServerArgs() });
+    const composed = composeView(resolved.id, await this.refineLiveness(resolved.members), { resolveHost: (id) => this.deps.resolveHost(id), panesPerPage: resolved.panesPerPage ?? panesPerPage, localTmux: await this.resolveLocalTmux(), localTmuxServer: daemonTmuxServerArgs(), platform: this.deps.platform ?? process.platform });
     const saved = view.startsWith("saved:") ? this.deps.viewsStore.get(view.slice(6))
       : !/^(qitem|mission|slice|pod|rig):/.test(view) ? this.deps.viewsStore.get(view) : null;
     composed.viewDescriptor = { kind: saved && saved.id === resolved.id ? "fixed" : "following",
@@ -340,7 +354,7 @@ export class TerminalService {
   }
 
   private planId(provider: string, composed: ComposedView, session?: string): string {
-    return createHash("sha256").update(JSON.stringify({ provider, ...(session !== undefined ? { session } : {}), composed: { ...composed, ...(composed.task ? { task: { ...composed.task, members: composed.task.members.map(({ viewer, viewerStatus, ...member }) => member) } } : {}) }, grids: composed.pages.map(page => buildGridRoot(page, composed.columns)) })).digest("hex");
+    return createHash("sha256").update(JSON.stringify({ provider, ...(session !== undefined ? { session } : {}), composed: { ...composed, ...(composed.task ? { task: { ...composed.task, members: composed.task.members.map(({ viewer, viewerStatus, ...member }) => member) } } : {}) }, grids: composed.pages.map(page => buildGridRoot(page, composed.columns, this.deps.platform)) })).digest("hex");
   }
 
   /** Passive: inventory, local has-session and provider probe only. Never openView. */
@@ -353,13 +367,15 @@ export class TerminalService {
     if ("code" in composed) return errorResult(providerName, composed.code, composed.error);
     await this.viewerMappings(provider, composed);
     return { provider: providerName, ...(session !== undefined ? { session } : {}), view: req.view, composed, viewDescriptor: composed.viewDescriptor, ...(composed.task ? { task: composed.task } : {}),
-      grids: composed.pages.map(page => buildGridRoot(page, composed.columns)), planId: this.planId(providerName, composed, session), status: await provider.status() };
+      grids: composed.pages.map(page => buildGridRoot(page, composed.columns, this.deps.platform)), planId: this.planId(providerName, composed, session), status: await provider.status() };
   }
 
   private viewerPane(pane: import("./terminal-provider.js").ComposedPane) {
     const original = pane.attachArgv;
     if (!original) return pane;
-    const attachArgv = tileAttachArgv(original[5]!, original.slice(6), original[4]!, false);
+    const target = pane.attachTarget;
+    const attachArgv = target ? tileAttachArgv(target.tmux, target.server, target.session, false, 30, target.platform)
+      : tileAttachArgv(original[5]!, original.slice(6), original[4]!, false);
     return { ...pane, readOnly: false, attachArgv, paneCommand: attachArgv.map(shellQuote).join(" ") };
   }
 
@@ -418,7 +434,7 @@ export class TerminalService {
       const inventory = await this.deps.listRigSeatsBatch?.(result.rigs);
       for (const entry of entries) {
         const rows = entry.kind === "derived" ? inventory?.get(entry.name) : undefined;
-        const plan = rows ? composeView(entry.view, await this.refineLiveness(deriveViewMembers(rows, { readOnly: false })), { resolveHost: id => this.deps.resolveHost(id), panesPerPage: this.deps.resolveProvider(DEFAULT_PROVIDER)?.panesPerPage, localTmux: await this.resolveLocalTmux(), localTmuxServer: daemonTmuxServerArgs() })
+        const plan = rows ? composeView(entry.view, await this.refineLiveness(deriveViewMembers(rows, { readOnly: false })), { resolveHost: id => this.deps.resolveHost(id), panesPerPage: this.deps.resolveProvider(DEFAULT_PROVIDER)?.panesPerPage, localTmux: await this.resolveLocalTmux(), localTmuxServer: daemonTmuxServerArgs(), platform: this.deps.platform ?? process.platform })
           : await this.resolveComposed(entry.view, this.deps.resolveProvider(DEFAULT_PROVIDER)?.panesPerPage);
         if ("code" in plan) continue;
         result.catalog.push({ ...entry, members: [...plan.opened, ...plan.absent, ...plan.degraded].map((m) => m.seat), ready: plan.opened.length, absent: plan.absent.length, degraded: plan.degraded.length, pages: plan.pages.length });

@@ -16,6 +16,7 @@ import type { LegacyRigSpec as RigSpec } from "../src/domain/types.js"; // TODO:
 import type { TmuxAdapter } from "../src/adapters/tmux.js";
 import type { ExecFn } from "../src/adapters/tmux.js";
 import { ProbeTimeoutError, RUNTIME_PROBE_TIMEOUT_MS } from "../src/adapters/bounded-probe-exec.js";
+import { fixtureFs } from "./helpers/fixture-path.js";
 
 function setupDb(): Database.Database {
   const db = createDb();
@@ -188,14 +189,15 @@ describe("RigSpecPreflight", () => {
   });
 
   it("cwd points to a file -> error", async () => {
-    // /etc/hosts is a file, not a directory
+    // This test file is a file, not a directory, on every platform
+    const file = import.meta.filename;
     const spec = validSpec({
-      nodes: [{ id: "worker", runtime: "claude-code", cwd: "/etc/hosts" }],
+      nodes: [{ id: "worker", runtime: "claude-code", cwd: file }],
     });
     const pf = createPreflight();
     const result = await pf.check(spec);
     expect(result.ready).toBe(false);
-    expect(result.errors.some((e) => e.includes("/etc/hosts") && e.includes("directory"))).toBe(true);
+    expect(result.errors.some((e) => e.includes(file) && e.includes("directory"))).toBe(true);
   });
 
   it("cwd points to a directory -> passes cwd check", async () => {
@@ -298,10 +300,7 @@ import type { AgentResolverFsOps } from "../src/domain/agent-resolver.js";
 import type { RigSpec as PodRigSpec } from "../src/domain/types.js";
 
 function mockFs(files: Record<string, string>): AgentResolverFsOps {
-  return {
-    readFile: (p: string) => { if (p in files) return files[p]!; throw new Error(`Not found: ${p}`); },
-    exists: (p: string) => p in files,
-  };
+  return fixtureFs(files);
 }
 
 function validAgentYaml(name: string, opts?: { profiles?: string }): string {
