@@ -1,12 +1,13 @@
 import { Command } from "commander";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { parseLiteralLaunchWords } from "@openrig/daemon/windows-launch";
 import { DaemonClient } from "../client.js";
 import { getDaemonStatus, getDaemonUrl, daemonStatusGuard, waitForKernelReady } from "../daemon-lifecycle.js";
 import { daemonCommand, realDeps } from "./daemon.js";
 import { launchCommand } from "./launch.js";
+import { windowsOperatorDaemonStartCommand } from "../setup-platform.js";
 
-export async function ensureSpaceDaemon(deps: {
+export async function ensureOperatorDaemon(deps: {
   running(): Promise<boolean>; start(): Promise<void>;
 }): Promise<boolean> {
   if (await deps.running()) return false;
@@ -16,7 +17,7 @@ export async function ensureSpaceDaemon(deps: {
 }
 
 interface Pane { label: string; seat: string; paneCommand: string }
-export interface SpaceDeps {
+export interface OperatorDeps {
   terminal?: () => boolean;
   ensureDaemon?: () => Promise<boolean | void>;
   preview?: () => Promise<Pane[]>;
@@ -25,13 +26,12 @@ export interface SpaceDeps {
   attach?: (argv: string[]) => number;
 }
 
-export function spaceCommand(deps: SpaceDeps = {}): Command {
-  const command = new Command("space").description("Connect an existing conversation in the current terminal");
-  command.command("operator")
+export function operatorCommand(deps: OperatorDeps = {}): Command {
+  const command = new Command("operator")
     .description("Start OpenRig if needed, resume its operator, and open only that conversation here")
     .action(async () => {
       if (!(deps.terminal ?? (() => Boolean(process.stdin.isTTY && process.stdout.isTTY)))()) {
-        throw new Error("Run rig space operator in an interactive terminal, such as Zed's integrated terminal.");
+        throw new Error("Run rig operator in an interactive terminal, such as Zed's integrated terminal.");
       }
       const client = async () => {
         const status = await getDaemonStatus(realDeps());
@@ -39,10 +39,16 @@ export function spaceCommand(deps: SpaceDeps = {}): Command {
         return new DaemonClient(getDaemonUrl(status));
       };
       const wait = deps.waitForKernel ?? (async () => { await waitForKernelReady((await client()).baseUrl, 60_000); });
-      const started = await (deps.ensureDaemon ?? (() => ensureSpaceDaemon({
+      const started = await (deps.ensureDaemon ?? (() => ensureOperatorDaemon({
         running: async () => { const status = await getDaemonStatus(realDeps()); return status.state === "running" && status.healthy !== false; },
         start: async () => {
-          await daemonCommand().parseAsync(["node", "rig", "start"]);
+          if (process.platform === "win32") {
+            // A detached child can still belong to the terminal's Windows job.
+            // Launch through the user's scheduler so closing a terminal cannot
+            // terminate the daemon along with its client process tree.
+            const encoded = windowsOperatorDaemonStartCommand().split("-EncodedCommand ")[1]!;
+            execFileSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], { timeout: 150000, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+          } else await daemonCommand().parseAsync(["node", "rig", "start"]);
           if (process.exitCode) throw new Error("Could not start OpenRig; the operator was not opened.");
         },
       })))();

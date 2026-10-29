@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { runSetup, type SetupDeps } from "../src/commands/setup.js";
 import { runDoctorChecks, type DoctorDeps } from "../src/commands/doctor.js";
 import { execSync } from "node:child_process";
-import { WINDOWS_EXECUTION_POLICY_PROBE, WINDOWS_POWERSHELL_PROBE, powershellCommand, psmuxInstallCommand, psmuxUserPathCommand, wingetInstallCommand, windowsAutostartCommand } from "../src/setup-platform.js";
+import { WINDOWS_EXECUTION_POLICY_PROBE, WINDOWS_POWERSHELL_PROBE, powershellCommand, psmuxInstallCommand, psmuxUserPathCommand, wingetInstallCommand, windowsAutostartCommand, windowsOperatorDaemonStartCommand } from "../src/setup-platform.js";
 import { powershellQuote } from "@openrig/daemon/windows-launch";
 
 function dependencies(overrides: Partial<SetupDeps> = {}): SetupDeps {
@@ -23,6 +23,18 @@ function decode(command: string): string {
 }
 
 describe("native Windows setup", () => {
+  it("starts the operator daemon outside the console job without permanent tasks or credential copying", () => {
+    const script = decode(windowsOperatorDaemonStartCommand("C:\\Program Files\\nodejs\\node.exe", "C:\\cli\\bin-wrapper.js", {
+      OPENRIG_HOME: "C:\\Users\\A's rig", OPENRIG_PORT: "7433", PSMUX_SESSION: "caller", OPENRIG_ACTIVITY_HOOK_TOKEN: "secret-not-to-persist",
+    }));
+    expect(script).toContain("Start-ScheduledTask"); expect(script).toContain("Unregister-ScheduledTask");
+    expect(script).not.toContain("-AtLogOn");
+    const encodedChild = /-EncodedCommand ([A-Za-z0-9+/=]+)'/.exec(script)![1]!;
+    const child = Buffer.from(encodedChild, "base64").toString("utf16le");
+    expect(child).toContain("$env:OPENRIG_HOME = 'C:\\Users\\A''s rig'");
+    expect(child).toContain("daemon start"); expect(child).not.toContain("start --last");
+    expect(child).not.toContain("PSMUX_SESSION"); expect(child).not.toContain("secret-not-to-persist");
+  });
   it("registers logon startup with absolute executable paths and preserves deliberate stops", () => {
     const script = decode(windowsAutostartCommand("C:\\Program Files\\nodejs\\node.exe", "C:\\Users\\A\\npm\\dist\\bin-wrapper.js"));
     expect(script).toContain("-Execute 'C:\\Program Files\\nodejs\\node.exe'");

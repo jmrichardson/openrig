@@ -428,9 +428,9 @@ status to activity/refocus handlers. Only OpenRig-owned, previously approved
 legacy declarations with a matching ownership receipt can migrate automatically.
 Disabled hooks, custom hashes and unknown provenance remain under native review.
 
-## Convenience entry: rig space operator
+## Convenience entry: rig operator
 
-    rig space operator
+    rig operator
 
 This explicitly requested convenience command composes the existing daemon start,
 kernel boot, single-seat operator restore, and current-terminal attachment paths.
@@ -441,3 +441,10 @@ boot behavior still applies. The caller must be an interactive terminal.
 
 The original rig start, rig launch and tmux attachment commands remain available.
 The removed rig open command is not reintroduced.
+
+On Windows, rig operator starts a stopped daemon through a temporary per-user
+scheduled task, outside the terminal's ConPTY process tree. This prevents closing
+the caller's terminal from terminating its background daemon as part of the same
+job. The task is removed when startup finishes and changes no permanent logon
+settings. Only explicit instance paths/port selections are carried into it;
+provider tokens and terminal nesting markers are not persisted in the task.

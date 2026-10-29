@@ -14,6 +14,39 @@ export function powershellCommand(script: string): string {
 
 export const WINDOWS_POWERSHELL_PROBE = powershellCommand("$PSVersionTable.PSVersion.ToString()");
 
+/** Start only the daemon outside the caller's ConPTY process tree. No permanent startup change. */
+export function windowsOperatorDaemonStartCommand(node = process.execPath, entry = fileURLToPath(new URL("./bin-wrapper.js", import.meta.url)), env: NodeJS.ProcessEnv = process.env): string {
+  const keys = ["OPENRIG_HOME", "RIGGED_HOME", "OPENRIG_DB", "RIGGED_DB", "OPENRIG_PORT", "RIGGED_PORT", "OPENRIG_BIND_HOST", "PSMUX_DATA_DIR", "CODEX_HOME", "CLAUDE_CONFIG_DIR"];
+  const settings = keys.filter(key => env[key] !== undefined).map(key => `$env:${key} = ${powershellQuote(env[key]!)}`).join("\n");
+  const child = Buffer.from(`$env:PSModulePath = [IO.Path]::Combine($env:WINDIR, 'System32', 'WindowsPowerShell', 'v1.0', 'Modules')\n${settings}\n& ${powershellQuote(node)} ${powershellQuote(entry)} daemon start\nexit $LASTEXITCODE`, "utf16le").toString("base64");
+  return powershellCommand(`
+$name = 'OpenRig-operator-start-' + [Guid]::NewGuid().ToString('N')
+$action = New-ScheduledTaskAction -Execute ([IO.Path]::Combine($env:WINDIR, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')) -Argument '-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand ${child}'
+$user = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+$principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
+$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 3)
+Register-ScheduledTask -TaskName $name -Action $action -Principal $principal -Settings $settings | Out-Null
+try {
+  $started = [DateTime]::Now.AddSeconds(-1)
+  Start-ScheduledTask -TaskName $name
+  $deadline = [DateTime]::UtcNow.AddSeconds(130)
+  do {
+    Start-Sleep -Milliseconds 200
+    $task = Get-ScheduledTask -TaskName $name
+    $info = Get-ScheduledTaskInfo -TaskName $name
+    if ($info.LastRunTime -ge $started -and $task.State -notin @('Running', 'Queued')) {
+      if ($info.LastTaskResult -ne 0) { throw ('OpenRig daemon start failed with exit code ' + $info.LastTaskResult + '; inspect rig daemon logs.') }
+      return
+    }
+  } while ([DateTime]::UtcNow -lt $deadline)
+  throw ('Timed out waiting for ' + $name + '; inspect rig status before retrying.')
+} finally {
+  $task = Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
+  if ($task -and $task.State -notin @('Running', 'Queued')) { Unregister-ScheduledTask -TaskName $name -Confirm:$false }
+}
+`);
+}
+
 /** Opt-in per-user startup; absolute paths avoid npm shim and shell PATH dependencies. */
 export function windowsAutostartCommand(node = process.execPath, entry = fileURLToPath(new URL("./bin-wrapper.js", import.meta.url))): string {
   return powershellCommand(`
