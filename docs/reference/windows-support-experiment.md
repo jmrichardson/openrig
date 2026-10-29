@@ -427,3 +427,17 @@ The core Codex hooks use a shell-neutral Node entry, forwarding stdin and exit
 status to activity/refocus handlers. Only OpenRig-owned, previously approved
 legacy declarations with a matching ownership receipt can migrate automatically.
 Disabled hooks, custom hashes and unknown provenance remain under native review.
+
+## Convenience entry: rig space operator
+
+    rig space operator
+
+This explicitly requested convenience command composes the existing daemon start,
+kernel boot, single-seat operator restore, and current-terminal attachment paths.
+It starts the daemon only when needed and opens only the operator in the caller's
+terminal. It does not open desktop windows, restore project teams, or create a
+blank replacement conversation when recovery fails. The daemon's normal kernel
+boot behavior still applies. The caller must be an interactive terminal.
+
+The original rig start, rig launch and tmux attachment commands remain available.
+The removed rig open command is not reintroduced.
