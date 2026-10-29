@@ -384,22 +384,27 @@ dashboard and stopping the daemon preserve psmux agent sessions.
 Run these from the actual Windows desktop environment. Do not treat an installer
 sandbox's file-existence check as proof that desktop terminals see the binary.
 
-## Use OpenRig inside Zed or another existing terminal
+## Use the existing commands inside Zed
 
-Run rig open in Zed's integrated terminal to attach the existing kernel operator
-in place. No desktop window, provider flag, new agent or new team is created.
+From a plain Zed terminal, use the original recovery command, then psmux's
+standard tmux-compatible attachment command:
 
-    rig open
-    rig open advisor
-    rig open dashboard
+    rig start --last
+    tmux attach -t operator-agent@kernel
 
-Open additional Zed terminal tabs for advisor/dashboard only when wanted.
-Ctrl+B followed by D detaches and returns to the shell; agents keep running.
-The current-terminal command resolves the saved kernel view through the daemon,
-so it uses the instance's actual seat and psmux launch command instead of guessing
-session names. It requires an interactive terminal and refuses unavailable seats.
-Herdr is not required for this entry point. The older terminal open --window
-command explicitly requests desktop windows and remains available for that use.
+This attaches only the existing operator in the current terminal. Detach with
+Ctrl+B followed by D. The custom rig open extension has been removed.
+
+For an explicitly selected missing operator, the existing recovery primitive is:
+
+    rig launch kernel operator.agent
+
+The --last path also checks kernel agents for positively observed missing
+sessions with an explicit non-stop record and invokes that same single-seat
+launch route. It never falls back to a fresh conversation. Deliberately stopped,
+live, never-started and unverified sessions are left alone. Failed resumes remain
+visible failures. The kernel status route checks live session presence instead
+of presenting the boot-time ready flag as current liveness.
 
 ## Codex guidance, scrollback and clipboard behavior
 
@@ -407,14 +412,14 @@ The operator is the conversation used to design a project team. No project rig
 needs to exist before talking to it. Agent skill lists in its history are
 instructions for the agent; they are not a text file the person must read.
 
-rig open reattaches the existing conversation and sends no new setup prompt.
+Attaching the existing conversation sends no new setup prompt.
 "Back to bottom · esc" belongs to Codex's history navigation. Windows-managed
 Codex launches use --no-alt-screen to preserve terminal scrollback. Existing
 processes retain their current display mode until a verified conversation resume;
 a refused restart must not be replaced with a fresh conversation.
 
 When applications capture the mouse, Shift-drag can request host-terminal
-selection; use the terminal's Copy action after selecting. Running rig open in a
+selection; use the terminal's Copy action after selecting. Running the attachment command in a
 plain Zed terminal avoids stacking Herdr's mouse handling over psmux and Codex.
 The Herdr-in-Zed clipboard path has not been visually qualified.
 

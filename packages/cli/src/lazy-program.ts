@@ -52,7 +52,6 @@ export const COMMAND_LOADERS: ReadonlyMap<string, Load> = new Map<string, Load>(
   ["project", async () => (await import("./commands/project.js")).projectCommand()],
   ["view", async () => (await import("./commands/view.js")).viewCommand()],
   ["terminal", async () => (await import("./commands/terminal.js")).terminalCommand()],
-  ["open", async () => (await import("./commands/open.js")).openHereCommand()],
   ["watchdog", async () => (await import("./commands/watchdog.js")).watchdogCommand()],
   ["workflow", async () => (await import("./commands/workflow.js")).workflowCommand()],
   ["capture", async () => (await import("./commands/capture.js")).captureCommand()],

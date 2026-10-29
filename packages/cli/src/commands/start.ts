@@ -20,6 +20,24 @@ import type { StatusDeps } from "./status.js";
 const LONG_RUNNING_UP_TIMEOUT_MS = 120_000;
 const KERNEL_WAIT_MS = 60_000;
 
+/** Recover only positively observed missing agents with an explicit non-stop record.
+ * The existing single-seat launch route owns resume selection; never invent a fresh fallback. */
+export async function recoverMissingKernelSeats(client: Pick<DaemonClient, "get" | "post">): Promise<void> {
+  const rigs = await client.get<Array<{ id: string; name: string }>>("/api/rigs/summary");
+  if (rigs.status !== 200 || !Array.isArray(rigs.data)) throw new Error("Could not inspect kernel recovery state.");
+  const kernel = rigs.data.find(rig => rig.name === "kernel");
+  if (!kernel) return; // first-boot handling remains with the daemon
+  const nodes = await client.get<Array<{ logicalId: string; runtime: string; sessionStatus: string | null; intentionallyStopped?: boolean; identityVerdict?: { verdict?: string; reason?: string } }>>(`/api/rigs/${encodeURIComponent(kernel.id)}/nodes`);
+  if (nodes.status !== 200 || !Array.isArray(nodes.data)) throw new Error("Could not inspect kernel seats; no recovery attempted.");
+  for (const node of nodes.data) {
+    if (!["codex", "claude-code"].includes(node.runtime) || node.intentionallyStopped !== false
+      || !["detached", "exited"].includes(node.sessionStatus ?? "")
+      || node.identityVerdict?.verdict !== "pane_missing" || node.identityVerdict.reason !== "session_missing") continue;
+    const result = await client.post<{ ok?: boolean; error?: string }>(`/api/rigs/${encodeURIComponent(kernel.id)}/nodes/${encodeURIComponent(node.logicalId)}/launch`, {}, { timeoutMs: LONG_RUNNING_UP_TIMEOUT_MS });
+    if (result.status >= 400 || result.data.ok !== true) throw new Error(result.data.error ?? `Kernel seat ${node.logicalId} needs attention. Inspect rig ps --nodes --rig kernel.`);
+  }
+}
+
 interface RigSummary {
   id: string;
   name: string;
@@ -275,7 +293,13 @@ back with rig up kernel --existing.
 
       // ---- PHASE 2: kernel invariant — verify/await kernel readiness ----
       if (!opts.json) console.log("Waiting for kernel...");
-      const kernelResult = await waitForKernelReady(baseUrl, KERNEL_WAIT_MS);
+      let kernelResult = await waitForKernelReady(baseUrl, KERNEL_WAIT_MS);
+      if (opts.last && !kernelResult.ok && kernelResult.kernelState === "degraded") {
+        try {
+          await recoverMissingKernelSeats(client);
+          kernelResult = await waitForKernelReady(baseUrl, KERNEL_WAIT_MS);
+        } catch (error) { console.error(`Kernel recovery: ${(error as Error).message}`); process.exitCode = 1; return; }
+      }
       // Restoring an existing kernel a reboot left down: before that restore existed the kernel read
       // `skipped` here and start went on to the other rigs, so it still does, saying what it saw.
       let kernelRestore: { state: "restoring" | "failed"; kernelState: string | null; detail: string | null } | undefined;
